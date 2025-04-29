@@ -1,6 +1,6 @@
 # Changelog
 
-## [next]
+## [1.2.4]
 - Bugfix: Wrong position of HaystackSearch file seperation line
 
 ## [1.2.3]
