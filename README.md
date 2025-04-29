@@ -1,4 +1,4 @@
-# Local Code Search Indexer [Working In Progress]
+# Local Code Search Indexer
 
 A robust tool for creating and querying search indexes on local code repositories, making it easier to find content across large codebases.
 
@@ -30,7 +30,7 @@ The Search Indexer is structured with the following components:
 
 ### Prerequisites
 
-- Go 1.16+
+- Go 1.23+
 - Git
 
 ### Installation
@@ -38,7 +38,7 @@ The Search Indexer is structured with the following components:
 Clone the repository:
 
 ```bash
-git clone https://github.com/CodeTrek/haystack.git
+git clone https://github.com/ai-microsoft/haystack.git
 cd haystack/src
 ```
 

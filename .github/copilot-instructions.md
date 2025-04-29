@@ -18,7 +18,7 @@ Haystack is a local code search indexer tool designed to create and query search
 - **Server**: Backend responsible for indexing and searching
   - **Core**: Handles document processing and storage
     - Parser: Processes and validates documents
-    - Storage: Manages document persistence (uses Pebble DB)
+    - Fulltext: Manages document persistence (uses Pebble DB)
   - **Indexer**: Creates and maintains search indexes
     - Scanner: Analyzes code repositories
     - Writer: Writes index data
