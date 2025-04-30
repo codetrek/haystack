@@ -32,11 +32,6 @@ func main() {
 	outputDir := "dist"
 	version := getVersion()
 
-	wd, err := os.Getwd()
-	if err != nil {
-		panic(err)
-	}
-
 	os.RemoveAll(outputDir)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		panic(err)
