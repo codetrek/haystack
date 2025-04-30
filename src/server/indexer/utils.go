@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codetrek/haystack/utils"
+	"github.com/ai-microsoft/haystack/utils"
 
 	"github.com/gabriel-vasile/mimetype"
 )

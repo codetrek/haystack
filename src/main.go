@@ -2,14 +2,15 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	_ "net/http/pprof"
 	"path/filepath"
 
-	"github.com/codetrek/haystack/client"
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/server"
-	"github.com/codetrek/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/client"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server"
+	"github.com/ai-microsoft/haystack/shared/running"
 )
 
 var version = "dev"
@@ -27,11 +28,13 @@ func main() {
 	running.RegisterLockFile(lockFile)
 
 	if running.IsDaemonMode() {
+		fmt.Println("Running in daemon mode")
 		server.Run()
 		if running.IsRestart() {
 			running.StartNewServer()
 		}
 	} else {
+		fmt.Println("Running in non-daemon mode")
 		client.Run()
 	}
 }

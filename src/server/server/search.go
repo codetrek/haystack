@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/codetrek/haystack/server/core/workspace"
-	"github.com/codetrek/haystack/server/searcher"
-	"github.com/codetrek/haystack/shared/types"
-	"github.com/codetrek/haystack/utils"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/server/searcher"
+	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/ai-microsoft/haystack/utils"
 )
 
 // handleSearchContent handles the search content endpoint

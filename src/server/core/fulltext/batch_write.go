@@ -1,7 +1,7 @@
 package fulltext
 
 import (
-	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
 const MaxBatchSize = 512

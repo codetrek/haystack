@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/codetrek/haystack/shared/running"
-	"github.com/codetrek/haystack/shared/types"
-	fsutils "github.com/codetrek/haystack/utils/fs"
+	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/shared/types"
+	fsutils "github.com/ai-microsoft/haystack/utils/fs"
 
 	"gopkg.in/yaml.v3"
 )

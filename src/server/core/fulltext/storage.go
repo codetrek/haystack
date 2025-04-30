@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
 const StorageVersion = "1.0"

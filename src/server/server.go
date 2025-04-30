@@ -6,13 +6,13 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/server/core/fulltext"
-	"github.com/codetrek/haystack/server/core/workspace"
-	"github.com/codetrek/haystack/server/indexer"
-	"github.com/codetrek/haystack/server/searcher"
-	"github.com/codetrek/haystack/server/server"
-	"github.com/codetrek/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/server/indexer"
+	"github.com/ai-microsoft/haystack/server/searcher"
+	"github.com/ai-microsoft/haystack/server/server"
+	"github.com/ai-microsoft/haystack/shared/running"
 )
 
 func Run() {

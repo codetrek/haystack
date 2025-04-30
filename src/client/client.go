@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/codetrek/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/shared/running"
 )
 
 func Run() {

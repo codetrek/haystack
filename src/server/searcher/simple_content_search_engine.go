@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/server/core/fulltext"
-	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
 var rePrefix = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_-]+`)

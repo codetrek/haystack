@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
 const MaxKeywordIndexSize = 1000

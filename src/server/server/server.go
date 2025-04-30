@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/codetrek/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/shared/running"
 )
 
 // StartServer initializes and starts the HTTP server

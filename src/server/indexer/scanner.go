@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/server/core/workspace"
-	"github.com/codetrek/haystack/shared/running"
-	"github.com/codetrek/haystack/utils"
-	fsutils "github.com/codetrek/haystack/utils/fs"
-	gitutils "github.com/codetrek/haystack/utils/git"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/utils"
+	fsutils "github.com/ai-microsoft/haystack/utils/fs"
+	gitutils "github.com/ai-microsoft/haystack/utils/git"
 )
 
 type GitIgnoreFilter struct {

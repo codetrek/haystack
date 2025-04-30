@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/conf"
+	"github.com/ai-microsoft/haystack/conf"
 )
 
 func TestWorkspaceStorage(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/codetrek/haystack/conf"
+	"github.com/ai-microsoft/haystack/conf"
 
 	"gopkg.in/natefinch/lumberjack.v2"
 )

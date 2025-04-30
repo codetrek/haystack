@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
 // mockBatchWrite implements BatchWrite interface for testing

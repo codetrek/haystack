@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/fulltext"
 )
 
 func TestInit(t *testing.T) {

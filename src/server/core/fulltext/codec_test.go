@@ -4,7 +4,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/codetrek/haystack/conf"
+	"github.com/ai-microsoft/haystack/conf"
 )
 
 func setupTestEnvironment(t *testing.T) (string, func()) {

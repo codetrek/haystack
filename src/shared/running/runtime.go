@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/codetrek/haystack/utils"
+	"github.com/ai-microsoft/haystack/utils"
 )
 
 var (

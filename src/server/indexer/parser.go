@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/server/core/fulltext"
-	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
 // ParseFile represents a file to be parsed

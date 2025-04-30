@@ -3,7 +3,7 @@ package searcher
 import (
 	"github.com/alecthomas/participle/v2"
 	"github.com/alecthomas/participle/v2/lexer"
-	"github.com/codetrek/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/fulltext"
 )
 
 // Query represents the complete search query

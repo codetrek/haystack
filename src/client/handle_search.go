@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/codetrek/haystack/conf"
-	"github.com/codetrek/haystack/shared/running"
-	"github.com/codetrek/haystack/shared/types"
+	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/shared/types"
 )
 
 func handleSearch(args []string) {

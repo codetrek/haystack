@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/codetrek/haystack/server/core/fulltext"
-	"github.com/codetrek/haystack/server/core/workspace"
-	"github.com/codetrek/haystack/shared/running"
-	"github.com/codetrek/haystack/shared/types"
+	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/shared/types"
 )
 
 var (
