@@ -37,12 +37,6 @@ func main() {
 		panic(err)
 	}
 
-	extPkgDir := filepath.Join(wd, "../extensions/vscode/pkgs")
-	os.RemoveAll(extPkgDir)
-	if err := os.MkdirAll(extPkgDir, 0755); err != nil {
-		panic(err)
-	}
-
 	os.RemoveAll(outputDir)
 	if err := os.MkdirAll(outputDir, 0755); err != nil {
 		panic(err)
