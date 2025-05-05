@@ -48,7 +48,7 @@ The project contains multiple README.md files throughout the directory structure
 - Root README.md: Overall project description, installation and setup
 - src/README.md: Source code organization and development guidelines
 - server/README.md: Server component implementation details
-- server/core/storage/README.md: Documentation for the storage subsystem and Pebble DB usage
+- server/core/fulltext/README.md: Documentation for the storage subsystem and Pebble DB usage
 - server/indexer/README.md: Explanation of the indexing mechanism
 - server/searcher/README.md: Details on search functionality and query syntax
 
