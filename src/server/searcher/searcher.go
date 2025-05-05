@@ -23,12 +23,12 @@ import (
 )
 
 func Run(wg *sync.WaitGroup) {
-	log.Println("Starting searcher...")
+	log.Println("[Searcher] Starting...")
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer log.Println("Searcher shutdown")
+		defer log.Println("[Searcher] Shutdown")
 		running.WaitingForShutdown()
 	}()
 }
@@ -194,7 +194,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	engine := NewSimpleContentSearchEngine(workspace)
 	err := engine.Compile(req.Query, req.CaseSensitive)
 	if err != nil {
-		log.Println("Failed to compile query:", err)
+		log.Println("[Searcher] Failed to compile query:", err)
 		return []types.SearchContentResult{}, false
 	}
 
@@ -219,7 +219,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 		// Read file and match line by line
 		file, err := os.Open(fullPath)
 		if err != nil {
-			log.Printf("Failed to open file:`%s`, error:%s", fullPath, err)
+			log.Printf("[Searcher] Failed to open file:`%s`, error:%s", fullPath, err)
 			return fileMatch, err
 		}
 		defer file.Close()
@@ -497,7 +497,7 @@ func SearchFiles(workspace *workspace.Workspace, req *types.SearchFilesRequest) 
 		}
 		stat, err := os.Stat(filepath.Join(workspace.Path, match.RelPath))
 		if os.IsNotExist(err) || stat.IsDir() {
-			log.Printf("Warning: file `%s` has been removed or is a directory", match.RelPath)
+			log.Printf("[Searcher] Warning: file `%s` has been removed or is a directory", match.RelPath)
 			removedFiles = append(removedFiles, match.RelPath)
 			continue
 		}

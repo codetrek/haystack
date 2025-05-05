@@ -37,7 +37,7 @@ func handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 
 	err = indexer.AddOrSyncFile(workspace, request.Path)
 	if err != nil {
-		log.Printf("Failed to update `%s` in workspace `%s`: %v", request.Path, workspace.Path, err)
+		log.Printf("[Server] Failed to update `%s` in workspace `%s`: %v", request.Path, workspace.Path, err)
 
 		json.NewEncoder(w).Encode(types.CommonResponse{
 			Code:    1,
@@ -46,7 +46,7 @@ func handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Updated `%s` in workspace `%s`", request.Path, workspace.Path)
+	log.Printf("[Server] Updated `%s` in workspace `%s`", request.Path, workspace.Path)
 	json.NewEncoder(w).Encode(types.CommonResponse{
 		Code:    0,
 		Message: "Ok",
@@ -71,7 +71,7 @@ func handleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	}
 
 	indexer.RemoveFile(workspace, request.Path)
-	log.Printf("Deleted `%s` in workspace `%s`", request.Path, workspace.Path)
+	log.Printf("[Server] Deleted `%s` in workspace `%s`", request.Path, workspace.Path)
 
 	json.NewEncoder(w).Encode(types.CommonResponse{
 		Code:    0,

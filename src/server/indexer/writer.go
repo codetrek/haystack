@@ -37,11 +37,11 @@ func (w *Writer) Start(wg *sync.WaitGroup) {
 func (w *Writer) Stop() {
 	close(w.stop)
 	<-w.done
-	log.Println("Writer stopped")
+	log.Println("[Indexer] Writer stopped")
 }
 
 func (w *Writer) run(wg *sync.WaitGroup) {
-	log.Println("Writer started")
+	log.Println("[Indexer] Writer started")
 	defer wg.Done()
 	timer := time.NewTicker(1000 * time.Millisecond)
 	defer timer.Stop()

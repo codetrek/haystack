@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/storage"
 )
 
 func TestWorkspaceStorage(t *testing.T) {
@@ -21,7 +22,10 @@ func TestWorkspaceStorage(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	err = Init()
+	db, err := storage.Open(tempDir)
+	defer db.Close()
+
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -90,7 +94,9 @@ func TestGetIncreasedWorkspaceID(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	err = Init()
+	db, err := storage.Open(tempDir)
+	defer db.Close()
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}

@@ -44,9 +44,9 @@ func Init() error {
 			space.Path = utils.NormalizePath(space.Path)
 			workspaces[space.ID] = &space
 			workspacePaths[space.Path] = workspaces[space.ID]
-			log.Printf("Found workspace: %v, path: %v", space.ID, space.Path)
+			log.Printf("[Workspace] Found workspace: %v, path: %v", space.ID, space.Path)
 		} else {
-			log.Printf("Error unmarshalling workspace: %v", err)
+			log.Printf("[Workspace] Error unmarshalling workspace: %v", err)
 			// TODO: Delete the malformed workspace
 		}
 	}
@@ -184,7 +184,7 @@ func Create(workspacePath string) (*Workspace, error) {
 	workspaces[workspace.ID] = workspace
 	workspacePaths[workspace.Path] = workspace
 
-	log.Printf("New workspace created: %v, path: %v", id, workspacePath)
+	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
 
 	return workspace, nil
 }

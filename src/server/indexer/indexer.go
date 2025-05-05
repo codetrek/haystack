@@ -21,20 +21,20 @@ var (
 
 // Run starts the indexer components in separate goroutines.
 func Run(wg *sync.WaitGroup) {
-	log.Println("Starting indexer...")
+	log.Println("[Indexer] Starting...")
 
 	scanner.Start(wg)
 	parser.Start(wg)
 	writer.Start(wg)
-	log.Println("Indexer started.")
+	log.Println("[Indexer] Started.")
 
 	go func() {
 		<-running.GetShutdown().Done()
-		log.Println("Stopping indexer...")
+		log.Println("[Indexer] Stopping...")
 		scanner.Stop()
 		parser.Stop()
 		writer.Stop()
-		log.Println("Indexer stopped.")
+		log.Println("[Indexer] Stopped.")
 	}()
 }
 
@@ -64,7 +64,7 @@ func SyncIfNeeded(workspacePath string) error {
 	if workspace.LastFullSync.IsZero() {
 		return Sync(workspace)
 	} else {
-		log.Printf("Workspace %s is up to date, skipping", workspacePath)
+		log.Printf("[Indexer] Workspace %s is up to date, skipping", workspacePath)
 	}
 	return nil
 }

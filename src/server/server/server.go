@@ -45,9 +45,9 @@ func StartServer(wg *sync.WaitGroup, addr string) {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("HTTP server starting on %s", addr)
+		log.Printf("[HTTP] Server starting on %s", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("ListenAndServe: ", err)
+			log.Fatal("[HTTP] ListenAndServe: ", err)
 		}
 	}()
 
@@ -59,11 +59,11 @@ func StartServer(wg *sync.WaitGroup, addr string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	log.Println("Stopping HTTP server...")
+	log.Println("[HTTP] Stopping server...")
 	// Shutdown the server
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+		log.Printf("[HTTP] Server forced to shutdown: %v", err)
 	}
 
-	log.Println("HTTP server stopped")
+	log.Println("[HTTP] Server stopped")
 }

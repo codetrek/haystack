@@ -146,7 +146,7 @@ func Load() error {
 
 	if err := os.Mkdir(conf.Global.DataPath, 0755); err != nil {
 		if !os.IsExist(err) {
-			log.Fatalf("Failed to create home directory: %v", err)
+			log.Fatalf("[Conf] Failed to create home directory: %v", err)
 			return err
 		}
 	}

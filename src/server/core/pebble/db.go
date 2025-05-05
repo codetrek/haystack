@@ -88,9 +88,9 @@ func OpenDB(path string) (DB, error) {
 func (d *PebbleDB) ScheduleCompact() {
 	go func() {
 		start := time.Now()
-		log.Println("Compacting database...")
+		log.Println("[Pebble] Compacting database...")
 		d.db.Compact([]byte{0}, []byte{0xff}, false)
-		log.Println("Compact done, took", time.Since(start))
+		log.Println("[Pebble] Compact done, took", time.Since(start))
 	}()
 }
 

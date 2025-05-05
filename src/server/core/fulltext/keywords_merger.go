@@ -58,14 +58,14 @@ func (km *KeywordsMerger) Start() {
 }
 
 func (km *KeywordsMerger) run() {
-	log.Printf("Keywords merger: started")
+	log.Printf("[Fulltext] Keywords merger: started")
 
 	nextDelay := 300 * time.Second
 
 	for {
 		select {
 		case <-km.shutdown.Done():
-			log.Printf("Keywords merger: shutdown")
+			log.Printf("[Fulltext] Keywords merger: shutdown")
 			close(km.mergerDone)
 			return
 		case <-time.After(nextDelay):
@@ -74,7 +74,7 @@ func (km *KeywordsMerger) run() {
 					NextIter: KeywordPrefix,
 				}
 
-				log.Printf("Keywords merger: new scan started.")
+				log.Printf("[Fulltext] Keywords merger: new scan started.")
 			}
 		}
 
@@ -88,7 +88,7 @@ func (km *KeywordsMerger) run() {
 		km.merging = m.Wait()
 		if !km.merging.WaitingForFlushCache && before.MergedRowCount() != km.merging.MergedRowCount() {
 			// we've reached the end of the database
-			log.Printf("Keywords merger: merged %s keywords, row count reduced: %s\n",
+			log.Printf("[Fulltext] Keywords merger: merged %s keywords, row count reduced: %s\n",
 				humanize.Comma(int64(km.merging.TotalKeywords)),
 				humanize.Comma(int64(km.merging.MergedRowCount()-before.MergedRowCount())))
 		}
@@ -103,11 +103,11 @@ func (km *KeywordsMerger) run() {
 			if float32(m.TotalRowsBefore-m.TotalRowsAfter)/float32(m.TotalRowsBefore) > 0.25 {
 				// we've merged a lot of keywords, so we need to
 				// compact the database to free up space
-				log.Printf("Keywords merger: scheduling compact")
+				log.Printf("[Fulltext] Keywords merger: scheduling compact")
 				db.ScheduleCompact()
 			}
 
-			log.Printf("Keywords merge done, total keywords: %s", humanize.Comma(int64(km.merging.TotalKeywords)))
+			log.Printf("[Fulltext] Keywords merge done, total keywords: %s", humanize.Comma(int64(km.merging.TotalKeywords)))
 			// we've reached the end of the database
 			// reset the nextIter to the beginning
 			// and set a longer delay time

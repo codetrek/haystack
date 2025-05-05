@@ -35,7 +35,7 @@ func InitShutdown(wg *sync.WaitGroup) {
 
 		select {
 		case <-c:
-			log.Println("Received interrupt signal, shutting down...")
+			log.Println("[Running] Received interrupt signal, shutting down...")
 			Shutdown()
 		case <-shutdown.Done():
 		}

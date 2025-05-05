@@ -34,7 +34,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleRestart(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Recovered from panic: %v", r)
+			log.Printf("[Server] Recovered from panic: %v", r)
 			return
 		}
 	}()
@@ -54,7 +54,7 @@ func handleRestart(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(response)
 
-	log.Println("Server restart requested")
+	log.Println("[Server] Server restart requested")
 	running.Restart()
 }
 
@@ -76,7 +76,7 @@ func handleStop(w http.ResponseWriter, r *http.Request) {
 
 	json.NewEncoder(w).Encode(response)
 
-	log.Println("Server stop requested")
+	log.Println("[Server] Stop requested")
 	running.Shutdown()
 }
 

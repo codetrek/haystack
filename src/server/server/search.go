@@ -104,7 +104,7 @@ func handleSearchContent(w http.ResponseWriter, r *http.Request) {
 			totalHits += len(result.Lines)
 		}
 		req, _ := json.Marshal(request)
-		log.Printf("Process /api/v1/search/content `%s`: took %s, found %d results in %d files, truncate: %t",
+		log.Printf("[HTTP] Process /api/v1/search/content `%s`: took %s, found %d results in %d files, truncate: %t",
 			string(req), time.Since(start), totalHits, len(results), truncate)
 	}()
 
@@ -185,7 +185,7 @@ func handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 	result, err := searcher.SearchFiles(workspace, &request)
 	defer func() {
 		req, _ := json.Marshal(request)
-		log.Printf("Process /api/v1/search/files `%s`: took %s, found %d results, err: %s",
+		log.Printf("[HTTP] Process /api/v1/search/files `%s`: took %s, found %d results, err: %s",
 			string(req), time.Since(start), len(result.Files), err)
 	}()
 

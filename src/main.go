@@ -20,7 +20,7 @@ func main() {
 
 	flag.Parse()
 	if err := conf.Load(); err != nil {
-		log.Fatal("Error loading config:", err)
+		log.Fatal("[Main] Error loading config:", err)
 		return
 	}
 

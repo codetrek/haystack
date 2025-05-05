@@ -11,6 +11,8 @@ import (
 )
 
 func initLog() {
+	log.SetFlags(log.LstdFlags)
+
 	if conf.Get().Server.LoggingStdout {
 		log.SetOutput(os.Stdout)
 	} else {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/server/searcher"
@@ -18,7 +19,7 @@ import (
 func Run() {
 	cleanup, err := running.CheckAndLockServer()
 	if err != nil {
-		log.Fatal("Error locking and running as server:", err)
+		log.Fatal("[Server] Error locking and running as server:", err)
 		return
 	}
 	defer cleanup()
@@ -26,19 +27,26 @@ func Run() {
 	initLog()
 
 	log.Println(strings.Repeat("=", 64))
-	log.Println("Starting haystack server...")
+	log.Println("[Server] Starting haystack server...")
 
 	wg := &sync.WaitGroup{}
 	running.InitShutdown(wg)
 
-	if err := fulltext.Init(); err != nil {
-		log.Fatal("Error initializing storage:", err)
+	db, err := storage.Open(conf.Get().Global.DataPath)
+	if err != nil {
+		log.Fatal("[Server] Error initializing storage:", err)
+		running.Shutdown()
+		return
+	}
+
+	if err := fulltext.Init(db); err != nil {
+		log.Fatal("[Server] Error initializing storage:", err)
 		running.Shutdown()
 		return
 	}
 
 	if err := workspace.Init(); err != nil {
-		log.Fatal("Error initializing workspace:", err)
+		log.Fatal("[Server] Error initializing workspace:", err)
 		running.Shutdown()
 		return
 	}
@@ -55,5 +63,10 @@ func Run() {
 	wg.Wait()
 	fulltext.CloseAndWait()
 
-	log.Println("Haystack server stopped")
+	// DB could be closed safely now!
+	log.Println("[Server] Closing storage...")
+	db.Close()
+	log.Println("[Server] Storage closed")
+
+	log.Println("[Server] Haystack server stopped")
 }

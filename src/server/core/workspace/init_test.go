@@ -10,6 +10,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/storage"
 )
 
 func TestInit(t *testing.T) {
@@ -24,7 +25,9 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	err = fulltext.Init()
+	db, err := storage.Open(tempDir)
+	defer db.Close()
+	err = fulltext.Init(db)
 	if err != nil {
 		t.Fatalf("Storage Init failed: %v", err)
 	}
@@ -73,7 +76,9 @@ func TestWorkspaceManagement(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	err = fulltext.Init()
+	db, err := storage.Open(tempDir)
+	defer db.Close()
+	err = fulltext.Init(db)
 	if err != nil {
 		t.Fatalf("Storage Init failed: %v", err)
 	}
@@ -165,7 +170,9 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	err = fulltext.Init()
+	db, err := storage.Open(tempDir)
+	defer db.Close()
+	err = fulltext.Init(db)
 	if err != nil {
 		t.Fatalf("Storage Init failed: %v", err)
 	}

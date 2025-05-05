@@ -54,7 +54,7 @@ func (q *SimpleContentSearchEngine) CollectDocuments() (*fulltext.SearchResult, 
 	}
 
 	if len(q.OrClauses) > 1 {
-		log.Printf("Merged Documents: ==>`%s` found %d documents", q.String(), len(result.DocIds))
+		log.Printf("[Searcher] Merged Documents: ==>`%s` found %d documents", q.String(), len(result.DocIds))
 	}
 
 	return result, nil
@@ -86,7 +86,7 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId string
 	}
 
 	if len(q.AndTerms) > 1 {
-		log.Printf("Merged Documents: =>`%s` found %d documents", q.String(), len(result.DocIds))
+		log.Printf("[Searcher] Merged Documents: =>`%s` found %d documents", q.String(), len(result.DocIds))
 	}
 
 	return result, nil
@@ -94,7 +94,7 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId string
 
 func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId string) fulltext.SearchResult {
 	r := fulltext.Search(workspaceId, q.Prefix, -1)
-	log.Printf("CollectDocuments: |--`%s` found %d documents", q.String(), len(r.DocIds))
+	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents", q.String(), len(r.DocIds))
 	return r
 }
 

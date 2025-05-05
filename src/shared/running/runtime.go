@@ -37,7 +37,7 @@ func UserHomeDir() string {
 	initHomeDir.Do(func() {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("Failed to get user's home directory: %v", err)
+			log.Fatalf("[Running] Failed to get user's home directory: %v", err)
 			os.Exit(1)
 		}
 		userHomeDir = homeDir
@@ -60,7 +60,7 @@ func Executable() string {
 	once.Do(func() {
 		path, err := os.Executable()
 		if err != nil {
-			log.Fatalf("Failed to get executable path: %v", err)
+			log.Fatalf("[Running] Failed to get executable path: %v", err)
 			return
 		}
 		executable = utils.NormalizePath(path)
@@ -75,13 +75,13 @@ func ExecutablePath() string {
 func StartNewServer() {
 	executable, err := os.Executable()
 	if err != nil {
-		log.Printf("Failed to get executable path: %v", err)
+		log.Printf("[Running] Failed to get executable path: %v", err)
 		return
 	}
 
 	wd, err := os.Getwd()
 	if err != nil {
-		log.Printf("Failed to get working directory: %v", err)
+		log.Printf("[Running] Failed to get working directory: %v", err)
 		return
 	}
 
@@ -100,9 +100,9 @@ func StartNewServer() {
 
 	process, err := os.StartProcess(executable, append([]string{executable}, args...), procAttr)
 	if err != nil {
-		log.Printf("Failed to start new process: %v", err)
+		log.Printf("[Running] Failed to start new process: %v", err)
 		return
 	}
 
-	log.Printf("Started new process with PID: %d", process.Pid)
+	log.Printf("[Running] Started new process with PID: %d", process.Pid)
 }

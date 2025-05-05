@@ -50,9 +50,9 @@ func mcpInit() {
 
 	http.HandleFunc("/mcp/", func(w http.ResponseWriter, r *http.Request) {
 		sse.ServeHTTP(w, r)
-		log.Printf("MCP request: %s %s", r.Method, r.URL.Path)
+		log.Printf("[MCP] Request: %s %s", r.Method, r.URL.Path)
 	})
-	log.Println("MCP server initialized at /mcp endpoint")
+	log.Println("[MCP] Server initialized at /mcp endpoint")
 }
 
 // registerMCPTools registers all the MCP tools with the server
@@ -109,7 +109,7 @@ func registerMCPTools(mcpServer *server.MCPServer) {
 				fmt.Sprintf("Currently, the default limit is %d.\n", config.Client.DefaultLimit.MaxFilesResults))),
 	), searchFilesToolHandler)
 
-	log.Println("MCP tools registered")
+	log.Println("[MCP] Tools registered")
 }
 
 // Tool handler function stubs - implementations will be added later

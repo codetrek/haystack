@@ -61,9 +61,9 @@ func flushPendingWrites(closing bool) {
 	lastFlushWriteTime = time.Now()
 
 	if closing {
-		log.Println("Final flushing pending writes...")
+		log.Println("[Fulltext] Flushing pending writes...")
 		defer func() {
-			log.Println("Final fulshed pending writes")
+			log.Println("[Fulltext] Flushed pending writes")
 		}()
 	}
 
@@ -130,9 +130,9 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 	lastFlushDeleteTime = time.Now()
 
 	if closing {
-		log.Println("Final flushing pending deletes...")
+		log.Println("[Fulltext] Flushing pending deletes...")
 		defer func() {
-			log.Println("Final fulshed pending deletes")
+			log.Println("[Fulltext] Flushed pending deletes")
 		}()
 	}
 
@@ -184,7 +184,7 @@ var writeKeywordIndex = func(batch pebble.Batch, workspaceid string, kw string, 
 func removeDocumentsFromKeywordIndex(batch pebble.Batch, workspaceid string, kw string, removingDocids []string,
 	maxKeywordIndexSize int) {
 	if len(kw) == 0 {
-		log.Println("Warning: removing document from keywords index, but keyword is empty")
+		log.Println("[Fulltext] Warning: Removing document from keywords index, but keyword is empty")
 		return
 	}
 
@@ -196,7 +196,7 @@ func removeDocumentsFromKeywordIndex(batch pebble.Batch, workspaceid string, kw 
 	}
 
 	if len(removings) == 0 {
-		log.Println("Warning: removing document from keywords index, but docid is empty")
+		log.Println("[Fulltext] Warning: Removing document from keywords index, but docid is empty")
 		return
 	}
 
@@ -281,7 +281,7 @@ func (t *saveNewDocumentsTask) Wait() error {
 
 func (t *saveNewDocumentsTask) Run() {
 	if db.IsClosed() {
-		log.Println("Database is closed, skip saving new documents")
+		log.Println("[Fulltext] Database is closed, skip saving new documents")
 		t.done <- nil
 		return
 	}
@@ -296,7 +296,7 @@ func (t *saveNewDocumentsTask) Run() {
 
 	err := batch.Commit()
 	if err != nil {
-		log.Println("Failed to save new documents:", err)
+		log.Println("[Fulltext] Error: failed to save new documents:", err)
 	}
 
 	t.done <- err
@@ -315,7 +315,7 @@ func (t *updateDocumentsTask) Wait() error {
 
 func (t *updateDocumentsTask) Run() {
 	if db.IsClosed() {
-		log.Println("Database is closed, skip updating documents")
+		log.Println("[Fulltext] Database is closed, skip updating documents")
 		t.done <- fmt.Errorf("database is closed")
 		return
 	}
@@ -381,7 +381,7 @@ func (t *updateDocumentsTask) Run() {
 
 	err := batch.Commit()
 	if err != nil {
-		log.Println("Failed to update documents:", err)
+		log.Println("[Fulltext] Error: failed to update documents:", err)
 	}
 	t.done <- err
 }
@@ -399,7 +399,7 @@ func (t *deleteDocumentTask) Wait() error {
 
 func (t *deleteDocumentTask) Run() {
 	if db.IsClosed() {
-		log.Println("Database is closed, skip deleting document")
+		log.Println("[Fulltext] Database is closed, skip deleting document")
 		t.done <- fmt.Errorf("database is closed")
 		return
 	}
@@ -409,7 +409,7 @@ func (t *deleteDocumentTask) Run() {
 	doc, err := GetDocument(t.WorkspaceID, t.DocId, true)
 	if err != nil {
 		t.done <- err
-		log.Println("Failed to get document:", err)
+		log.Println("[Fulltext] Error: failed to get document:", err)
 		return
 	}
 
@@ -418,7 +418,7 @@ func (t *deleteDocumentTask) Run() {
 		return
 	}
 
-	defer log.Printf("Document `%s` deleted from workspace `%s`", doc.RelPath, t.WorkspaceID)
+	defer log.Printf("[Fulltext] Document `%s` deleted from workspace `%s`", doc.RelPath, t.WorkspaceID)
 
 	removeKeywordsFromDocumentCached(t.WorkspaceID, t.DocId, doc.Words)
 	/*
@@ -435,7 +435,7 @@ func (t *deleteDocumentTask) Run() {
 
 	err = batch.Commit()
 	if err != nil {
-		log.Println("Failed to delete document:", err)
+		log.Println("[Fulltext] Failed to delete document:", err)
 	}
 
 	t.done <- err

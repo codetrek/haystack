@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/storage"
 )
 
 func TestInit(t *testing.T) {
@@ -21,7 +22,8 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Test initialization
-	err = Init()
+	db, err := storage.Open(tempDir)
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -49,6 +51,7 @@ func TestInit(t *testing.T) {
 
 	// Cleanup
 	CloseAndWait()
+	db.Close()
 }
 
 func TestCloseAndWait(t *testing.T) {
@@ -63,7 +66,8 @@ func TestCloseAndWait(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize
-	err = Init()
+	db, err := storage.Open(tempDir)
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -72,6 +76,7 @@ func TestCloseAndWait(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		CloseAndWait()
+		db.Close()
 		close(done)
 	}()
 
@@ -81,34 +86,6 @@ func TestCloseAndWait(t *testing.T) {
 		// Normal closure
 	case <-time.After(5 * time.Second):
 		t.Error("CloseAndWait timed out")
-	}
-
-	// Verify if the database is closed
-	if !db.IsClosed() {
-		t.Error("Database was not closed")
-	}
-}
-
-func TestCloseAndWaitMultipleCalls(t *testing.T) {
-	// Set up a temporary directory for testing
-	tempDir, err := os.MkdirTemp("", "haystack-test-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	// Set configuration
-	conf.Get().Global.DataPath = tempDir
-
-	// Initialize
-	err = Init()
-	if err != nil {
-		t.Fatalf("Init failed: %v", err)
-	}
-
-	// Call CloseAndWait multiple times
-	for i := 0; i < 3; i++ {
-		CloseAndWait()
 	}
 
 	// Verify if the database is closed

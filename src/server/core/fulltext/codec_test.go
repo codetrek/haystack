@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ai-microsoft/haystack/conf"
+	"github.com/ai-microsoft/haystack/server/core/storage"
 )
 
 func setupTestEnvironment(t *testing.T) (string, func()) {
@@ -18,7 +19,8 @@ func setupTestEnvironment(t *testing.T) (string, func()) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	err = Init()
+	db, err := storage.Open(tempDir)
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -26,6 +28,7 @@ func setupTestEnvironment(t *testing.T) (string, func()) {
 	// Return cleanup function
 	cleanup := func() {
 		CloseAndWait()
+		db.Close()
 		os.RemoveAll(tempDir)
 	}
 

@@ -52,12 +52,12 @@ func (p *Parser) Stop() {
 		<-p.done
 	}
 	close(p.done)
-	defer log.Printf("Parser stopped")
+	defer log.Printf("[Indexer] Parser stopped")
 }
 
 // run executes the parsing logic in a worker goroutine
 func (p *Parser) run(id int, wg *sync.WaitGroup) {
-	log.Printf("Parser %d started", id)
+	log.Printf("[Indexer] Parser %d started", id)
 	defer wg.Done()
 
 	for {
@@ -110,7 +110,7 @@ func parse(file ParseFile) (*fulltext.Document, bool, error) {
 
 	fileSizeExceedLimit := info.Size() > conf.Get().Server.MaxFileSize
 	if fileSizeExceedLimit {
-		log.Printf("File `%s` (%.2f MiB) is too large to index, skipping", file.RelFilePath, float64(info.Size())/1024/1024)
+		log.Printf("[Indexer] File `%s` (%.2f MiB) is too large to index, skipping", file.RelFilePath, float64(info.Size())/1024/1024)
 	}
 
 	existing, _ := fulltext.GetDocument(file.Workspace.ID, id, false)
@@ -131,7 +131,7 @@ func parse(file ParseFile) (*fulltext.Document, bool, error) {
 			return nil, false, fmt.Errorf("failed to read file: %w", err)
 		}
 		if !IsLikelyText(content) {
-			log.Printf("File `%s` is not a text file, skipping", file.RelFilePath)
+			log.Printf("[Indexer] File `%s` is not a text file, skipping", file.RelFilePath)
 			return nil, false, nil
 		}
 
