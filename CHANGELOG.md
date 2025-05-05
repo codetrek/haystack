@@ -1,7 +1,9 @@
 # Changelog
 
-## [1.2.4]
+## [1.2.5]
 - Bugfix: Wrong position of HaystackSearch file seperation line
+- Response search result in streaming for better experience
+- Improve gitignore filter performance
 
 ## [1.2.3]
 - Bugfix: MCP SSE connection lost after a while

@@ -12,6 +12,13 @@ type SearchFilters struct {
 	Exclude string `json:"exclude,omitempty"`
 }
 
+// @param OpenFiles: is the list of files that open in the editor
+// @param ActiveFile: is the active file in the editor
+type Editor struct {
+	OpenFiles  []string `json:"open_files,omitempty"`
+	ActiveFile string   `json:"active_file,omitempty"`
+}
+
 // SearchContentRequest is the request for searching the content of a workspace
 // @param Workspace: is the path to the workspace
 // @param Query: is the query to search for, refer to the search query syntax in the server/server/search.md
@@ -26,6 +33,7 @@ type SearchFilters struct {
 type SearchContentRequest struct {
 	Workspace     string         `json:"workspace,omitempty"`
 	Query         string         `json:"query,omitempty"`
+	Editor        *Editor        `json:"editor,omitempty"`
 	CaseSensitive bool           `json:"case_sensitive,omitempty"`
 	Filters       *SearchFilters `json:"filters,omitempty"`
 	Limit         *SearchLimit   `json:"limit,omitempty"`

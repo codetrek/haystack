@@ -43,44 +43,12 @@ func mcpInit() {
 
 	sse := server.NewSSEServer(mcpServer,
 		server.WithBaseURL(fmt.Sprintf("http://localhost:%d", conf.Get().Global.Port)),
-		server.WithBasePath("/mcp"))
+		server.WithBasePath("/mcp"),
+		server.WithKeepAlive(true),
+		server.WithKeepAliveInterval(10*time.Second),
+	)
 
 	http.HandleFunc("/mcp/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/mcp/sse") {
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.Header().Set("Cache-Control", "no-cache")
-			w.Header().Set("Connection", "keep-alive")
-
-			flusher, ok := w.(http.Flusher)
-			if !ok {
-				http.Error(w, "Streaming unsupported!", http.StatusInternalServerError)
-				return
-			}
-
-			notify := r.Context().Done()
-			go func() {
-				defer func() {
-					if err := recover(); err != nil {
-						log.Printf("Recovered from panic: %v", err)
-						return
-					}
-				}()
-
-				ticker := time.NewTicker(10 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-notify:
-						log.Println("MCP Client disconnected.")
-						return
-					case <-ticker.C:
-						fmt.Fprintf(w, "data: {}\n\n")
-						flusher.Flush()
-					}
-				}
-			}()
-		}
-
 		sse.ServeHTTP(w, r)
 		log.Printf("MCP request: %s %s", r.Method, r.URL.Path)
 	})
@@ -191,7 +159,7 @@ func handleSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 		BeforeAfter: 1,
 	}
 
-	results, truncate := searcher.SearchContent(workspace, &req)
+	results, truncate := searcher.SearchContent(workspace, &req, nil, context.Background(), 10*time.Second)
 	resultCount := 0
 	for _, result := range results {
 		resultCount += len(result.Lines)

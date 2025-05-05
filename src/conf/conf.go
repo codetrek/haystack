@@ -18,7 +18,7 @@ const (
 	DefaultIndexWorkers = 4
 	DefaultPort         = 13134
 
-	DefaultMaxResults        = 5000
+	DefaultMaxResults        = 100000
 	DefaultMaxResultsPerFile = 500
 	DefaultMaxFiles          = 1000
 

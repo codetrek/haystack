@@ -46,6 +46,16 @@ func Search(workspaceid string, query string, limit int) SearchResult {
 	return results
 }
 
+func GetDocumentPath(workspaceId, docid string) string {
+	key := EncodeDocumentPathKey(workspaceId, docid)
+	value, _ := db.Get(key)
+	if value == nil {
+		return ""
+	}
+
+	return string(value)
+}
+
 func ScanFiles(workspaceId string, callback func(docid, relPath string) bool) {
 	db.Scan(EncodeDocumentPathKey(workspaceId, ""), func(key, value []byte) bool {
 		_, docid := DecodeDocumentPathKey(string(key))

@@ -27,6 +27,14 @@ func handleUpdateDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !indexer.ShouldIndexFile(workspace, request.Path) {
+		json.NewEncoder(w).Encode(types.CommonResponse{
+			Code:    0,
+			Message: "File Ignored",
+		})
+		return
+	}
+
 	err = indexer.AddOrSyncFile(workspace, request.Path)
 	if err != nil {
 		log.Printf("Failed to update `%s` in workspace `%s`: %v", request.Path, workspace.Path, err)

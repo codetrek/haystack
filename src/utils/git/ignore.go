@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 // GitIgnore represents the entire gitignore system
@@ -20,21 +22,42 @@ type GitIgnore struct {
 // GitIgnoreRules represents a single .gitignore file
 type GitIgnoreRules struct {
 	baseDir   string
-	rules     []gitIgnoreRule
+	negate    *gitignore.GitIgnore
+	ignorer   *gitignore.GitIgnore
 	isGitRoot bool
 }
 
-// gitIgnoreRule represents a single .gitignore rule
-type gitIgnoreRule struct {
-	Pattern     string // Original pattern
-	Negated     bool   // Whether it's a negation rule (!)
-	AnchoredDir bool   // Whether it's a directory rule (/)
-	RootOnly    bool   // Whether it only matches root directory (starts with /)
-	IgnoreCase  bool   // Whether matching should ignore case
+func NewGitIgnoreRules(patterns []string, baseDir string) (*GitIgnoreRules, error) {
+	// Create ignorer using the library
+	negate := []string{}
+	positive := []string{}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(pattern)
+		if pattern == "" || strings.HasPrefix(pattern, "#") {
+			continue // Skip empty lines and comments
+		}
+
+		if strings.HasPrefix(pattern, "!") {
+			negate = append(negate, strings.TrimPrefix(pattern, "!"))
+		} else {
+			positive = append(positive, pattern)
+		}
+	}
+
+	var neg *gitignore.GitIgnore
+	if len(negate) > 0 {
+		neg = gitignore.CompileIgnoreLines(negate...)
+	}
+
+	return &GitIgnoreRules{
+		baseDir: baseDir,
+		negate:  neg,
+		ignorer: gitignore.CompileIgnoreLines(positive...),
+	}, nil
 }
 
-// NewGitIgnoreRules creates a GitIgnoreRuleFile from a file
-func NewGitIgnoreRules(filePath string, ignoreCase bool) (*GitIgnoreRules, error) {
+// NewGitIgnoreRulesFromFile creates a GitIgnoreRuleFile from a file
+func NewGitIgnoreRulesFromFile(filePath string, ignoreCase bool) (*GitIgnoreRules, error) {
 	baseDir := filepath.Dir(filePath)
 
 	file, err := os.Open(filePath)
@@ -43,18 +66,25 @@ func NewGitIgnoreRules(filePath string, ignoreCase bool) (*GitIgnoreRules, error
 	}
 	defer file.Close()
 
+	// Read lines from file
+	var lines []string
 	scanner := bufio.NewScanner(file)
-	rf, err := parseGitIgnoreFile(scanner, baseDir, ignoreCase)
-	if err != nil {
+	for scanner.Scan() {
+		lines = append(lines, scanner.Text())
+	}
+
+	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
 
-	return rf, nil
+	return NewGitIgnoreRules(lines, baseDir)
 }
 
 func NewGitIgnoreRulesFromString(rules string, baseDir string, ignoreCase bool) (*GitIgnoreRules, error) {
-	scanner := bufio.NewScanner(strings.NewReader(rules))
-	return parseGitIgnoreFile(scanner, baseDir, ignoreCase)
+	// Split rules into lines
+	lines := strings.Split(rules, "\n")
+
+	return NewGitIgnoreRules(lines, baseDir)
 }
 
 // NewGitIgnore creates a new GitIgnore system
@@ -79,27 +109,32 @@ func NewGitIgnore(rootPath string, ignoreCase bool) *GitIgnore {
 }
 
 // IsIgnored checks if a path should be ignored by this .gitignore file
-func (f *GitIgnoreRules) IsIgnored(path string, isDir bool) bool {
+func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
 	// Get the path relative to the base directory
-	relPath, err := filepath.Rel(f.baseDir, path)
+	relPath, err := filepath.Rel(f.baseDir, absPath)
 	if err != nil {
 		return false
 	}
 
 	// Normalize path separators to forward slashes
-	relPath = filepath.ToSlash(relPath)
-
-	// Track whether currently ignored
-	ignored := false
-
-	// Apply all rules
-	for _, rule := range f.rules {
-		if rule.isIgnored(relPath, isDir) {
-			ignored = !rule.Negated
-		}
+	relPath = "/" + filepath.ToSlash(relPath)
+	if isDir && !strings.HasSuffix(relPath, "/") {
+		relPath += "/"
 	}
 
-	return ignored
+	if f.isNegate(relPath) {
+		return false
+	}
+
+	// Use the library's matching function
+	return f.ignorer.MatchesPath(relPath)
+}
+
+func (f *GitIgnoreRules) isNegate(relPath string) bool {
+	if f.negate == nil {
+		return false
+	}
+	return f.negate.MatchesPath(relPath)
 }
 
 var outOfRoot = filepath.Clean("../")
@@ -159,14 +194,12 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	// First check for negation rules (these have highest precedence)
 	for _, dir := range dirsToCheck {
 		if ruleFile := g.loadGitIgnoreForDir(dir); ruleFile != nil {
-			// Check if there's an explicit negation rule for this file
-			if ruleFile.isNegated(absPath, isDir) {
+			if ruleFile.isNegate(relPath) {
 				if isDir {
 					g.cacheResult(cacheKey, false)
 				}
 				return false
 			}
-
 			if ruleFile.isGitRoot {
 				break
 			}
@@ -199,6 +232,10 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 				return true
 			}
 		}
+
+		if ruleFile.isGitRoot {
+			break
+		}
 	}
 
 	if isDir {
@@ -219,230 +256,6 @@ func (g *GitIgnore) ClearCache() {
 	g.mutex.Lock()
 	g.cache = make(map[string]bool)
 	g.mutex.Unlock()
-}
-
-// isIgnored checks if a path matches this rule
-func (r *gitIgnoreRule) isIgnored(relPath string, isDir bool) bool {
-	// If it's a directory rule but the target is not a directory, no match
-	if r.AnchoredDir && !isDir {
-		return false
-	}
-
-	// Clean the path for matching
-	relPath = strings.TrimPrefix(relPath, "./")
-
-	// Apply case insensitivity if needed
-	if r.IgnoreCase {
-		relPath = strings.ToLower(relPath)
-	}
-
-	// Handle root directory rules
-	if r.RootOnly {
-		// For root directory rules, the path must be directly under the root
-		return r.matchPattern(relPath)
-	}
-
-	// Non-root directory rules can match any subpath
-	pathParts := strings.Split(relPath, "/")
-	for i := range pathParts {
-		subPath := strings.Join(pathParts[i:], "/")
-		if r.matchPattern(subPath) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// matchPattern checks if a path matches this rule's pattern
-func (r *gitIgnoreRule) matchPattern(path string) bool {
-	// Normalize pattern
-	pattern := strings.TrimPrefix(r.Pattern, "./")
-
-	// Apply case insensitivity if needed
-	if r.IgnoreCase {
-		pattern = strings.ToLower(pattern)
-		path = strings.ToLower(path)
-	}
-
-	// Special case for directory match
-	if r.AnchoredDir && pattern == path {
-		return true
-	}
-
-	// Handle ** wildcard case
-	if strings.Contains(pattern, "**") {
-		return r.matchWithDoubleAsterisk(pattern, path)
-	}
-
-	// Convert gitignore pattern to filepath.Match supported format
-	match, err := filepath.Match(pattern, path)
-	if err != nil {
-		return false
-	}
-	return match
-}
-
-// matchWithDoubleAsterisk handles patterns containing **
-func (r *gitIgnoreRule) matchWithDoubleAsterisk(pattern, path string) bool {
-	// Apply case insensitivity if needed
-	if r.IgnoreCase {
-		pattern = strings.ToLower(pattern)
-		path = strings.ToLower(path)
-	}
-
-	// Handle special case for "**" pattern (matches everything)
-	if pattern == "**" {
-		return true
-	}
-
-	// Split pattern and path into segments
-	patternParts := strings.Split(pattern, "/")
-	pathParts := strings.Split(path, "/")
-
-	return r.matchSegments(patternParts, pathParts, 0, 0)
-}
-
-// matchSegments recursively matches path segments
-func (r *gitIgnoreRule) matchSegments(pattern, path []string, patternIdx, pathIdx int) bool {
-	// Base case: pattern fully matched
-	if patternIdx >= len(pattern) && pathIdx >= len(path) {
-		return true
-	}
-
-	// If pattern is exhausted but path isn't, no match
-	if patternIdx >= len(pattern) {
-		return false
-	}
-
-	// Handle **
-	if pattern[patternIdx] == "**" {
-		// ** can match 0 or more directories
-		// Try skipping **
-		if r.matchSegments(pattern, path, patternIdx+1, pathIdx) {
-			return true
-		}
-
-		// If path is exhausted, can't continue matching
-		if pathIdx >= len(path) {
-			return false
-		}
-
-		// Try consuming one path segment and continue matching **
-		return r.matchSegments(pattern, path, patternIdx, pathIdx+1)
-	}
-
-	// Path exhausted but pattern isn't, no match
-	if pathIdx >= len(path) {
-		return false
-	}
-
-	// Normal segment matching
-	match, err := filepath.Match(pattern[patternIdx], path[pathIdx])
-	if err != nil {
-		return false
-	}
-
-	// If case insensitive is enabled, try again with lowercase comparison
-	if !match && r.IgnoreCase {
-		lowerPattern := strings.ToLower(pattern[patternIdx])
-		lowerPath := strings.ToLower(path[pathIdx])
-		match, err = filepath.Match(lowerPattern, lowerPath)
-		if err != nil {
-			return false
-		}
-	}
-
-	if match {
-		return r.matchSegments(pattern, path, patternIdx+1, pathIdx+1)
-	}
-
-	return false
-}
-
-// parseGitIgnoreFile parses .gitignore rules
-func parseGitIgnoreFile(scanner *bufio.Scanner, baseDir string, ignoreCase bool) (*GitIgnoreRules, error) {
-	var rules []gitIgnoreRule
-
-	for scanner.Scan() {
-		pattern := strings.TrimSpace(scanner.Text())
-
-		// Skip empty lines and comments
-		if pattern == "" || strings.HasPrefix(pattern, "#") {
-			continue
-		}
-
-		rules = append(rules, parseRule(pattern, ignoreCase))
-	}
-
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return &GitIgnoreRules{
-		baseDir: baseDir,
-		rules:   rules,
-	}, nil
-}
-
-// parseRule parses a single gitignore rule
-func parseRule(pattern string, ignoreCase bool) gitIgnoreRule {
-	// Handle negation rule
-	negated := false
-	if strings.HasPrefix(pattern, "!") {
-		negated = true
-		pattern = pattern[1:]
-	}
-
-	// Clean the pattern
-	pattern = strings.TrimSpace(pattern)
-
-	// Check if it only matches root directory
-	rootOnly := false
-	if strings.HasPrefix(pattern, "/") {
-		rootOnly = true
-		pattern = pattern[1:]
-	}
-
-	// Check if it's a directory rule
-	anchoredDir := false
-	if strings.HasSuffix(pattern, "/") {
-		anchoredDir = true
-		pattern = strings.TrimSuffix(pattern, "/")
-	}
-
-	return gitIgnoreRule{
-		Pattern:     pattern,
-		Negated:     negated,
-		AnchoredDir: anchoredDir,
-		RootOnly:    rootOnly,
-		IgnoreCase:  ignoreCase,
-	}
-}
-
-// isNegated checks if a path has an explicit negation rule
-func (f *GitIgnoreRules) isNegated(path string, isDir bool) bool {
-	if len(f.rules) == 0 {
-		return false
-	}
-
-	// Get the path relative to the base directory
-	relPath, err := filepath.Rel(f.baseDir, path)
-	if err != nil {
-		return false
-	}
-
-	// Normalize path separators to forward slashes
-	relPath = filepath.ToSlash(relPath)
-
-	// Look specifically for negation rules
-	for _, rule := range f.rules {
-		if rule.Negated && rule.isIgnored(relPath, isDir) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // loadGitIgnoreForDir loads .gitignore file for a directory if it exists
@@ -468,13 +281,14 @@ func (g *GitIgnore) loadGitIgnoreForDir(dir string) *GitIgnoreRules {
 
 	gitIgnorePath := filepath.Join(dir, ".gitignore")
 	if _, err := os.Stat(gitIgnorePath); err == nil {
-		rf, _ = NewGitIgnoreRules(gitIgnorePath, g.ignoreCase)
+		rf, _ = NewGitIgnoreRulesFromFile(gitIgnorePath, g.ignoreCase)
 	}
 
 	if rf == nil {
+		// Create an empty GitIgnoreRules when no .gitignore file exists
 		rf = &GitIgnoreRules{
 			baseDir: dir,
-			rules:   []gitIgnoreRule{},
+			ignorer: gitignore.CompileIgnoreLines(),
 		}
 	}
 

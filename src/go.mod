@@ -12,6 +12,7 @@ require (
 	github.com/gofrs/flock v0.12.1
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/mark3labs/mcp-go v0.20.0
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/stretchr/testify v1.10.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1

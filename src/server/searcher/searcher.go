@@ -2,6 +2,7 @@ package searcher
 
 import (
 	"bufio"
+	"context"
 	"log"
 	"os"
 	"path/filepath"
@@ -38,13 +39,94 @@ type QueryFilters struct {
 	Exclude *utils.SimpleFilter
 }
 
+func sortDocuments(workspaceId string, editor *types.Editor, docIDs map[string]struct{},
+	filter func(path string) bool) []string {
+
+	docs := map[string]string{}
+	fulltext.ScanFiles(workspaceId, func(docid, relPath string) bool {
+		if _, ok := docIDs[docid]; ok {
+			docs[relPath] = docid
+		}
+		return true
+	})
+
+	for relPath, id := range docs {
+		if _, ok := docIDs[id]; ok {
+			if !filter(relPath) {
+				delete(docs, relPath)
+			}
+		}
+	}
+
+	sorted := make([]string, 0, len(docIDs))
+	if editor != nil {
+		var add = func(dir string) {
+			if dir != "" {
+				for relPath, docid := range docs {
+					if strings.HasPrefix(relPath, dir) {
+						sorted = append(sorted, docid)
+						delete(docs, relPath)
+					}
+				}
+			}
+		}
+
+		if editor.ActiveFile != "" {
+			// Add the active file to the beginning of the list
+			if docid, ok := docs[editor.ActiveFile]; ok {
+				sorted = append(sorted, docid)
+				delete(docs, editor.ActiveFile)
+			}
+		}
+
+		// Add the files in the editor to the list
+		for _, f := range editor.OpenFiles {
+			if docid, ok := docs[f]; ok {
+				sorted = append(sorted, docid)
+				delete(docs, f)
+			}
+		}
+
+		// The same directory with active file
+		if editor.ActiveFile != "" {
+			dir := filepath.ToSlash(filepath.Dir(editor.ActiveFile))
+			add(dir)
+		}
+
+		// The same directory with open files
+		for _, f := range editor.OpenFiles {
+			dir := filepath.ToSlash(filepath.Dir(f))
+			add(dir)
+		}
+
+		// Parent directory of the active file
+		if editor.ActiveFile != "" {
+			dir := filepath.ToSlash(filepath.Dir(filepath.Dir(editor.ActiveFile)))
+			add(dir)
+		}
+	}
+
+	// Append the rest of the files
+	for _, docid := range docs {
+		sorted = append(sorted, docid)
+	}
+
+	return sorted
+}
+
 // SearchContent searches the content of the workspace
 // query is a list of words to search for
 // returns a list of results
-func SearchContent(workspace *workspace.Workspace, req *types.SearchContentRequest) ([]types.SearchContentResult, bool) {
+func SearchContent(workspace *workspace.Workspace, req *types.SearchContentRequest,
+	callback func(types.SearchContentResult), ctx context.Context, timeout time.Duration) ([]types.SearchContentResult, bool) {
 	startTime := time.Now()
 	var isTimeout = func() bool {
-		return time.Since(startTime) > 10*time.Second
+		select {
+		case <-ctx.Done():
+			return true
+		default:
+			return time.Since(startTime) > timeout
+		}
 	}
 
 	limit := conf.Get().Server.Search.Limit
@@ -58,10 +140,12 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 		}
 	}
 
-	var globalInclude *utils.SimpleFilter
-	if len(workspace.GetFilters().Include) > 0 {
-		globalInclude = utils.NewSimpleFilter(workspace.GetFilters().Include, workspace.Path)
-	}
+	/*
+		var globalInclude *utils.SimpleFilter
+		if len(workspace.GetFilters().Include) > 0 {
+			globalInclude = utils.NewSimpleFilter(workspace.GetFilters().Include, workspace.Path)
+		}
+	*/
 
 	var includeFilter *utils.SimpleFilter
 	var excludeFilter *utils.SimpleFilter
@@ -71,33 +155,35 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			filepath.FromSlash(filepath.Clean(filepath.Join(workspace.Path, req.Filters.Path)) + "/"))
 
 		if req.Filters.Include != "" {
-			includeFilter = utils.NewSimpleFilter(strings.Split(req.Filters.Include, ","), workspace.Path)
+			includeFilter = utils.NewSimpleFilter(strings.Split(req.Filters.Include, ","))
 		}
 
 		if req.Filters.Exclude != "" {
-			excludeFilter = utils.NewSimpleFilter(strings.Split(req.Filters.Exclude, ","), workspace.Path)
+			excludeFilter = utils.NewSimpleFilter(strings.Split(req.Filters.Exclude, ","))
 		}
 	}
 
 	// Check if the file should be included in the search
-	var wantFile = func(doc *fulltext.Document) bool {
-		fullPath := filepath.Join(workspace.Path, doc.RelPath)
+	var wantFile = func(relPath string) bool {
+		fullPath := filepath.Join(workspace.Path, relPath)
 		if len(pathFilter) > 0 && !strings.HasPrefix(strings.ToLower(fullPath), pathFilter) {
 			return false
 		}
 
-		// File not included by workspace filters
-		if globalInclude != nil && !globalInclude.Match(fullPath, false) {
-			return false
-		}
+		/*
+			// File not included by workspace filters
+			if globalInclude != nil && !globalInclude.Match(fullPath, false) {
+				return false
+			}
+		*/
 
 		// Excluded by filter
-		if excludeFilter != nil && excludeFilter.Match(fullPath, false) {
+		if excludeFilter != nil && excludeFilter.Match(relPath, false) {
 			return false
 		}
 
 		// Not included by include filter
-		if includeFilter != nil && !includeFilter.Match(fullPath, false) {
+		if includeFilter != nil && !includeFilter.Match(relPath, false) {
 			return false
 		}
 
@@ -210,18 +296,17 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 		return []types.SearchContentResult{}, false
 	}
 
-	for docid := range results.DocIds {
+	// Sort documents based on prioritization logic:
+	// - Documents associated with the editor's active file are prioritized first.
+	// - Documents from open files in the editor are prioritized next.
+	// - Remaining documents are sorted based on relevance or other criteria.
+	for _, docid := range sortDocuments(workspace.ID, req.Editor, results.DocIds, wantFile) {
 		if isTimeout() {
 			break
 		}
 
 		doc, err := fulltext.GetDocument(workspace.ID, docid, false)
 		if err != nil || doc == nil {
-			continue
-		}
-
-		// Check if the file should be included in the search
-		if !wantFile(doc) {
 			continue
 		}
 
@@ -237,6 +322,9 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 		}
 
 		if len(fileMatch.Lines) > 0 {
+			if callback != nil {
+				callback(fileMatch)
+			}
 			finalResults = append(finalResults, fileMatch)
 		}
 

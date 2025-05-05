@@ -2,52 +2,53 @@ package utils
 
 import (
 	"path/filepath"
-	"strings"
 
-	gitutils "github.com/ai-microsoft/haystack/utils/git"
+	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 type SimpleFilter struct {
-	rootPath string
-	negate   bool
-	ignore   *gitutils.GitIgnoreRules
+	negate bool
+	//	ignore   *gitutils.GitIgnoreRules
+	ignore   *gitignore.GitIgnore
+	patterns []string
 }
 
-func (f *SimpleFilter) Match(path string, isDir bool) bool {
+// Match checks if the given relative path matches the filter's patterns.
+// The relPath parameter must be a relative path, and it will be converted
+// to a slash-separated format internally. If isDir is true, a trailing slash
+// will be appended to relPath before matching.
+func (f *SimpleFilter) Match(relPath string, isDir bool) bool {
 	if f.ignore == nil {
 		return true
 	}
 
-	r := f.ignore.IsIgnored(filepath.Join(f.rootPath, path), isDir)
-	if f.negate {
-		return !r
+	relPath = "/" + filepath.ToSlash(relPath)
+	if isDir {
+		relPath += "/"
 	}
 
-	return r
+	match := f.ignore.MatchesPath(relPath)
+	if f.negate {
+		return !match
+	}
+
+	return match
 }
 
-func NewSimpleFilterExclude(patterns []string, baseDir string) *SimpleFilter {
-	if !filepath.IsAbs(baseDir) {
-		return nil
-	}
-
-	ignore, _ := gitutils.NewGitIgnoreRulesFromString(strings.Join(patterns, "\n"), baseDir, true)
+func NewSimpleFilterExclude(patterns []string) *SimpleFilter {
+	ignore := gitignore.CompileIgnoreLines(patterns...)
 	return &SimpleFilter{
-		rootPath: baseDir,
 		negate:   true,
 		ignore:   ignore,
+		patterns: patterns,
 	}
 }
 
-func NewSimpleFilter(patterns []string, baseDir string) *SimpleFilter {
-	if !filepath.IsAbs(baseDir) {
-		return nil
-	}
-
-	ignore, _ := gitutils.NewGitIgnoreRulesFromString(strings.Join(patterns, "\n"), baseDir, true)
+func NewSimpleFilter(patterns []string) *SimpleFilter {
+	ignore := gitignore.CompileIgnoreLines(patterns...)
 	return &SimpleFilter{
-		rootPath: baseDir,
 		negate:   false,
 		ignore:   ignore,
+		patterns: patterns,
 	}
 }

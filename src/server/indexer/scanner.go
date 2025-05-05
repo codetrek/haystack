@@ -81,6 +81,35 @@ func (s *Scanner) run(wg *sync.WaitGroup) {
 	}
 }
 
+func ShouldIndexFile(w *workspace.Workspace, relPath string) bool {
+	if w == nil {
+		return false
+	}
+
+	if IsNotIndexiable(relPath) {
+		return false
+	}
+
+	baseDir := w.Path
+	filters := w.GetFilters()
+
+	var exclude fsutils.ListFileFilter
+	if filters.Exclude.UseGitIgnore {
+		exclude = &GitIgnoreFilter{
+			ignore: gitutils.NewGitIgnore(baseDir, true),
+		}
+	} else {
+		exclude = utils.NewSimpleFilter(filters.Exclude.Customized)
+	}
+
+	if exclude.Match(relPath, false) {
+		return false
+	}
+
+	include := utils.NewSimpleFilter(filters.Include)
+	return include.Match(relPath, false)
+}
+
 // processWorkspace processes a single workspace by scanning its files and applying filters.
 func (s *Scanner) processWorkspace(w *workspace.Workspace) error {
 	log.Printf("Start processing workspace %s", w.Path)
@@ -100,10 +129,10 @@ func (s *Scanner) processWorkspace(w *workspace.Workspace) error {
 			ignore: gitutils.NewGitIgnore(baseDir, true),
 		}
 	} else {
-		exclude = utils.NewSimpleFilterExclude(filters.Exclude.Customized, baseDir)
+		exclude = utils.NewSimpleFilterExclude(filters.Exclude.Customized)
 	}
 
-	include := utils.NewSimpleFilter(filters.Include, baseDir)
+	include := utils.NewSimpleFilter(filters.Include)
 	startTime := time.Now()
 	lastTime := time.Now()
 	err := fsutils.ListFiles(baseDir, fsutils.ListFileOptions{Filter: exclude}, func(fileInfo fsutils.FileInfo) bool {

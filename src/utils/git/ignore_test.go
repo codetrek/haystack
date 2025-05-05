@@ -4,72 +4,28 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
-func TestGitIgnoreRule(t *testing.T) {
-	tests := []struct {
-		name     string
-		pattern  string
-		path     string
-		isDir    bool
-		expected bool
-	}{
-		// 基本通配符测试
-		{"basic wildcard", "*.log", "test.log", false, true},
-		{"basic wildcard no match", "*.log", "test.txt", false, false},
-		{"question mark", "test?.txt", "test1.txt", false, true},
-		{"question mark no match", "test?.txt", "test.txt", false, false},
-
-		// 目录规则测试
-		{"dir rule match", "dir/", "dir", true, true},
-		{"dir rule no match file", "dir/", "dir/file.txt", false, false},
-		{"dir rule no match dir", "dir/", "other", true, false},
-
-		// 根目录规则测试
-		{"root rule match", "/test.txt", "test.txt", false, true},
-		{"root rule no match", "/test.txt", "subdir/test.txt", false, false},
-
-		// 双星号测试
-		{"double star match", "**/test.txt", "test.txt", false, true},
-		{"double star match subdir", "**/test.txt", "subdir/test.txt", false, true},
-		{"double star match deep", "**/test.txt", "a/b/c/test.txt", false, true},
-		{"double star no match", "**/test.txt", "other.txt", false, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			rule := parseRule(tt.pattern, true)
-			result := rule.isIgnored(tt.path, tt.isDir)
-			if result != tt.expected {
-				t.Errorf("rule.isIgnored(%q, %v) = %v; want %v", tt.path, tt.isDir, result, tt.expected)
-			}
-		})
-	}
-}
-
-func TestGitIgnoreRuleFile(t *testing.T) {
-	// 创建临时目录
+func setupBasicTestEnvironment(t *testing.T) (string, func()) {
+	// Create temporary directory
 	tempDir, err := os.MkdirTemp("", "gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	assert.NoError(t, err, "Failed to create temp dir")
 
-	// 创建测试文件和目录
+	// Create test files and directories
 	testFile := filepath.Join(tempDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
+	err = os.WriteFile(testFile, []byte("test"), 0644)
+	assert.NoError(t, err, "Failed to create test file")
 
-	// 创建dir目录
+	// Create dir directory
 	dirPath := filepath.Join(tempDir, "dir")
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		t.Fatalf("Failed to create dir directory: %v", err)
-	}
+	err = os.MkdirAll(dirPath, 0755)
+	assert.NoError(t, err, "Failed to create dir directory")
 
-	// 创建 .gitignore 文件
+	// Create .gitignore file
 	gitignoreContent := `
-# 注释行
+# Comment line
 *.log
 !important.log
 dir/
@@ -77,51 +33,80 @@ dir/
 **/temp.txt
 `
 	gitignorePath := filepath.Join(tempDir, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte(gitignoreContent), 0644); err != nil {
-		t.Fatalf("Failed to create .gitignore: %v", err)
+	err = os.WriteFile(gitignorePath, []byte(gitignoreContent), 0644)
+	assert.NoError(t, err, "Failed to create .gitignore")
+
+	cleanup := func() {
+		os.RemoveAll(tempDir)
 	}
 
-	// 创建规则文件
-	ruleFile, err := NewGitIgnoreRules(gitignorePath, true)
-	if err != nil {
-		t.Fatalf("Failed to create rule file: %v", err)
-	}
-
-	tests := []struct {
-		name     string
-		path     string
-		isDir    bool
-		expected bool
-	}{
-		{"ignore log file", "test.log", false, true},
-		{"don't ignore important log", "important.log", false, false},
-		{"ignore directory", "dir", true, true},
-		{"ignore root file", "test.txt", false, true},
-		{"ignore temp file in any dir", "temp.txt", false, true},
-		{"ignore temp file in subdir", "subdir/temp.txt", false, true},
-		{"don't ignore other file", "other.txt", false, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fullPath := filepath.Join(tempDir, tt.path)
-			result := ruleFile.IsIgnored(fullPath, tt.isDir)
-			if result != tt.expected {
-				t.Errorf("ruleFile.isIgnored(%q) = %v; want %v", tt.path, result, tt.expected)
-			}
-		})
-	}
+	return tempDir, cleanup
 }
 
-func TestGitIgnoreSystem(t *testing.T) {
-	// 创建临时目录结构
-	tempDir, err := os.MkdirTemp("", "gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+func TestBasicGitIgnoreRules(t *testing.T) {
+	tempDir, cleanup := setupBasicTestEnvironment(t)
+	defer cleanup()
 
-	// 创建目录结构
+	ruleFile, err := NewGitIgnoreRulesFromFile(filepath.Join(tempDir, ".gitignore"), true)
+	assert.NoError(t, err, "Failed to create rule file")
+
+	t.Run("log file patterns", func(t *testing.T) {
+		t.Run("normal log file", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "test.log")
+			assert.True(t, ruleFile.IsIgnored(fullPath, false),
+				"Log file should be ignored by *.log pattern")
+		})
+
+		t.Run("important log file", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "important.log")
+			assert.False(t, ruleFile.IsIgnored(fullPath, false),
+				"important.log should not be ignored due to !important.log rule")
+		})
+	})
+
+	t.Run("directory patterns", func(t *testing.T) {
+		t.Run("dir directory", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "dir")
+			assert.True(t, ruleFile.IsIgnored(fullPath, true),
+				"dir/ directory should be ignored")
+		})
+	})
+
+	t.Run("root file patterns", func(t *testing.T) {
+		t.Run("root test.txt", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "test.txt")
+			assert.True(t, ruleFile.IsIgnored(fullPath, false),
+				"Root test.txt should be ignored by /test.txt pattern")
+		})
+	})
+
+	t.Run("glob patterns", func(t *testing.T) {
+		t.Run("root temp file", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "temp.txt")
+			assert.True(t, ruleFile.IsIgnored(fullPath, false),
+				"temp.txt should be ignored by **/temp.txt pattern")
+		})
+
+		t.Run("subdir temp file", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "subdir", "temp.txt")
+			assert.True(t, ruleFile.IsIgnored(fullPath, false),
+				"subdir/temp.txt should be ignored by **/temp.txt pattern")
+		})
+
+		t.Run("other file", func(t *testing.T) {
+			fullPath := filepath.Join(tempDir, "other.txt")
+			assert.False(t, ruleFile.IsIgnored(fullPath, false),
+				"other.txt should not be ignored")
+		})
+	})
+}
+
+func createTestEnvironmentForSystem(t *testing.T) (string, []string, []string) {
+	// Create temporary directory
+	tempDir, err := os.MkdirTemp("", "gitignore-test")
+	assert.NoError(t, err, "Failed to create temp dir")
+
+	// Create directory structure
 	dirs := []string{
 		"subdir1",
 		"subdir1/subsubdir",
@@ -132,12 +117,10 @@ func TestGitIgnoreSystem(t *testing.T) {
 
 	for _, dir := range dirs {
 		err := os.MkdirAll(filepath.Join(tempDir, dir), 0755)
-		if err != nil {
-			t.Fatalf("Failed to create directory %s: %v", dir, err)
-		}
+		assert.NoError(t, err, "Failed to create directory %s", dir)
 	}
 
-	// 创建测试文件
+	// Create test files
 	files := []string{
 		"root_file.txt",
 		"should_ignore.log",
@@ -154,13 +137,11 @@ func TestGitIgnoreSystem(t *testing.T) {
 	for _, file := range files {
 		filePath := filepath.Join(tempDir, file)
 		f, err := os.Create(filePath)
-		if err != nil {
-			t.Fatalf("Failed to create file %s: %v", file, err)
-		}
+		assert.NoError(t, err, "Failed to create file %s", file)
 		f.Close()
 	}
 
-	// 创建根目录 .gitignore
+	// Create root directory .gitignore
 	rootGitIgnore := `
 # Ignore log files in all directories
 *.log
@@ -169,11 +150,9 @@ func TestGitIgnoreSystem(t *testing.T) {
 ignored_dir/
 `
 	err = os.WriteFile(filepath.Join(tempDir, ".gitignore"), []byte(rootGitIgnore), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create root .gitignore: %v", err)
-	}
+	assert.NoError(t, err, "Failed to create root .gitignore")
 
-	// 创建子目录 .gitignore
+	// Create subdirectory .gitignore
 	subDirGitIgnore := `
 # Don't ignore this specific log file
 !file2.log
@@ -182,101 +161,144 @@ ignored_dir/
 *.tmp
 `
 	err = os.WriteFile(filepath.Join(tempDir, "subdir1", ".gitignore"), []byte(subDirGitIgnore), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create subdir .gitignore: %v", err)
-	}
+	assert.NoError(t, err, "Failed to create subdir .gitignore")
 
-	// 创建 GitIgnore 系统
+	return tempDir, dirs, files
+}
+
+func TestGitIgnoreSystem(t *testing.T) {
+	tempDir, _, _ := createTestEnvironmentForSystem(t)
+	defer os.RemoveAll(tempDir)
+
 	ignorer := NewGitIgnore(tempDir, true)
 
-	tests := []struct {
-		name     string
-		path     string
-		isDir    bool
-		expected bool
-	}{
-		// 根目录规则测试
-		{"root file not ignored", "root_file.txt", false, false},
-		{"root log file ignored", "should_ignore.log", false, true},
-
-		// 子目录规则测试
-		{"subdir file not ignored", "subdir1/file1.txt", false, false},
-		{"subdir log file not ignored", "subdir1/file2.log", false, false},
-		{"subdir tmp file ignored", "subdir1/subsubdir/should_ignore.tmp", false, true},
-
-		// 目录规则测试
-		{"ignored dir ignored", "subdir2/ignored_dir", true, true},
-		{"file in ignored dir ignored", "subdir2/ignored_dir/ignored_file.txt", false, true},
-		{"dir in ignored dir ignored", "subdir2/ignored_dir/subdir", true, true},
-		{"deep file in ignored dir ignored", "subdir2/ignored_dir/subdir/deep_file.txt", false, true},
-
-		// 边界情况测试
-		{"non-existent file", "non_existent.txt", false, false},
-		{"root directory", "", true, false},
-		{"parent directory", "../test.txt", false, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ignorer.IsIgnored(tt.path, tt.isDir)
-			if result != tt.expected {
-				t.Errorf("ignorer.IsIgnored(%q, %v) = %v; want %v", tt.path, tt.isDir, result, tt.expected)
-			}
+	t.Run("root directory rules", func(t *testing.T) {
+		t.Run("root file not ignored", func(t *testing.T) {
+			assert.False(t, ignorer.IsIgnored("root_file.txt", false),
+				"Root level text file should not be ignored")
 		})
-	}
+
+		t.Run("root log file ignored", func(t *testing.T) {
+			assert.True(t, ignorer.IsIgnored("should_ignore.log", false),
+				"Root level log file should be ignored")
+		})
+	})
+
+	t.Run("subdirectory rules", func(t *testing.T) {
+		t.Run("subdir file not ignored", func(t *testing.T) {
+			assert.False(t, ignorer.IsIgnored("subdir1/file1.txt", false),
+				"Subdirectory text file should not be ignored")
+		})
+
+		t.Run("subdir log file not ignored due to override", func(t *testing.T) {
+			assert.False(t, ignorer.IsIgnored("subdir1/file2.log", false),
+				"Subdirectory log file should not be ignored due to override")
+		})
+
+		t.Run("subdir tmp file ignored", func(t *testing.T) {
+			assert.True(t, ignorer.IsIgnored("subdir1/subsubdir/should_ignore.tmp", false),
+				"Subdirectory tmp file should be ignored")
+		})
+	})
+
+	t.Run("directory rules", func(t *testing.T) {
+		t.Run("ignored dir ignored", func(t *testing.T) {
+			assert.True(t, ignorer.IsIgnored("subdir2/ignored_dir", true),
+				"Ignored directory should be ignored")
+		})
+
+		t.Run("file in ignored dir ignored", func(t *testing.T) {
+			assert.True(t, ignorer.IsIgnored("subdir2/ignored_dir/ignored_file.txt", false),
+				"File in ignored directory should be ignored")
+		})
+
+		t.Run("subdir in ignored dir ignored", func(t *testing.T) {
+			assert.True(t, ignorer.IsIgnored("subdir2/ignored_dir/subdir", true),
+				"Subdirectory in ignored directory should be ignored")
+		})
+
+		t.Run("deep file in ignored dir ignored", func(t *testing.T) {
+			assert.True(t, ignorer.IsIgnored("subdir2/ignored_dir/subdir/deep_file.txt", false),
+				"Deep file in ignored directory should be ignored")
+		})
+	})
+
+	t.Run("special path rules", func(t *testing.T) {
+		t.Run("non-existent file", func(t *testing.T) {
+			assert.False(t, ignorer.IsIgnored("non_existent.txt", false),
+				"Non-existent file should not be ignored")
+		})
+
+		t.Run("root directory path", func(t *testing.T) {
+			assert.False(t, ignorer.IsIgnored("", true),
+				"Root directory path should not be ignored")
+		})
+
+		t.Run("parent directory path", func(t *testing.T) {
+			assert.False(t, ignorer.IsIgnored("../test.txt", false),
+				"Parent directory path should not be ignored")
+		})
+	})
 }
 
 func TestGitIgnoreEdgeCases(t *testing.T) {
-	// 创建临时目录
-	tempDir, err := os.MkdirTemp("", "gitignore-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	t.Run("empty gitignore", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "gitignore-test")
+		assert.NoError(t, err, "Failed to create temp dir")
+		defer os.RemoveAll(tempDir)
 
-	// 测试空 .gitignore 文件
-	emptyGitIgnore := filepath.Join(tempDir, ".gitignore")
-	if err := os.WriteFile(emptyGitIgnore, []byte(""), 0644); err != nil {
-		t.Fatalf("Failed to create empty .gitignore: %v", err)
-	}
+		emptyGitIgnore := filepath.Join(tempDir, ".gitignore")
+		err = os.WriteFile(emptyGitIgnore, []byte(""), 0644)
+		assert.NoError(t, err, "Failed to create empty .gitignore")
 
-	// 测试无效的 .gitignore 文件
-	invalidGitIgnore := filepath.Join(tempDir, "subdir", ".gitignore")
-	if err := os.MkdirAll(filepath.Dir(invalidGitIgnore), 0755); err != nil {
-		t.Fatalf("Failed to create subdir: %v", err)
-	}
-	if err := os.WriteFile(invalidGitIgnore, []byte("invalid pattern [*"), 0644); err != nil {
-		t.Fatalf("Failed to create invalid .gitignore: %v", err)
-	}
+		testFile := filepath.Join(tempDir, "test.txt")
+		err = os.WriteFile(testFile, []byte("test"), 0644)
+		assert.NoError(t, err, "Failed to create test file")
 
-	// 创建测试文件
-	testFile := filepath.Join(tempDir, "test.txt")
-	if err := os.WriteFile(testFile, []byte("test"), 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
+		ignorer := NewGitIgnore(tempDir, true)
+		assert.False(t, ignorer.IsIgnored("test.txt", false), "File should not be ignored with empty .gitignore")
+	})
 
-	// 创建 GitIgnore 系统
-	ignorer := NewGitIgnore(tempDir, true)
+	t.Run("invalid gitignore pattern", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "gitignore-test")
+		assert.NoError(t, err, "Failed to create temp dir")
+		defer os.RemoveAll(tempDir)
 
-	tests := []struct {
-		name     string
-		path     string
-		isDir    bool
-		expected bool
-	}{
-		{"empty gitignore", "test.txt", false, false},
-		{"invalid gitignore", "subdir/test.txt", false, false},
-		{"non-existent path", "non_existent.txt", false, false},
-		{"empty path", "", false, false},
-		{"root path", "/", false, false},
-	}
+		invalidGitIgnore := filepath.Join(tempDir, "subdir", ".gitignore")
+		err = os.MkdirAll(filepath.Dir(invalidGitIgnore), 0755)
+		assert.NoError(t, err, "Failed to create subdir")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := ignorer.IsIgnored(tt.path, tt.isDir)
-			if result != tt.expected {
-				t.Errorf("ignorer.IsIgnored(%q, %v) = %v; want %v", tt.path, tt.isDir, result, tt.expected)
-			}
-		})
-	}
+		err = os.WriteFile(invalidGitIgnore, []byte("invalid pattern [*"), 0644)
+		assert.NoError(t, err, "Failed to create invalid .gitignore")
+
+		ignorer := NewGitIgnore(tempDir, true)
+		assert.False(t, ignorer.IsIgnored("subdir/test.txt", false), "File should not be ignored with invalid .gitignore pattern")
+	})
+
+	t.Run("non-existent path", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "gitignore-test")
+		assert.NoError(t, err, "Failed to create temp dir")
+		defer os.RemoveAll(tempDir)
+
+		ignorer := NewGitIgnore(tempDir, true)
+		assert.False(t, ignorer.IsIgnored("non_existent.txt", false), "Non-existent path should not be ignored")
+	})
+
+	t.Run("empty path", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "gitignore-test")
+		assert.NoError(t, err, "Failed to create temp dir")
+		defer os.RemoveAll(tempDir)
+
+		ignorer := NewGitIgnore(tempDir, true)
+		assert.False(t, ignorer.IsIgnored("", false), "Empty path should not be ignored")
+	})
+
+	t.Run("root path", func(t *testing.T) {
+		tempDir, err := os.MkdirTemp("", "gitignore-test")
+		assert.NoError(t, err, "Failed to create temp dir")
+		defer os.RemoveAll(tempDir)
+
+		ignorer := NewGitIgnore(tempDir, true)
+		assert.False(t, ignorer.IsIgnored("/", false), "Root path should not be ignored")
+	})
 }

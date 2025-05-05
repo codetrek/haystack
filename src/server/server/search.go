@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -16,6 +17,9 @@ import (
 // handleSearchContent handles the search content endpoint
 // It will search the content of the server
 func handleSearchContent(w http.ResponseWriter, r *http.Request) {
+	// Check if the request is a stream
+	stream := r.Header.Get("Accept") == "text/event-stream"
+
 	var request types.SearchContentRequest
 	err := json.NewDecoder(r.Body).Decode(&request)
 	if err != nil {
@@ -23,9 +27,27 @@ func handleSearchContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
+	var flusher http.Flusher
+	timeout := time.Second * 10
+	if stream {
+		// If the request is a stream, set the header to text/event-stream
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		timeout = time.Second * 60 // streaming mode have longer timeout
 
+		var ok bool
+		flusher, ok = w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		w.Header().Set("Content-Type", "application/json")
+	}
+
+	w.WriteHeader(http.StatusOK)
 	if request.Workspace == "" {
 		json.NewEncoder(w).Encode(types.SearchContentResponse{
 			Code:    1,
@@ -67,7 +89,15 @@ func handleSearchContent(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	// Search the content of the workspace
-	results, truncate := searcher.SearchContent(workspace, &request)
+	results := make([]types.SearchContentResult, 0)
+	_, truncate := searcher.SearchContent(workspace, &request, func(result types.SearchContentResult) {
+		results = append(results, result)
+		if stream {
+			msg, _ := json.Marshal(result)
+			fmt.Fprintf(w, "event:result\ndata:%s\n\n", string(msg))
+			flusher.Flush()
+		}
+	}, r.Context(), timeout)
 	defer func() {
 		totalHits := 0
 		for _, result := range results {
@@ -78,17 +108,24 @@ func handleSearchContent(w http.ResponseWriter, r *http.Request) {
 			string(req), time.Since(start), totalHits, len(results), truncate)
 	}()
 
-	json.NewEncoder(w).Encode(types.SearchContentResponse{
-		Code:    0,
-		Message: "Ok",
-		Data: struct {
-			Results  []types.SearchContentResult `json:"results,omitempty"`
-			Truncate bool                        `json:"truncate,omitempty"`
-		}{
-			Results:  results,
-			Truncate: truncate,
-		},
-	})
+	if stream {
+		// If the request is a stream, send the results as a stream
+		msg, _ := json.Marshal(types.SearchContentResult{Truncate: truncate})
+		fmt.Fprintf(w, "event:done\ndata:%s\n\n", string(msg))
+		flusher.Flush()
+	} else {
+		json.NewEncoder(w).Encode(types.SearchContentResponse{
+			Code:    0,
+			Message: "Ok",
+			Data: struct {
+				Results  []types.SearchContentResult `json:"results,omitempty"`
+				Truncate bool                        `json:"truncate,omitempty"`
+			}{
+				Results:  results,
+				Truncate: truncate,
+			},
+		})
+	}
 }
 
 // handleSearchContent handles the search content endpoint
