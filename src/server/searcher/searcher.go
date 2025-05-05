@@ -41,14 +41,24 @@ type QueryFilters struct {
 
 func sortDocuments(workspaceId string, editor *types.Editor, docIDs map[string]struct{},
 	filter func(path string) bool) []string {
+	start := time.Now()
 
 	docs := map[string]string{}
-	fulltext.ScanFiles(workspaceId, func(docid, relPath string) bool {
-		if _, ok := docIDs[docid]; ok {
-			docs[relPath] = docid
+	if len(docIDs) > 10000 {
+		fulltext.ScanFiles(workspaceId, func(docid, relPath string) bool {
+			if _, ok := docIDs[docid]; ok {
+				docs[relPath] = docid
+			}
+			return true
+		})
+	} else {
+		for docid := range docIDs {
+			relPath := fulltext.GetDocumentPath(workspaceId, docid)
+			if relPath != "" {
+				docs[relPath] = docid
+			}
 		}
-		return true
-	})
+	}
 
 	for relPath, id := range docs {
 		if _, ok := docIDs[id]; ok {
@@ -110,6 +120,8 @@ func sortDocuments(workspaceId string, editor *types.Editor, docIDs map[string]s
 	for _, docid := range docs {
 		sorted = append(sorted, docid)
 	}
+
+	log.Printf("[Searcher] SortDocuments took %s", time.Since(start))
 
 	return sorted
 }
@@ -295,6 +307,8 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	if err != nil {
 		return []types.SearchContentResult{}, false
 	}
+
+	log.Printf("[Searcher] CollectDocuments took %s", time.Since(startTime))
 
 	// Sort documents based on prioritization logic:
 	// - Documents associated with the editor's active file are prioritized first.

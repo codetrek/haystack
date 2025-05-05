@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.2.6]
+- Optimize document sorting
+- Increase DB cache
+
 ## [1.2.5]
 - Bugfix: Wrong position of HaystackSearch file seperation line
 - Response search result in streaming for better experience

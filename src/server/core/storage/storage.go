@@ -37,7 +37,7 @@ func Open(dataPath string) (pebble.DB, error) {
 	os.MkdirAll(storagePath, 0755)
 	os.WriteFile(versionPath, []byte(StorageVersion), 0644)
 
-	db, err := pebble.OpenDB(dbPath)
+	db, err := pebble.OpenDB(dbPath, 16*1024*1024)
 	if err != nil {
 		return nil, err
 	}

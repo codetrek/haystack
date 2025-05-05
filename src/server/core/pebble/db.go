@@ -29,11 +29,10 @@ type PebbleDB struct {
 	path   string
 	db     *pebble.DB
 	closed atomic.Bool
-	cache  *pebble.Cache
 }
 
 // OpenDB opens a Pebble database at the specified path
-func OpenDB(path string) (DB, error) {
+func OpenDB(path string, cacheSize int64) (DB, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %v", err)
@@ -41,6 +40,8 @@ func OpenDB(path string) (DB, error) {
 
 	// Configure Pebble options
 	opts := &pebble.Options{
+		Cache: pebble.NewCache(cacheSize),
+
 		WALMinSyncInterval: func() time.Duration {
 			// Sync the WAL every 500us to avoid latency spikes.
 			// Allow more operations to arrive and reduce IO operations
