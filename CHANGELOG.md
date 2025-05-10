@@ -1,5 +1,8 @@
 # Changelog
 
+## [next]
+- Feature: Finding subparts of camelCase and snake_cased words
+
 ## [1.2.6]
 - Optimize document sorting
 - Increase DB cache

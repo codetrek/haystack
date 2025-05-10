@@ -23,6 +23,7 @@ The Search Indexer is structured with the following components:
   - **Core**: Handles document processing and management
   - **Indexer**: Creates and maintains search indexes
   - **Searcher**: Processes search queries
+  - **Server**: HTTP API, MCP
 - **Runtime**: Manages execution environment
 - **Utils**: Common utilities and helper functions
 

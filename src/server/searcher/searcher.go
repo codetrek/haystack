@@ -203,7 +203,10 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	}
 
 	// Compile the query
-	engine := NewSimpleContentSearchEngine(workspace)
+	engine := NewSimpleContentSearchEngine(workspace,
+		conf.Get().Server.Search.MaxWildcardLength,
+		conf.Get().Server.Search.MaxKeywordDistance)
+
 	err := engine.Compile(req.Query, req.CaseSensitive)
 	if err != nil {
 		log.Println("[Searcher] Failed to compile query:", err)

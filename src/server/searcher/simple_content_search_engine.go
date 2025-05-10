@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
@@ -15,8 +14,10 @@ import (
 var rePrefix = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_-]+`)
 
 type SimpleContentSearchEngine struct {
-	Workspace *workspace.Workspace
-	OrClauses []*SimpleContentSearchEngineAndClause
+	MaxWildcardLength  int
+	MaxKeywordDistance int
+	Workspace          *workspace.Workspace
+	OrClauses          []*SimpleContentSearchEngineAndClause
 }
 
 type SimpleContentSearchEngineAndClause struct {
@@ -98,9 +99,11 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId string) ful
 	return r
 }
 
-func NewSimpleContentSearchEngine(workspace *workspace.Workspace) *SimpleContentSearchEngine {
+func NewSimpleContentSearchEngine(workspace *workspace.Workspace, maxWildLen, maxKwDist int) *SimpleContentSearchEngine {
 	return &SimpleContentSearchEngine{
-		Workspace: workspace,
+		MaxWildcardLength:  maxWildLen,
+		MaxKeywordDistance: maxKwDist,
+		Workspace:          workspace,
 	}
 }
 
@@ -126,7 +129,7 @@ func (q *SimpleContentSearchEngineAndClause) IsLineMatch(line string) [][]int {
 		if len(match) == 0 {
 			continue
 		}
-		results = append(results, match[4:6]) // match[4] is the start of the match, match[5] is the end of the match
+		results = append(results, match[2:4]) // match[2] is the start of the match, match[3] is the end of the match
 	}
 
 	return results
@@ -138,8 +141,8 @@ func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) er
 		return errors.New("query is empty")
 	}
 
-	maxWildcardLength := strconv.Itoa(conf.Get().Server.Search.MaxWildcardLength)
-	maxKeywordDistance := strconv.Itoa(conf.Get().Server.Search.MaxKeywordDistance)
+	maxWildcardLength := strconv.Itoa(q.MaxWildcardLength)
+	maxKeywordDistance := strconv.Itoa(q.MaxKeywordDistance)
 
 	orClauses := []*SimpleContentSearchEngineAndClause{}
 	for _, orClause := range strings.Split(query, "|") {
@@ -184,7 +187,7 @@ func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) er
 		if !caseSensitive {
 			casePattern = "(?i)"
 		}
-		reg, err := regexp.Compile(casePattern + "(^|[^a-zA-Z0-9])(" + strings.Join(regPatterns, ".{0,"+maxKeywordDistance+"}[^a-zA-Z0-9]") + ")")
+		reg, err := regexp.Compile(casePattern + "(" + strings.Join(regPatterns, ".{0,"+maxKeywordDistance+"}") + ")")
 		if err != nil {
 			return err
 		}

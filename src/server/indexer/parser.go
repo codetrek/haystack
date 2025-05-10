@@ -164,9 +164,23 @@ func parseString(str string) []string {
 	words := re.FindAllString(str, -1)
 
 	uniqueWords := make(map[string]struct{})
+	pushWord := func(word string) {
+		if len(word) < 3 || len(word) > 80 {
+			return
+		}
+		uniqueWords[strings.ToLower(word)] = struct{}{}
+	}
+
 	for _, word := range words {
-		if isValidWord(word) {
-			uniqueWords[strings.ToLower(word)] = struct{}{}
+		pushWord(word)
+		camelSplited := camelSnakeSplit(word)
+
+		if len(camelSplited) == 1 {
+			continue
+		}
+
+		for _, word := range camelSplited {
+			pushWord(word)
 		}
 	}
 
@@ -176,6 +190,43 @@ func parseString(str string) []string {
 	}
 
 	sort.Strings(result)
+	return result
+}
+
+func camelSnakeSplit(s string) []string {
+	var result = []string{}
+	var pieces = strings.FieldsFunc(s, func(r rune) bool {
+		return r == '-' || r == '_'
+	})
+
+	for _, s := range pieces {
+		var currentWord string
+		for i, r := range s {
+			if i > 0 {
+				if r >= 'A' && r <= 'Z' {
+					// If previous character was lowercase or this is the start of a new uppercase sequence
+					if s[i-1] >= 'a' && s[i-1] <= 'z' || (i < len(s)-1 && s[i+1] >= 'a' && s[i+1] <= 'z') {
+						if currentWord != "" {
+							result = append(result, currentWord)
+						}
+						currentWord = string(r)
+					} else {
+						currentWord += string(r)
+					}
+				} else {
+					currentWord += string(r)
+				}
+			} else {
+				currentWord += string(r)
+			}
+		}
+
+		if currentWord != "" {
+			result = append(result, currentWord)
+		}
+
+	}
+
 	return result
 }
 
