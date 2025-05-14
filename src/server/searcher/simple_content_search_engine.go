@@ -135,6 +135,81 @@ func (q *SimpleContentSearchEngineAndClause) IsLineMatch(line string) [][]int {
 	return results
 }
 
+// TokenizeWithQuotes splits a string into tokens while preserving quoted phrases as single tokens.
+// This ensures that text inside quotes is treated as a single entity and not split by spaces.
+// For example: 'word1 "phrase with spaces" word2' -> ['word1', '"phrase with spaces"', 'word2']
+func TokenizeWithQuotes(s string) []string {
+	var tokens []string
+	var currentToken strings.Builder
+	inQuotes := false
+	escaped := false
+
+	for i := 0; i < len(s); i++ {
+		r := s[i]
+
+		if r == '\\' && i+1 < len(s) && s[i+1] == '"' {
+			currentToken.WriteByte('\\') // Keep the backslash
+			currentToken.WriteByte('"')  // Add the quote character
+			i++                          // Skip the next quote character since we've handled it
+			continue
+		}
+
+		if r == '"' && !escaped {
+			inQuotes = !inQuotes
+			currentToken.WriteByte(r)
+			continue
+		}
+
+		// Handle OR operator '|' when not in quotes
+		if r == '|' && !inQuotes {
+			if currentToken.Len() > 0 {
+				tokens = append(tokens, strings.TrimSpace(currentToken.String()))
+				currentToken.Reset()
+			}
+			// Add the pipe as a separate token
+			tokens = append(tokens, "|")
+			continue
+		}
+
+		if r == ' ' && !inQuotes {
+			if currentToken.Len() > 0 {
+				tokens = append(tokens, strings.TrimSpace(currentToken.String()))
+				currentToken.Reset()
+			}
+			continue
+		}
+
+		currentToken.WriteByte(r)
+	}
+
+	if currentToken.Len() > 0 {
+		tokens = append(tokens, strings.TrimSpace(currentToken.String()))
+	}
+
+	// Remove empty tokens
+	result := make([]string, 0, len(tokens))
+	for _, token := range tokens {
+		if token != "" {
+			result = append(result, token)
+		}
+	}
+
+	return result
+}
+
+// IsQuotedPhrase checks if a token is a quoted phrase
+func IsQuotedPhrase(token string) bool {
+	return len(token) >= 2 && token[0] == '"' && token[len(token)-1] == '"'
+}
+
+// UnwrapQuotes removes surrounding quotes from a quoted phrase
+func UnwrapQuotes(token string) string {
+	if IsQuotedPhrase(token) {
+		return token[1 : len(token)-1]
+	}
+	return token
+}
+
 func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) error {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -144,58 +219,50 @@ func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) er
 	maxWildcardLength := strconv.Itoa(q.MaxWildcardLength)
 	maxKeywordDistance := strconv.Itoa(q.MaxKeywordDistance)
 
+	// First tokenize the entire query to properly handle quoted phrases containing '|'
+	allTokens := TokenizeWithQuotes(query)
+	if len(allTokens) == 0 {
+		return errors.New("query is empty")
+	}
+
+	// Now group tokens into OR clauses
 	orClauses := []*SimpleContentSearchEngineAndClause{}
-	for _, orClause := range strings.Split(query, "|") {
-		orClause = strings.TrimSpace(orClause)
-		if orClause == "" {
+	currentOrClause := []*SimpleContentSearchEngineTerm{}
+	currentRegPatterns := []string{}
+
+	for _, token := range allTokens {
+		// Check if this is an OR separator outside of quoted phrases
+		if token == "|" {
+			// If we have any terms in the current OR clause, finalize it
+			if len(currentOrClause) > 0 {
+				orClause, err := q.finalizeOrClause(currentOrClause, currentRegPatterns, caseSensitive, maxKeywordDistance)
+				if err != nil {
+					return err
+				}
+				orClauses = append(orClauses, orClause)
+
+				// Reset for next OR clause
+				currentOrClause = []*SimpleContentSearchEngineTerm{}
+				currentRegPatterns = []string{}
+			}
 			continue
 		}
 
-		andPatterns := []*SimpleContentSearchEngineTerm{}
-		regPatterns := []string{}
-		for _, andPattern := range strings.Split(orClause, " ") {
-			andPattern = strings.TrimSpace(andPattern)
-			if andPattern == "" || andPattern == "AND" {
-				continue
-			}
-
-			prefixes := rePrefix.FindAllString(andPattern, 1)
-			if len(prefixes) > 0 {
-				regPattern := andPattern
-				regPattern = strings.ReplaceAll(regPattern, ".", "\\.")
-				regPattern = strings.ReplaceAll(regPattern, "*", ".{0,"+maxWildcardLength+"}")
-				regPattern = strings.ReplaceAll(regPattern, "?", ".?")
-				regPattern = strings.ReplaceAll(regPattern, "[", "\\[")
-				regPattern = strings.ReplaceAll(regPattern, "]", "\\]")
-				regPattern = strings.ReplaceAll(regPattern, "^", "\\^")
-				regPattern = strings.ReplaceAll(regPattern, "$", "\\$")
-				regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
-				regPatterns = append(regPatterns, regPattern)
-
-				andPatterns = append(andPatterns, &SimpleContentSearchEngineTerm{
-					Pattern: andPattern,
-					Prefix:  strings.ToLower(prefixes[0]),
-				})
-			}
+		// Process the token
+		pattern, regPattern := q.processToken(token, maxWildcardLength)
+		if pattern != nil {
+			currentOrClause = append(currentOrClause, pattern)
+			currentRegPatterns = append(currentRegPatterns, regPattern)
 		}
+	}
 
-		if len(andPatterns) == 0 {
-			continue
-		}
-
-		casePattern := ""
-		if !caseSensitive {
-			casePattern = "(?i)"
-		}
-		reg, err := regexp.Compile(casePattern + "(" + strings.Join(regPatterns, ".{0,"+maxKeywordDistance+"}") + ")")
+	// Add the final OR clause if there are any terms
+	if len(currentOrClause) > 0 {
+		orClause, err := q.finalizeOrClause(currentOrClause, currentRegPatterns, caseSensitive, maxKeywordDistance)
 		if err != nil {
 			return err
 		}
-
-		orClauses = append(orClauses, &SimpleContentSearchEngineAndClause{
-			Regex:    reg,
-			AndTerms: andPatterns,
-		})
+		orClauses = append(orClauses, orClause)
 	}
 
 	if len(orClauses) == 0 {
@@ -204,6 +271,118 @@ func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) er
 
 	q.OrClauses = orClauses
 	return nil
+}
+
+// processToken handles a single token (quoted phrase or regular term) and returns
+// the corresponding SimpleContentSearchEngineTerm and regex pattern
+func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength string) (*SimpleContentSearchEngineTerm, string) {
+	token = strings.TrimSpace(token)
+	if token == "" || token == "AND" {
+		return nil, ""
+	}
+
+	// Handle quoted phrases specially for exact matching
+	if IsQuotedPhrase(token) {
+		// Extract the content inside quotes
+		unwrappedPhrase := UnwrapQuotes(token)
+
+		// For the prefix, use the first meaningful word in the phrase
+		// to find candidate documents
+		prefixWord := unwrappedPhrase
+		if spaceIdx := strings.IndexByte(unwrappedPhrase, ' '); spaceIdx > 0 {
+			prefixWord = unwrappedPhrase[:spaceIdx]
+		}
+
+		// Make sure we have a valid prefix
+		prefixes := rePrefix.FindAllString(prefixWord, 1)
+		prefixToUse := unwrappedPhrase
+		if len(prefixes) > 0 {
+			prefixToUse = strings.ToLower(prefixes[0])
+		}
+
+		// Custom handling for escaped quotes
+		// First handle literal escaped quotes in the source - look for the pattern \"
+		if strings.Contains(unwrappedPhrase, "\\\"") {
+			// For escaped quotes, we need an even more special approach
+			// Create a pattern that directly matches the escaped quotes in the text
+			// For example, if the query is "function that \"returns\" a value"
+			// we want to match "function that "returns" a value" in the text
+
+			// First, create a version where the escaped quotes are replaced with actual quotes
+			// This is what we expect to find in the text
+			textPattern := strings.ReplaceAll(unwrappedPhrase, "\\\"", "\"")
+
+			// Now escape the pattern for regex, but carefully handle the quotes
+			escapedPhrase := regexp.QuoteMeta(textPattern)
+
+			// Use consistent word boundaries approach for all phrases
+			regPattern := escapedPhrase
+
+			return &SimpleContentSearchEngineTerm{
+				Pattern: token,
+				Prefix:  prefixToUse,
+			}, regPattern
+		}
+
+		escapedPhrase := regexp.QuoteMeta(unwrappedPhrase)
+
+		// Use consistent word boundaries approach for all phrases
+		regPattern := escapedPhrase
+
+		return &SimpleContentSearchEngineTerm{
+			Pattern: token,       // Keep original pattern with quotes
+			Prefix:  prefixToUse, // Use first word or entire phrase without quotes
+		}, regPattern
+	}
+
+	// Handle regular patterns (non-quoted)
+	prefixes := rePrefix.FindAllString(token, 1)
+	if len(prefixes) > 0 {
+		regPattern := token
+		regPattern = strings.ReplaceAll(regPattern, ".", "\\.")
+		regPattern = strings.ReplaceAll(regPattern, "*", ".{0,"+maxWildcardLength+"}")
+		regPattern = strings.ReplaceAll(regPattern, "?", ".?")
+		regPattern = strings.ReplaceAll(regPattern, "[", "\\[")
+		regPattern = strings.ReplaceAll(regPattern, "]", "\\]")
+		regPattern = strings.ReplaceAll(regPattern, "^", "\\^")
+		regPattern = strings.ReplaceAll(regPattern, "$", "\\$")
+		regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
+
+		return &SimpleContentSearchEngineTerm{
+			Pattern: token,
+			Prefix:  strings.ToLower(prefixes[0]),
+		}, regPattern
+	}
+
+	return nil, ""
+}
+
+// finalizeOrClause creates a SimpleContentSearchEngineAndClause from the given terms and patterns
+func (q *SimpleContentSearchEngine) finalizeOrClause(
+	andPatterns []*SimpleContentSearchEngineTerm,
+	regPatterns []string,
+	caseSensitive bool,
+	maxKeywordDistance string) (*SimpleContentSearchEngineAndClause, error) {
+
+	if len(andPatterns) == 0 {
+		return nil, errors.New("empty OR clause")
+	}
+
+	casePattern := ""
+	if !caseSensitive {
+		casePattern = "(?i)"
+	}
+
+	reg, err := regexp.Compile(casePattern + "(" + strings.Join(regPatterns, ".{0,"+maxKeywordDistance+"}") + ")")
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &SimpleContentSearchEngineAndClause{
+		Regex:    reg,
+		AndTerms: andPatterns,
+	}, nil
 }
 
 func (q *SimpleContentSearchEngine) String() string {

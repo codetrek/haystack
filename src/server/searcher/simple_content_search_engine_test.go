@@ -93,6 +93,152 @@ func TestParseQuerySimple(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:  "quoted query for exact matching",
+			query: "\"test1 test2\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"test1 test2\"", Prefix: "test1"}, // We expect the first word to be used as prefix
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "mixed regular and quoted terms",
+			query: "regular \"quoted phrase\" another",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "regular", Prefix: "regular"},
+							{Pattern: "\"quoted phrase\"", Prefix: "quoted"},
+							{Pattern: "another", Prefix: "another"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "quoted term with OR clause",
+			query: "\"exact phrase\" | regular term",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"exact phrase\"", Prefix: "exact"},
+						},
+					},
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "regular", Prefix: "regular"},
+							{Pattern: "term", Prefix: "term"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "quoted term with special characters",
+			query: "\"test.with[special]chars\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"test.with[special]chars\"", Prefix: "test"}, // First word before special chars
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "single word quoted term",
+			query: "\"singleword\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"singleword\"", Prefix: "singleword"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "quoted phrase with multiple words and punctuation",
+			query: "\"hello, world! how are you?\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"hello, world! how are you?\"", Prefix: "hello"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "quoted phrase with numbers and symbols",
+			query: "\"version 1.2.3-beta+build.456\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"version 1.2.3-beta+build.456\"", Prefix: "version"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "mixed quoted phrases with AND and OR operators",
+			query: "\"first phrase\" second | third \"fourth phrase\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"first phrase\"", Prefix: "first"},
+							{Pattern: "second", Prefix: "second"},
+						},
+					},
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "third", Prefix: "third"},
+							{Pattern: "\"fourth phrase\"", Prefix: "fourth"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "quoted phrase with escaped quotes",
+			query: "\"code with \\\"quoted\\\" text\"",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "\"code with \\\"quoted\\\" text\"", Prefix: "code"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name:  "term with dash",
+			query: "exactly-with-dash another",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "exactly-with-dash", Prefix: "exactly-with-dash"},
+							{Pattern: "another", Prefix: "another"},
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -133,6 +279,128 @@ func TestParseQuerySimple(t *testing.T) {
 	}
 }
 
+// Add a new test function to verify TokenizeWithQuotes works correctly
+func TestTokenizeWithQuotes(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  []string
+	}{
+		{
+			name:  "simple space-separated terms",
+			input: "term1 term2 term3",
+			want:  []string{"term1", "term2", "term3"},
+		},
+		{
+			name:  "pattern with prefix",
+			input: "prefix:value",
+			want:  []string{"prefix:value"},
+		},
+		{
+			name:  "quoted query for exact matching",
+			input: "\"test1 test2\"",
+			want:  []string{"\"test1 test2\""},
+		},
+		{
+			name:  "mixed regular and quoted terms",
+			input: "term1 \"quoted phrase\" term2",
+			want:  []string{"term1", "\"quoted phrase\"", "term2"},
+		},
+		{
+			name:  "quoted term with OR clause",
+			input: "\"exact phrase\" | regular term",
+			want:  []string{"\"exact phrase\"", "|", "regular", "term"},
+		},
+		{
+			name:  "quoted term with special characters",
+			input: "\"test.with[special]chars\"",
+			want:  []string{"\"test.with[special]chars\""},
+		},
+		{
+			name:  "single word quoted term",
+			input: "\"singleword\"",
+			want:  []string{"\"singleword\""},
+		},
+		{
+			name:  "multiple quoted phrases",
+			input: "\"first phrase\" regular \"second phrase\"",
+			want:  []string{"\"first phrase\"", "regular", "\"second phrase\""},
+		},
+		{
+			name:  "quoted phrase with internal quotes",
+			input: "before \"phrase with \\\"internal quotes\\\"\" after",
+			want:  []string{"before", "\"phrase with \\\"internal quotes\\\"\"", "after"},
+		},
+		{
+			name:  "unclosed quote",
+			input: "term1 \"unclosed quote",
+			want:  []string{"term1", "\"unclosed quote"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TokenizeWithQuotes(tt.input)
+
+			if len(got) != len(tt.want) {
+				t.Errorf("TokenizeWithQuotes() got %d tokens, want %d tokens", len(got), len(tt.want))
+				return
+			}
+
+			for i, token := range got {
+				if token != tt.want[i] {
+					t.Errorf("TokenizeWithQuotes() token %d: got %q, want %q", i, token, tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// Test helper functions for quoted phrases
+func TestQuoteHelpers(t *testing.T) {
+	quotedTests := []struct {
+		input string
+		want  bool
+	}{
+		{"\"quoted\"", true},
+		{"notquoted", false},
+		{"\"multiple words\"", true},
+		{"\"", false},
+		{"\"\"", true},
+		{"\"partial", false},
+		{"partial\"", false},
+	}
+
+	for _, tt := range quotedTests {
+		t.Run("IsQuotedPhrase_"+tt.input, func(t *testing.T) {
+			got := IsQuotedPhrase(tt.input)
+			if got != tt.want {
+				t.Errorf("IsQuotedPhrase(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+
+	// Test UnwrapQuotes
+	unwrapTests := []struct {
+		input string
+		want  string
+	}{
+		{"\"quoted\"", "quoted"},
+		{"notquoted", "notquoted"},
+		{"\"multiple words\"", "multiple words"},
+		{"\"\"", ""},
+	}
+
+	for _, tt := range unwrapTests {
+		t.Run("UnwrapQuotes_"+tt.input, func(t *testing.T) {
+			got := UnwrapQuotes(tt.input)
+			if got != tt.want {
+				t.Errorf("UnwrapQuotes(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func CreateSimpleEngine(t *testing.T, query string, caseSensitive bool, maxWildLen, maxKwDist int) *SimpleContentSearchEngine {
 	eng := NewSimpleContentSearchEngine(nil, maxWildLen, maxKwDist)
 	assert.NoError(t, eng.Compile(query, caseSensitive))
@@ -143,8 +411,7 @@ func TestContentLineMatch(t *testing.T) {
 	t.Run("Test with special characters", func(t *testing.T) {
 		eng := CreateSimpleEngine(t, "special characters", true, 4, 4)
 
-		line := "with special characters: !@#$%^&*()"
-		actual := eng.IsLineMatch(line)
+		actual := eng.IsLineMatch("with special characters: !@#$%^&*()")
 		assert.Equal(t, [][]int{{5, 23}}, actual)
 	})
 
@@ -333,5 +600,101 @@ func TestContentLineMatch(t *testing.T) {
 		// Different separator order should not match
 		actual = eng.IsLineMatch("test-func.call_method()")
 		assert.Equal(t, [][]int{}, actual)
+	})
+
+	t.Run("Regular pattern matching", func(t *testing.T) {
+		eng := CreateSimpleEngine(t, "test", true, 4, 4)
+		actual := eng.IsLineMatch("This is a test line.")
+		assert.Equal(t, [][]int{{10, 14}}, actual)
+
+		eng = CreateSimpleEngine(t, "missing", true, 4, 4)
+		actual = eng.IsLineMatch("This is a test line.")
+		assert.Equal(t, [][]int{}, actual)
+
+		eng = CreateSimpleEngine(t, "test", true, 4, 4)
+		actual = eng.IsLineMatch("This test is a test line for testing.")
+		assert.Equal(t, [][]int{{5, 9}, {15, 19}, {29, 33}}, actual)
+
+		eng = CreateSimpleEngine(t, "test", true, 4, 4)
+		actual = eng.IsLineMatch("This is a testing line.")
+		assert.Equal(t, [][]int{{10, 14}}, actual)
+
+		eng = CreateSimpleEngine(t, "test", true, 4, 4)
+		actual = eng.IsLineMatch("This is a attest line.")
+		assert.Equal(t, [][]int{{12, 16}}, actual)
+	})
+
+	t.Run("Exact phrase matching", func(t *testing.T) {
+		eng := CreateSimpleEngine(t, "\"test line\"", true, 4, 4)
+		actual := eng.IsLineMatch("This is a test line for verification.")
+		assert.Equal(t, [][]int{{10, 19}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"func\"", true, 4, 4)
+		actual = eng.IsLineMatch("The function is called regularly.")
+		assert.Equal(t, [][]int{{4, 8}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"test line\"", true, 4, 4)
+		actual = eng.IsLineMatch("This is a test linear for verification.")
+		assert.Equal(t, [][]int{{10, 19}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"Second Third\"", true, 4, 4)
+		actual = eng.IsLineMatch("This is a firstSecond Third line for verification.")
+		assert.Equal(t, [][]int{{15, 27}}, actual)
+
+		eng = CreateSimpleEngine(t, "first \"second phrase\" | third \"fourth phrase\"", true, 4, 8)
+		actual = eng.IsLineMatch("This line contains first and second phrase words, but not the other clause.")
+		assert.Equal(t, [][]int{{19, 42}}, actual)
+
+		eng = CreateSimpleEngine(t, "first \"second phrase\" | third \"fourth phrase\"", true, 4, 8)
+		actual = eng.IsLineMatch("This line doesn't have the first clause, but has third and fourth phrase words.")
+		assert.Equal(t, [][]int{{49, 72}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"test line\"", true, 4, 4)
+		actual = eng.IsLineMatch("This is a testing line for verification.")
+		assert.Equal(t, [][]int{}, actual)
+
+		eng = CreateSimpleEngine(t, "\"line test\"", true, 4, 4)
+		actual = eng.IsLineMatch("This is a test line for verification.")
+		assert.Equal(t, [][]int{}, actual)
+
+		eng = CreateSimpleEngine(t, "\"is verification\"", true, 4, 4)
+		actual = eng.IsLineMatch("This is a test line for verification.")
+		assert.Equal(t, [][]int{}, actual)
+
+		eng = CreateSimpleEngine(t, "\"test\"", false, 4, 4)
+		actual = eng.IsLineMatch("This is a Test line for verification.")
+		assert.Equal(t, [][]int{{10, 14}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"test\"", true, 4, 4)
+		actual = eng.IsLineMatch("This is a Test line for verification.")
+		assert.Equal(t, [][]int{}, actual)
+	})
+
+	t.Run("Mixed regular and exact phrase matching", func(t *testing.T) {
+		eng := CreateSimpleEngine(t, "this \"test line\"", false, 4, 8)
+		actual := eng.IsLineMatch("This is a test line for verification.")
+		assert.Equal(t, [][]int{{0, 19}}, actual)
+
+		eng = CreateSimpleEngine(t, "this \"line test\"", false, 4, 4)
+		actual = eng.IsLineMatch("This is a test line for verification.")
+		assert.Equal(t, [][]int{}, actual)
+	})
+
+	t.Run("Special characters in quoted phrase", func(t *testing.T) {
+		eng := CreateSimpleEngine(t, "\"test.line\"", true, 4, 4)
+		actual := eng.IsLineMatch("This is a test.line for verification.")
+		assert.Equal(t, [][]int{{10, 19}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"Hello, world!\"", true, 4, 4)
+		actual = eng.IsLineMatch("The program outputs Hello, world! when run.")
+		assert.Equal(t, [][]int{{20, 33}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"version 1.2.3-beta\"", true, 4, 4)
+		actual = eng.IsLineMatch("We're currently using version 1.2.3-beta of the software.")
+		assert.Equal(t, [][]int{{22, 40}}, actual)
+
+		eng = CreateSimpleEngine(t, "\"version 1.2.3-beta\"", true, 4, 4)
+		actual = eng.IsLineMatch("We're currently using version 1.2.3-beta+build.123 of the software.")
+		assert.Equal(t, [][]int{{22, 40}}, actual)
 	})
 }
