@@ -67,6 +67,7 @@ func registerMCPTools(mcpServer *server.MCPServer) {
 			mcp.Description("The search query. Supports the following syntax features:\n"+
 				"- Basic terms: single words like 'function'\n"+
 				"- Prefix matching: 'func*' matches 'function', 'functional', etc. (wildcard only at end of term)\n"+
+				"- Exact matching for quoted phrases: '\"Second third\"' matches 'preSecond thirdSuf' but not 'preSecond and thirdSuf'\n"+
 				"- Logical operators: 'AND' (or space) for conjunction, '|' for OR operator\n"+
 				"- Examples: 'error AND handle', 'create | update', 'init*'"),
 			mcp.Required(),
