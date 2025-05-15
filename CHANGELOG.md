@@ -1,6 +1,6 @@
 # Changelog
 
-## [next]
+## [1.3.0]
 - Feature: Finding subparts of camelCase and snake_cased words
 - Add exact phrase matching using quotes
 - Add comprehensive test coverage for search functionality
