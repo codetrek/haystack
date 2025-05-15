@@ -22,7 +22,7 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Test initialization
-	db, err := storage.Open(tempDir)
+	db, _ := storage.Open(tempDir, 0)
 	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
@@ -40,8 +40,8 @@ func TestInit(t *testing.T) {
 	if err != nil {
 		t.Errorf("Failed to read version file: %v", err)
 	}
-	if string(versionData) != StorageVersion {
-		t.Errorf("Version mismatch, got %s, want %s", string(versionData), StorageVersion)
+	if string(versionData) != storage.StorageVersion {
+		t.Errorf("Version mismatch, got %s, want %s", string(versionData), storage.StorageVersion)
 	}
 
 	// Verify if the database is open
@@ -66,7 +66,7 @@ func TestCloseAndWait(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize
-	db, err := storage.Open(tempDir)
+	db, _ := storage.Open(tempDir, 0)
 	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)

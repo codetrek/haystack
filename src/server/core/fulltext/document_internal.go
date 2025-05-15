@@ -11,10 +11,10 @@ import (
 const MaxKeywordIndexSize = 1000
 
 var (
-	pendingWrites      = map[string]*WorkspacePendingWrite{}
+	pendingWrites      = map[int]*WorkspacePendingWrite{}
 	lastFlushWriteTime = time.Now()
 
-	pendingDeletes      = map[string]*WorkspacePendingWrite{}
+	pendingDeletes      = map[int]*WorkspacePendingWrite{}
 	lastFlushDeleteTime = time.Now()
 )
 
@@ -24,7 +24,7 @@ type RelatedDocs struct {
 }
 
 type WorkspacePendingWrite struct {
-	WorkspaceID string
+	WorkspaceID int
 
 	// Map of keyword to document ids
 	Keywords map[string]RelatedDocs
@@ -40,7 +40,7 @@ func (t *flushPendingWritesTask) Run() {
 	flushPendingDeletes(t.closing, MaxKeywordIndexSize)
 }
 
-func getPendingWrite(workspaceid string) *WorkspacePendingWrite {
+func getPendingWrite(workspaceid int) *WorkspacePendingWrite {
 	wp := pendingWrites[workspaceid]
 	if wp == nil {
 		wp = &WorkspacePendingWrite{
@@ -97,7 +97,7 @@ func flushPendingWrites(closing bool) {
 
 // updateKeywordIndexCached updates the keyword index in write cached
 // It will add the document to the keyword index cache to merge with other documents and flush later
-func updateKeywordIndexCached(workspaceid string, docid string, keywords []string) {
+func updateKeywordIndexCached(workspaceid int, docid string, keywords []string) {
 	cache := getPendingWrite(workspaceid)
 	for _, kw := range keywords {
 		// Add to write cache to merge with other documents and flush later
@@ -110,7 +110,7 @@ func updateKeywordIndexCached(workspaceid string, docid string, keywords []strin
 
 // getPendingDelete returns the pending delete cache for the workspace
 // It will create a new cache if it does not exist
-func getPendingDelete(workspaceid string) *WorkspacePendingWrite {
+func getPendingDelete(workspaceid int) *WorkspacePendingWrite {
 	wp := pendingDeletes[workspaceid]
 	if wp == nil {
 		wp = &WorkspacePendingWrite{
@@ -159,7 +159,7 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 	batch.Commit()
 }
 
-var removeKeywordsFromDocumentCached = func(workspaceid string, docid string, keywords []string) {
+var removeKeywordsFromDocumentCached = func(workspaceid int, docid string, keywords []string) {
 	w := getPendingDelete(workspaceid)
 	for _, kw := range keywords {
 		// Add to delete cache to merge with other documents and flush later
@@ -171,17 +171,17 @@ var removeKeywordsFromDocumentCached = func(workspaceid string, docid string, ke
 }
 
 // writeKeywordIndex writes a keyword to the database
-var writeKeywordIndex = func(batch pebble.Batch, workspaceid string, kw string, docids []string, key []byte) {
-	content := EncodeKeywordIndexValue(docids)
+var writeKeywordIndex = func(batch pebble.Batch, workspaceid int, kw string, docids []string, key []byte) {
+	content := EncodeInvertedValue(docids)
 	if len(key) == 0 {
-		key = EncodeKeywordIndexKey(workspaceid, kw, len(docids))
+		key = EncodeInvertedKey(workspaceid, kw, len(docids))
 	}
 	batch.Put(key, content)
 }
 
 // removeDocumentsFromKeywordIndex removes a document from the keywords index
 // It will remove the document from the keywords index and rewrite the keyword with new docids
-func removeDocumentsFromKeywordIndex(batch pebble.Batch, workspaceid string, kw string, removingDocids []string,
+func removeDocumentsFromKeywordIndex(batch pebble.Batch, workspaceid int, kw string, removingDocids []string,
 	maxKeywordIndexSize int) {
 	if len(kw) == 0 {
 		log.Println("[Fulltext] Warning: Removing document from keywords index, but keyword is empty")
@@ -202,11 +202,11 @@ func removeDocumentsFromKeywordIndex(batch pebble.Batch, workspaceid string, kw 
 
 	keys := []string{}
 	docids := map[string]struct{}{}
-	db.Scan(EncodeKeywordIndexKeyPrefix(workspaceid, kw), func(key, value []byte) bool {
+	db.Scan(EncodeInvertedKeyPrefix(workspaceid, kw), func(key, value []byte) bool {
 		changed := false
 		tmpids := []string{}
 
-		ids := DecodeKeywordIndexValue(string(value))
+		ids := DecodeInvertedValue(value)
 		for _, id := range ids {
 			if _, ok := removings[id]; ok {
 				// remove the document from the keyword index
@@ -255,7 +255,7 @@ func removeDocumentsFromKeywordIndex(batch pebble.Batch, workspaceid string, kw 
 }
 
 // saveDocument saves a document to the database
-func saveDocument(batch pebble.Batch, workspaceid string, doc *Document) {
+func saveDocument(batch pebble.Batch, workspaceid int, doc *Document) {
 	doc.LastSyncTime = time.Now().UnixNano()
 	meta, err := EncodeDocumentMetaValue(doc)
 	if err != nil {
@@ -264,12 +264,12 @@ func saveDocument(batch pebble.Batch, workspaceid string, doc *Document) {
 
 	// Save the document meta and words
 	batch.Put(EncodeDocumentMetaKey(workspaceid, doc.ID), meta)
-	batch.Put(EncodeDocumentWordsKey(workspaceid, doc.ID), EncodeKeywordIndexValue(doc.Words))
+	batch.Put(EncodeDocumentWordsKey(workspaceid, doc.ID), EncodeDocumentWordsValue(doc.Words))
 	batch.Put(EncodeDocumentPathKey(workspaceid, doc.ID), []byte(doc.RelPath))
 }
 
 type saveNewDocumentsTask struct {
-	WorkspaceID string
+	WorkspaceID int
 	Docs        []*Document
 	done        chan error
 }
@@ -303,7 +303,7 @@ func (t *saveNewDocumentsTask) Run() {
 }
 
 type updateDocumentsTask struct {
-	WorkspaceID string
+	WorkspaceID int
 	Docs        []*Document
 	done        chan error
 }
@@ -387,7 +387,7 @@ func (t *updateDocumentsTask) Run() {
 }
 
 type deleteDocumentTask struct {
-	WorkspaceID string
+	WorkspaceID int
 	DocId       string
 	done        chan error
 }
@@ -418,7 +418,7 @@ func (t *deleteDocumentTask) Run() {
 		return
 	}
 
-	defer log.Printf("[Fulltext] Document `%s` deleted from workspace `%s`", doc.RelPath, t.WorkspaceID)
+	defer log.Printf("[Fulltext] Document `%s` deleted from workspace `%d`", doc.RelPath, t.WorkspaceID)
 
 	removeKeywordsFromDocumentCached(t.WorkspaceID, t.DocId, doc.Words)
 	/*

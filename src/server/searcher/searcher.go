@@ -39,7 +39,7 @@ type QueryFilters struct {
 	Exclude *utils.SimpleFilter
 }
 
-func sortDocuments(workspaceId string, editor *types.Editor, docIDs map[string]struct{},
+func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]struct{},
 	filter func(path string) bool) []string {
 	start := time.Now()
 
@@ -317,12 +317,12 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	// - Documents associated with the editor's active file are prioritized first.
 	// - Documents from open files in the editor are prioritized next.
 	// - Remaining documents are sorted based on relevance or other criteria.
-	for _, docid := range sortDocuments(workspace.ID, req.Editor, results.DocIds, wantFile) {
+	for _, docid := range sortDocuments(workspace.Id, req.Editor, results.DocIds, wantFile) {
 		if isTimeout() {
 			break
 		}
 
-		doc, err := fulltext.GetDocument(workspace.ID, docid, false)
+		doc, err := fulltext.GetDocument(workspace.Id, docid, false)
 		if err != nil || doc == nil {
 			continue
 		}
@@ -473,7 +473,7 @@ func SearchFiles(workspace *workspace.Workspace, req *types.SearchFilesRequest) 
 
 	pattern := strings.ReplaceAll(req.Query, " ", "")
 	matches := []MatchResult{}
-	fulltext.ScanFiles(workspace.ID, func(_, relPath string) bool {
+	fulltext.ScanFiles(workspace.Id, func(_, relPath string) bool {
 		if isTimeout() {
 			return false
 		}

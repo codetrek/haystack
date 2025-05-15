@@ -5,7 +5,7 @@ import (
 )
 
 type Workspace struct {
-	ID               string   `json:"id"`
+	Id               int      `json:"id"`
 	Path             string   `json:"path"`
 	TotalFiles       int      `json:"total_files"`
 	UseGlobalFilters bool     `json:"use_global_filters"`

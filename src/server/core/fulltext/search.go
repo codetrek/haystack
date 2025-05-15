@@ -10,15 +10,15 @@ type SearchResult struct {
 	DocIds map[string]struct{} `json:"docIds"`
 }
 
-func Search(workspaceid string, query string, limit int) SearchResult {
+func Search(workspaceid int, query string, limit int) SearchResult {
 	results := SearchResult{
 		// Keywords: make(map[string]*KeywordResult),
 		DocIds: make(map[string]struct{}),
 	}
 
-	db.Scan(EncodeKeywordSearchKey(workspaceid, query), func(key, value []byte) bool {
+	db.Scan(EncodeInvertedSearchKey(workspaceid, query), func(key, value []byte) bool {
 		// _, keyword, _, _ := DecodeKeywordIndexKey(string(key))
-		docids := DecodeKeywordIndexValue(string(value))
+		docids := DecodeInvertedValue(value)
 		if len(docids) > 0 {
 			/*
 				kr, ok := results.Keywords[keyword]
@@ -46,7 +46,7 @@ func Search(workspaceid string, query string, limit int) SearchResult {
 	return results
 }
 
-func GetDocumentPath(workspaceId, docid string) string {
+func GetDocumentPath(workspaceId int, docid string) string {
 	key := EncodeDocumentPathKey(workspaceId, docid)
 	value, _ := db.Get(key)
 	if value == nil {
@@ -56,7 +56,7 @@ func GetDocumentPath(workspaceId, docid string) string {
 	return string(value)
 }
 
-func ScanFiles(workspaceId string, callback func(docid, relPath string) bool) {
+func ScanFiles(workspaceId int, callback func(docid, relPath string) bool) {
 	db.Scan(EncodeDocumentPathKey(workspaceId, ""), func(key, value []byte) bool {
 		_, docid := DecodeDocumentPathKey(string(key))
 		if docid == "" {

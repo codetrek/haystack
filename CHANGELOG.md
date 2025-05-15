@@ -4,6 +4,7 @@
 - Feature: Finding subparts of camelCase and snake_cased words
 - Add exact phrase matching using quotes
 - Add comprehensive test coverage for search functionality
+- Un-hex docids to reduce disk usage by 40%
 
 ## [1.2.6]
 - Optimize document sorting

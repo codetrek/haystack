@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
 	"github.com/ai-microsoft/haystack/shared/types"
 )
 
@@ -18,7 +18,7 @@ type IndexingStatus struct {
 }
 
 type Workspace struct {
-	ID               string         `json:"id"`
+	Id               int            `json:"id"`
 	Path             string         `json:"path"`
 	UseGlobalFilters bool           `json:"use_global_filters"`
 	Filters          *types.Filters `json:"filters,omitempty" optional:"true"`
@@ -101,7 +101,7 @@ func (w *Workspace) Save() error {
 		return err
 	}
 
-	fulltext.SaveWorkspace(w.ID, string(json))
+	internal.SaveWorkspace(w.Id, string(json))
 	return nil
 }
 

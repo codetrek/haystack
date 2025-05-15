@@ -11,6 +11,7 @@ import (
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
 	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
 )
 
 func TestInit(t *testing.T) {
@@ -25,7 +26,7 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir)
+	db, err := storage.Open(tempDir, 0)
 	defer db.Close()
 	err = fulltext.Init(db)
 	if err != nil {
@@ -33,23 +34,22 @@ func TestInit(t *testing.T) {
 	}
 	defer fulltext.CloseAndWait()
 
+	workspacdId := 1
 	// Create test workspace data
 	workspaceData := map[string]interface{}{
-		"id":               "test-workspace",
+		"id":               workspacdId,
 		"path":             "/test/path",
 		"useGlobalFilters": true,
 		"createdAt":        time.Now().Format(time.RFC3339),
 	}
-	workspaceJSON, err := json.Marshal(workspaceData)
+	workspaceJson, err := json.Marshal(workspaceData)
 	if err != nil {
 		t.Fatalf("Failed to marshal workspace data: %v", err)
 	}
-
-	// Save workspace
-	fulltext.SaveWorkspace("test-workspace", string(workspaceJSON))
+	db.Put(internal.EncodeWorkspaceKey(workspacdId), []byte(workspaceJson))
 
 	// Initialize workspace manager
-	err = Init()
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -59,8 +59,8 @@ func TestInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get workspace: %v", err)
 	}
-	if ws.ID != "test-workspace" {
-		t.Errorf("Workspace ID mismatch, got %s, want test-workspace", ws.ID)
+	if ws.Id != workspacdId {
+		t.Errorf("Workspace ID mismatch, got %d, want test-workspace", ws.Id)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestWorkspaceManagement(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir)
+	db, err := storage.Open(tempDir, 0)
 	defer db.Close()
 	err = fulltext.Init(db)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestWorkspaceManagement(t *testing.T) {
 	defer fulltext.CloseAndWait()
 
 	// Initialize workspace manager
-	err = Init()
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -107,23 +107,23 @@ func TestWorkspaceManagement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get workspace by path: %v", err)
 	}
-	if ws2.ID != ws.ID {
-		t.Errorf("Workspace ID mismatch, got %s, want %s", ws2.ID, ws.ID)
+	if ws2.Id != ws.Id {
+		t.Errorf("Workspace ID mismatch, got %d, want %d", ws2.Id, ws.Id)
 	}
 
-	ws3, err := Get(ws.ID)
+	ws3, err := Get(ws.Id)
 	if err != nil {
 		t.Fatalf("Failed to get workspace by ID: %v", err)
 	}
-	if ws3.ID != ws.ID {
-		t.Errorf("Workspace ID mismatch, got %s, want %s", ws3.ID, ws.ID)
+	if ws3.Id != ws.Id {
+		t.Errorf("Workspace ID mismatch, got %d, want %d", ws3.Id, ws.Id)
 	}
 
 	// Test getting all workspaces
 	allWorkspaces := GetAll()
 	found := false
 	for _, w := range allWorkspaces {
-		if w.ID == ws.ID {
+		if w.Id == ws.Id {
 			found = true
 			break
 		}
@@ -146,13 +146,13 @@ func TestWorkspaceManagement(t *testing.T) {
 	}
 
 	// Test deleting a workspace
-	err = Delete(ws.ID)
+	err = Delete(ws.Id)
 	if err != nil {
 		t.Fatalf("Failed to delete workspace: %v", err)
 	}
 
 	// Verify workspace is deleted
-	_, err = Get(ws.ID)
+	_, err = Get(ws.Id)
 	if err == nil {
 		t.Error("Workspace was not deleted")
 	}
@@ -170,7 +170,7 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir)
+	db, err := storage.Open(tempDir, 0)
 	defer db.Close()
 	err = fulltext.Init(db)
 	if err != nil {
@@ -179,7 +179,7 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	defer fulltext.CloseAndWait()
 
 	// Initialize workspace manager
-	err = Init()
+	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -218,13 +218,13 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	var accessWg sync.WaitGroup
 	for _, ws := range allWorkspaces {
 		accessWg.Add(1)
-		go func(id string) {
+		go func(id int) {
 			defer accessWg.Done()
 			_, err := Get(id)
 			if err != nil {
 				t.Errorf("Failed to get workspace: %v", err)
 			}
-		}(ws.ID)
+		}(ws.Id)
 	}
 	accessWg.Wait()
 }

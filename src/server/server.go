@@ -32,7 +32,7 @@ func Run() {
 	wg := &sync.WaitGroup{}
 	running.InitShutdown(wg)
 
-	db, err := storage.Open(conf.Get().Global.DataPath)
+	db, err := storage.Open(conf.Get().Global.DataPath, conf.Get().Server.CacheSize)
 	if err != nil {
 		log.Fatal("[Server] Error initializing storage:", err)
 		running.Shutdown()
@@ -45,7 +45,7 @@ func Run() {
 		return
 	}
 
-	if err := workspace.Init(); err != nil {
+	if err := workspace.Init(db); err != nil {
 		log.Fatal("[Server] Error initializing workspace:", err)
 		running.Shutdown()
 		return

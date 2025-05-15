@@ -21,6 +21,7 @@ const (
 	DefaultMaxResults        = 100000
 	DefaultMaxResultsPerFile = 500
 	DefaultMaxFiles          = 1000
+	DefaultCacheSize         = 16 * 1024 * 1024 // 16MB
 
 	DefaultClientMaxResults        = 500
 	DefaultClientMaxResultsPerFile = 50
@@ -87,6 +88,7 @@ var conf = &Conf{
 	},
 	Server: Server{
 		MaxFileSize:  DefaultMaxFileSize,
+		CacheSize:    DefaultCacheSize,
 		IndexWorkers: DefaultIndexWorkers,
 		Filters: types.Filters{
 			Include: DefaultInclude,
@@ -157,6 +159,10 @@ func Load() error {
 
 	if conf.Server.MaxFileSize <= 0 {
 		conf.Server.MaxFileSize = DefaultMaxFileSize
+	}
+
+	if conf.Server.CacheSize <= 0 {
+		conf.Server.CacheSize = DefaultCacheSize
 	}
 
 	if conf.Global.Port <= 0 || conf.Global.Port > 65535 {

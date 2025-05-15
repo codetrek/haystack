@@ -76,7 +76,7 @@ func Sync(workspace *workspace.Workspace) error {
 func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 	fullPath := filepath.Join(workspace.Path, relPath)
 	docid := GetDocumentId(fullPath)
-	doc, err := fulltext.GetDocument(workspace.ID, docid, false)
+	doc, err := fulltext.GetDocument(workspace.Id, docid, false)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func RemoveFile(workspace *workspace.Workspace, relPath string) error {
 	fullPath := filepath.Join(workspace.Path, relPath)
 
 	docid := GetDocumentId(fullPath)
-	if err := fulltext.DeleteDocument(workspace.ID, docid); err != nil {
+	if err := fulltext.DeleteDocument(workspace.Id, docid); err != nil {
 		return err
 	}
 
@@ -116,7 +116,7 @@ func RemoveFile(workspace *workspace.Workspace, relPath string) error {
 	return nil
 }
 
-func RefreshFilesIfNeeded(workspaceId string, docs map[string]*fulltext.Document) []string {
+func RefreshFilesIfNeeded(workspaceId int, docs map[string]*fulltext.Document) []string {
 	workspace, err := workspace.Get(workspaceId)
 	if err != nil {
 		return []string{}

@@ -49,7 +49,7 @@ func (km *KeywordsMerger) GetWait() <-chan struct{} {
 
 func (km *KeywordsMerger) Start() {
 	km.merging = Merging{
-		NextIter: KeywordPrefix,
+		NextIter: string(KeyTypeKeyword),
 	}
 
 	km.shutdown, km.shutdownFn = context.WithCancel(context.Background())
@@ -71,7 +71,7 @@ func (km *KeywordsMerger) run() {
 		case <-time.After(nextDelay):
 			if km.merging.NextIter == "" {
 				km.merging = Merging{
-					NextIter: KeywordPrefix,
+					NextIter: string(KeyTypeKeyword),
 				}
 
 				log.Printf("[Fulltext] Keywords merger: new scan started.")
@@ -140,7 +140,7 @@ type RecordRow struct {
 	DocCount int
 }
 type InvertedIndex struct {
-	WorkspaceId string
+	WorkspaceId int
 	Keyword     string
 	Rows        []RecordRow
 	DocCount    int
@@ -167,7 +167,7 @@ var rewriteIndex = func(batch pebble.Batch, index *InvertedIndex, maxKeywordInde
 			remainingDocCount -= row.DocCount
 
 			batch.Delete([]byte(row.Key))
-			for _, docid := range DecodeKeywordIndexValue(row.Value) {
+			for _, docid := range DecodeInvertedValueStr(row.Value) {
 				docids[docid] = struct{}{}
 			}
 		}
@@ -191,15 +191,15 @@ func mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
 	}
 
 	batch := NewBatch(db)
-	lastWorkspaceId := ""
+	lastWorkspaceId := -1
 	current := &InvertedIndex{Rows: []RecordRow{}}
 	nextIter := m.NextIter
 	pending := []*InvertedIndex{}
 	for {
 		var next *InvertedIndex
-		db.ScanRange([]byte(nextIter), append([]byte(KeywordPrefix), 0xff), func(key []byte, value []byte) bool {
-			workspaceid, keyword, doccount, _ := DecodeKeywordIndexKey(string(key))
-			if lastWorkspaceId == "" {
+		db.ScanRange([]byte(nextIter), append([]byte{KeyTypeKeyword}, 0xff), func(key []byte, value []byte) bool {
+			workspaceid, keyword, doccount, _ := DecodeInvertedKey(string(key))
+			if lastWorkspaceId == -1 {
 				lastWorkspaceId = workspaceid
 				current.Keyword = keyword
 				current.WorkspaceId = workspaceid
@@ -272,7 +272,7 @@ func mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
 
 		if isTimeout() {
 			// We'll reset NextIter to the next keyword
-			m.NextIter = string(EncodeKeywordIndexKeyPrefix(next.WorkspaceId, next.Keyword))
+			m.NextIter = string(EncodeInvertedKeyPrefix(next.WorkspaceId, next.Keyword))
 			break
 		}
 

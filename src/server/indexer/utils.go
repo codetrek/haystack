@@ -1,6 +1,7 @@
 package indexer
 
 import (
+	"crypto/md5"
 	"path/filepath"
 	"strings"
 
@@ -64,7 +65,8 @@ var NotIndexiableFileExts = map[string]struct{}{
 }
 
 func GetDocumentId(fullPath string) string {
-	return utils.Md5HashString(fullPath)
+	v := md5.Sum([]byte(fullPath))
+	return string(v[:])
 }
 
 func GetContentHash(content []byte) string {

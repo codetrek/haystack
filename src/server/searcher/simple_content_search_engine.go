@@ -34,7 +34,7 @@ func (q *SimpleContentSearchEngine) CollectDocuments() (*fulltext.SearchResult, 
 	rs := []*fulltext.SearchResult{}
 	// Collect the documents for each or clause
 	for _, orClause := range q.OrClauses {
-		r, err := orClause.CollectDocuments(q.Workspace.ID)
+		r, err := orClause.CollectDocuments(q.Workspace.Id)
 		if err != nil {
 			continue
 		}
@@ -61,7 +61,7 @@ func (q *SimpleContentSearchEngine) CollectDocuments() (*fulltext.SearchResult, 
 	return result, nil
 }
 
-func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId string) (*fulltext.SearchResult, error) {
+func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (*fulltext.SearchResult, error) {
 	// Collect the documents for each term
 	rs := []*fulltext.SearchResult{}
 	for _, term := range q.AndTerms {
@@ -93,7 +93,7 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId string
 	return result, nil
 }
 
-func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId string) fulltext.SearchResult {
+func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) fulltext.SearchResult {
 	r := fulltext.Search(workspaceId, q.Prefix, -1)
 	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents", q.String(), len(r.DocIds))
 	return r

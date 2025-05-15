@@ -25,7 +25,7 @@ type Document struct {
 
 // GetDocument returns a document from the database
 // It returns nil if the document does not exist
-func GetDocument(workspaceid string, docid string, includeWords bool) (*Document, error) {
+func GetDocument(workspaceid int, docid string, includeWords bool) (*Document, error) {
 	data, err := db.Get(EncodeDocumentMetaKey(workspaceid, docid))
 	if err != nil {
 		return nil, err
@@ -56,7 +56,7 @@ func GetDocument(workspaceid string, docid string, includeWords bool) (*Document
 
 // GetDocumentWords returns the words of a document
 // It returns an empty array if the document does not exist
-func GetDocumentWords(workspaceid string, docid string) ([]string, error) {
+func GetDocumentWords(workspaceid int, docid string) ([]string, error) {
 	words, err := db.Get(EncodeDocumentWordsKey(workspaceid, docid))
 	if err != nil {
 		return nil, err
@@ -66,12 +66,12 @@ func GetDocumentWords(workspaceid string, docid string) ([]string, error) {
 		return []string{}, nil
 	}
 
-	return DecodeKeywordIndexValue(string(words)), nil
+	return DecodeDocumentWordsValue(string(words)), nil
 }
 
 // SaveNewDocuments saves new documents to the database
 // It also updates the pending writes cache to merge with other documents and flush later
-func SaveNewDocuments(workspaceid string, docs []*Document) error {
+func SaveNewDocuments(workspaceid int, docs []*Document) error {
 	t := &saveNewDocumentsTask{
 		WorkspaceID: workspaceid,
 		Docs:        docs,
@@ -84,7 +84,7 @@ func SaveNewDocuments(workspaceid string, docs []*Document) error {
 
 // UpdateDocuments updates the words of a document
 // It also updates the pending writes cache to merge with other documents and flush later
-func UpdateDocuments(workspaceid string, updatedDocs []*Document) error {
+func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 	t := &updateDocumentsTask{
 		WorkspaceID: workspaceid,
 		Docs:        updatedDocs,
@@ -97,7 +97,7 @@ func UpdateDocuments(workspaceid string, updatedDocs []*Document) error {
 
 // DeleteDocument deletes a document from the database
 // It will delete the document from the keywords index and the document meta
-func DeleteDocument(workspaceid string, docid string) error {
+func DeleteDocument(workspaceid int, docid string) error {
 	t := &deleteDocumentTask{
 		WorkspaceID: workspaceid,
 		DocId:       docid,

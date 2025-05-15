@@ -14,7 +14,7 @@ import (
 func TestWorkspaceMethods(t *testing.T) {
 	// Create a test workspace
 	ws := &Workspace{
-		ID:               "test-workspace",
+		Id:               99,
 		Path:             "/test/path",
 		UseGlobalFilters: true,
 		TotalFiles:       0,
@@ -85,7 +85,7 @@ func TestWorkspaceMethods(t *testing.T) {
 
 func TestWorkspaceTotalFilesConcurrency(t *testing.T) {
 	ws := &Workspace{
-		ID:               "test-workspace",
+		Id:               98,
 		Path:             "/test/path",
 		UseGlobalFilters: true,
 		TotalFiles:       0,
@@ -121,7 +121,7 @@ func TestWorkspaceFilters(t *testing.T) {
 
 	// Create a test workspace
 	ws := &Workspace{
-		ID:               "test-workspace",
+		Id:               97,
 		Path:             "/test/path",
 		UseGlobalFilters: false,
 		Filters: &types.Filters{

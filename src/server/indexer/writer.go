@@ -71,19 +71,19 @@ func (w *Writer) run(wg *sync.WaitGroup) {
 }
 
 func (w *Writer) processDocs(docs []*WriteDoc) {
-	newDocs := make(map[string][]*fulltext.Document)
-	existingDocs := make(map[string][]*fulltext.Document)
+	newDocs := make(map[int][]*fulltext.Document)
+	existingDocs := make(map[int][]*fulltext.Document)
 	for _, doc := range docs {
 		if doc.Workspace.IsDeleted() {
-			delete(newDocs, doc.Workspace.ID)
-			delete(existingDocs, doc.Workspace.ID)
+			delete(newDocs, doc.Workspace.Id)
+			delete(existingDocs, doc.Workspace.Id)
 			continue
 		}
 
 		if doc.CreateNew {
-			newDocs[doc.Workspace.ID] = append(newDocs[doc.Workspace.ID], doc.Document)
+			newDocs[doc.Workspace.Id] = append(newDocs[doc.Workspace.Id], doc.Document)
 		} else {
-			existingDocs[doc.Workspace.ID] = append(existingDocs[doc.Workspace.ID], doc.Document)
+			existingDocs[doc.Workspace.Id] = append(existingDocs[doc.Workspace.Id], doc.Document)
 		}
 	}
 

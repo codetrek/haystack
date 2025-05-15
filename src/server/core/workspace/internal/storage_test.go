@@ -1,4 +1,4 @@
-package fulltext
+package internal
 
 import (
 	"encoding/json"
@@ -22,17 +22,16 @@ func TestWorkspaceStorage(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir)
+	db, _ := storage.Open(tempDir, 0)
 	defer db.Close()
 
 	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
-	defer CloseAndWait()
 
 	// Test saving a workspace
-	workspaceID := "test-workspace"
+	workspaceID := 1
 	workspaceData := map[string]interface{}{
 		"id":        workspaceID,
 		"path":      "/test/path",
@@ -52,11 +51,11 @@ func TestWorkspaceStorage(t *testing.T) {
 	}
 
 	found := false
-	for _, ws := range workspaces {
-		if ws[0] == workspaceID {
+	for k, v := range workspaces {
+		if k == workspaceID {
 			found = true
-			if ws[1] != string(workspaceJSON) {
-				t.Errorf("Workspace data mismatch, got %s, want %s", ws[1], string(workspaceJSON))
+			if v != string(workspaceJSON) {
+				t.Errorf("Workspace data mismatch, got %s, want %s", v, string(workspaceJSON))
 			}
 			break
 		}
@@ -74,8 +73,8 @@ func TestWorkspaceStorage(t *testing.T) {
 		t.Fatalf("Failed to get all workspaces: %v", err)
 	}
 
-	for _, ws := range workspaces {
-		if ws[0] == workspaceID {
+	for k, _ := range workspaces {
+		if k == workspaceID {
 			t.Error("Workspace was not deleted")
 			break
 		}
@@ -94,23 +93,23 @@ func TestGetIncreasedWorkspaceID(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir)
+	db, _ := storage.Open(tempDir, 0)
 	defer db.Close()
+
 	err = Init(db)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
-	defer CloseAndWait()
 
 	// Test getting increased workspace ID
-	ids := make(map[string]bool)
+	ids := make(map[int]bool)
 	for i := 0; i < 10; i++ {
-		id, err := GetIncreasedWorkspaceID()
+		id, err := GetNextId()
 		if err != nil {
 			t.Fatalf("Failed to get increased workspace ID: %v", err)
 		}
 		if ids[id] {
-			t.Errorf("Duplicate workspace ID generated: %s", id)
+			t.Errorf("Duplicate workspace ID generated: %d", id)
 		}
 		ids[id] = true
 	}

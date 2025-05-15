@@ -38,7 +38,7 @@ func handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 			Code:    0,
 			Message: "Workspace already exists",
 			Data: types.Workspace{
-				ID:           ws.ID,
+				Id:           ws.Id,
 				Path:         ws.Path,
 				CreatedAt:    ws.CreatedAt,
 				LastAccessed: ws.LastAccessed,
@@ -64,7 +64,7 @@ func handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Code:    0,
 		Message: "Ok",
 		Data: types.Workspace{
-			ID:           ws.ID,
+			Id:           ws.Id,
 			Path:         ws.Path,
 			CreatedAt:    ws.CreatedAt,
 			LastAccessed: ws.LastAccessed,
@@ -121,7 +121,7 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		Code:    0,
 		Message: "Ok",
 		Data: types.Workspace{
-			ID: ws.ID,
+			Id: ws.Id,
 		},
 	})
 }
@@ -163,7 +163,7 @@ func handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = workspace.Delete(ws.ID)
+	err = workspace.Delete(ws.Id)
 	if err != nil {
 		log.Printf("[Server] Delete workspace `%s`: failed to delete: %v", request.Workspace, err)
 		json.NewEncoder(w).Encode(types.CommonResponse{
@@ -178,7 +178,7 @@ func handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		Code:    0,
 		Message: "Deleted",
 		Data: types.Workspace{
-			ID:           ws.ID,
+			Id:           ws.Id,
 			Path:         ws.Path,
 			TotalFiles:   ws.GetTotalFiles(),
 			CreatedAt:    ws.CreatedAt,
@@ -238,7 +238,7 @@ func handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 		Code:    0,
 		Message: "Ok",
 		Data: &types.Workspace{
-			ID:               ws.ID,
+			Id:               ws.Id,
 			Path:             ws.Path,
 			TotalFiles:       totalFiles,
 			UseGlobalFilters: ws.UseGlobalFilters,

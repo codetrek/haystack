@@ -125,7 +125,7 @@ func handleWorkspaceGet(workspacePath string) {
 }
 
 func printWorkspace(prefix string, ws types.Workspace) {
-	fmt.Printf(`%s %s:
+	fmt.Printf(`%s %d:
   Path: %s
   Created at: %s
   Last accessed: %s
@@ -135,7 +135,7 @@ func printWorkspace(prefix string, ws types.Workspace) {
   Filters: %v
   Indexing: %t
 `,
-		prefix, ws.ID, ws.Path, ws.CreatedAt, ws.LastAccessed, ws.LastFullSync,
+		prefix, ws.Id, ws.Path, ws.CreatedAt, ws.LastAccessed, ws.LastFullSync,
 		ws.TotalFiles, ws.UseGlobalFilters, ws.Filters, ws.Indexing)
 }
 
