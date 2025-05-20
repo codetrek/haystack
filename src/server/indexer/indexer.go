@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/shared/running"
 	"github.com/ai-microsoft/haystack/shared/types"
@@ -76,7 +76,7 @@ func Sync(workspace *workspace.Workspace) error {
 func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 	fullPath := filepath.Join(workspace.Path, relPath)
 	docid := GetDocumentId(fullPath)
-	doc, err := fulltext.GetDocument(workspace.Id, docid, false)
+	doc, err := documents.GetDocument(workspace.Id, docid, false)
 	if err != nil {
 		return err
 	}
@@ -107,7 +107,7 @@ func RemoveFile(workspace *workspace.Workspace, relPath string) error {
 	fullPath := filepath.Join(workspace.Path, relPath)
 
 	docid := GetDocumentId(fullPath)
-	if err := fulltext.DeleteDocument(workspace.Id, docid); err != nil {
+	if err := documents.DeleteDocument(workspace.Id, docid); err != nil {
 		return err
 	}
 
@@ -116,7 +116,7 @@ func RemoveFile(workspace *workspace.Workspace, relPath string) error {
 	return nil
 }
 
-func RefreshFilesIfNeeded(workspaceId int, docs map[string]*fulltext.Document) []string {
+func RefreshFilesIfNeeded(workspaceId int, docs map[string]*documents.Document) []string {
 	workspace, err := workspace.Get(workspaceId)
 	if err != nil {
 		return []string{}
@@ -138,7 +138,7 @@ func RefreshFilesIfNeeded(workspaceId int, docs map[string]*fulltext.Document) [
 	return removedDocs
 }
 
-func RefreshFileIfNeeded(workspace *workspace.Workspace, doc *fulltext.Document) (removed bool, err error) {
+func RefreshFileIfNeeded(workspace *workspace.Workspace, doc *documents.Document) (removed bool, err error) {
 	fullPath := filepath.Join(workspace.Path, doc.RelPath)
 
 	stat, err := os.Stat(fullPath)

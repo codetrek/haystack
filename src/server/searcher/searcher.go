@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/shared/running"
@@ -45,7 +45,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 
 	docs := map[string]string{}
 	if len(docIDs) > 10000 {
-		fulltext.ScanFiles(workspaceId, func(docid, relPath string) bool {
+		documents.ScanFiles(workspaceId, func(docid, relPath string) bool {
 			if _, ok := docIDs[docid]; ok {
 				docs[relPath] = docid
 			}
@@ -53,7 +53,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 		})
 	} else {
 		for docid := range docIDs {
-			relPath := fulltext.GetDocumentPath(workspaceId, docid)
+			relPath := documents.GetDocumentPath(workspaceId, docid)
 			if relPath != "" {
 				docs[relPath] = docid
 			}
@@ -224,7 +224,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	}
 
 	// Match the content of the file line by line
-	var matchFileContent = func(doc *fulltext.Document) (types.SearchContentResult, error) {
+	var matchFileContent = func(doc *documents.Document) (types.SearchContentResult, error) {
 		fullPath := filepath.Join(workspace.Path, doc.RelPath)
 		fileMatch := types.SearchContentResult{
 			File:  filepath.Clean(doc.RelPath),
@@ -322,7 +322,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			break
 		}
 
-		doc, err := fulltext.GetDocument(workspace.Id, docid, false)
+		doc, err := documents.GetDocument(workspace.Id, docid, false)
 		if err != nil || doc == nil {
 			continue
 		}
@@ -473,7 +473,7 @@ func SearchFiles(workspace *workspace.Workspace, req *types.SearchFilesRequest) 
 
 	pattern := strings.ReplaceAll(req.Query, " ", "")
 	matches := []MatchResult{}
-	fulltext.ScanFiles(workspace.Id, func(_, relPath string) bool {
+	documents.ScanFiles(workspace.Id, func(_, relPath string) bool {
 		if isTimeout() {
 			return false
 		}

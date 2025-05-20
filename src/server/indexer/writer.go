@@ -5,13 +5,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
 type WriteDoc struct {
 	Workspace *workspace.Workspace
-	Document  *fulltext.Document
+	Document  *documents.Document
 	CreateNew bool
 }
 
@@ -71,8 +71,8 @@ func (w *Writer) run(wg *sync.WaitGroup) {
 }
 
 func (w *Writer) processDocs(docs []*WriteDoc) {
-	newDocs := make(map[int][]*fulltext.Document)
-	existingDocs := make(map[int][]*fulltext.Document)
+	newDocs := make(map[int][]*documents.Document)
+	existingDocs := make(map[int][]*documents.Document)
 	for _, doc := range docs {
 		if doc.Workspace.IsDeleted() {
 			delete(newDocs, doc.Workspace.Id)
@@ -88,11 +88,11 @@ func (w *Writer) processDocs(docs []*WriteDoc) {
 	}
 
 	for workspaceID, docs := range newDocs {
-		fulltext.SaveNewDocuments(workspaceID, docs)
+		documents.SaveNewDocuments(workspaceID, docs)
 	}
 
 	for workspaceID, docs := range existingDocs {
-		fulltext.UpdateDocuments(workspaceID, docs)
+		documents.UpdateDocuments(workspaceID, docs)
 	}
 }
 
@@ -111,7 +111,7 @@ func (w *Writer) getPendingWrites(limit int) []*WriteDoc {
 	}
 }
 
-func (w *Writer) Add(workspace *workspace.Workspace, doc *fulltext.Document, createNew bool) {
+func (w *Writer) Add(workspace *workspace.Workspace, doc *documents.Document, createNew bool) {
 	if workspace.IsDeleted() {
 		return
 	}

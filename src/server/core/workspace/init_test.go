@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
@@ -35,11 +35,11 @@ func TestInit(t *testing.T) {
 	mpsc.Start()
 	defer mpsc.Stop()
 
-	err = fulltext.Init(db, mpsc)
+	err = documents.Init(db, mpsc)
 	if err != nil {
 		t.Fatalf("Storage Init failed: %v", err)
 	}
-	defer fulltext.CloseAndWait()
+	defer documents.CloseAndWait()
 
 	workspacdId := 1
 	// Create test workspace data
@@ -93,8 +93,8 @@ func TestWorkspaceManagement(t *testing.T) {
 	invertedindex.Init(db, mpsc)
 	defer invertedindex.CloseAndWait()
 
-	fulltext.Init(db, mpsc)
-	defer fulltext.CloseAndWait()
+	documents.Init(db, mpsc)
+	defer documents.CloseAndWait()
 
 	// Initialize workspace manager
 	err = Init(db)
@@ -192,8 +192,8 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	invertedindex.Init(db, mpsc)
 	defer invertedindex.CloseAndWait()
 
-	fulltext.Init(db, mpsc)
-	defer fulltext.CloseAndWait()
+	documents.Init(db, mpsc)
+	defer documents.CloseAndWait()
 
 	// Initialize workspace manager
 	err = Init(db)

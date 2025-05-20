@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
@@ -95,7 +95,7 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (
 }
 
 func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invertedindex.SearchResult {
-	ft, err := fulltext.GetFT(workspaceId)
+	ft, err := documents.GetWorkspace(workspaceId)
 	if err != nil {
 		log.Printf("[Searcher] CollectDocuments: failed to get fulltext index: %v", err)
 		return invertedindex.SearchResult{}

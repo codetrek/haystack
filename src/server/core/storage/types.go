@@ -5,11 +5,11 @@ const (
 	KeyTypeWorkspaceIncrId = byte(1) // "wi:"
 	KeyTypeWorkspace       = byte(2) // "ws:"
 
-	// Fulltext key types
-	KeyTypeFT         = byte(10)
-	KeyTypeFTDocWords = byte(11) // "dw:"
-	KeyTypeFTDocMeta  = byte(12) // "dm:"
-	KeyTypeFTDocPath  = byte(13) // "dp:"
+	// Document key types
+	KeyTypeDocWorkspace = byte(10)
+	KeyTypeDocWords     = byte(11) // "dw:"
+	KeyTypeDocMeta      = byte(12) // "dm:"
+	KeyTypeDocPath      = byte(13) // "dp:"
 
 	// Inverted index key types
 	KeyTypeInvertedRow         = byte(20) // "kw:"

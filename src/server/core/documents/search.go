@@ -1,4 +1,4 @@
-package fulltext
+package documents
 
 func GetDocumentPath(workspaceId int, docid string) string {
 	key := EncodeDocumentPathKey(workspaceId, docid)

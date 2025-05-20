@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
@@ -99,7 +99,7 @@ func (p *Parser) Add(workspace *workspace.Workspace, relPath string) {
 }
 
 // parse reads and processes a file, returning a Document
-func parse(file ParseFile) (*fulltext.Document, bool, error) {
+func parse(file ParseFile) (*documents.Document, bool, error) {
 	fullPath := filepath.Join(file.Workspace.Path, file.RelFilePath)
 	id := GetDocumentId(fullPath)
 
@@ -113,7 +113,7 @@ func parse(file ParseFile) (*fulltext.Document, bool, error) {
 		log.Printf("[Indexer] File `%s` (%.2f MiB) is too large to index, skipping", file.RelFilePath, float64(info.Size())/1024/1024)
 	}
 
-	existing, _ := fulltext.GetDocument(file.Workspace.Id, id, false)
+	existing, _ := documents.GetDocument(file.Workspace.Id, id, false)
 	// If the document exists and the modified time is the same, return nil
 	if existing != nil &&
 		existing.ModifiedTime == info.ModTime().UnixNano() {
@@ -145,7 +145,7 @@ func parse(file ParseFile) (*fulltext.Document, bool, error) {
 		words = parseString(string(content))
 	}
 
-	return &fulltext.Document{
+	return &documents.Document{
 		ID:           id,
 		RelPath:      file.RelFilePath,
 		Size:         info.Size(),

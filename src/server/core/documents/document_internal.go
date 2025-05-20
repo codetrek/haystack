@@ -1,4 +1,4 @@
-package fulltext
+package documents
 
 import (
 	"time"

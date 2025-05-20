@@ -1,4 +1,4 @@
-package fulltext
+package documents
 
 import (
 	"github.com/ai-microsoft/haystack/server/core/pebble"

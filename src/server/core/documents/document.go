@@ -1,4 +1,4 @@
-package fulltext
+package documents
 
 import (
 	"fmt"
@@ -81,13 +81,18 @@ func GetDocumentWords(workspaceid int, docid string) ([]string, error) {
 func SaveNewDocuments(workspaceid int, docs []*Document) error {
 	return mpsc.RunFunc(func() error {
 		if db.IsClosed() {
-			log.Println("[Fulltext] Database is closed, skip saving new documents")
+			log.Println("[Documents] Database is closed, skip saving new documents")
 			return nil
 		}
 
-		ft, err := GetFT(workspaceid)
+		if isWorkspaceDeleted(workspaceid) {
+			log.Println("[Documents] Error: workspace is deleted, skip updating documents")
+			return fmt.Errorf("workspace is deleted")
+		}
+
+		ft, err := GetWorkspace(workspaceid)
 		if err != nil {
-			log.Println("[Fulltext] Error: failed to get fulltext:", err)
+			log.Println("[Documents] Error: failed to get workspace:", err)
 			return err
 		}
 
@@ -98,7 +103,7 @@ func SaveNewDocuments(workspaceid int, docs []*Document) error {
 		}
 		err = batch.Commit()
 		if err != nil {
-			log.Println("[Fulltext] Error: failed to save new documents:", err)
+			log.Println("[Documents] Error: failed to save new documents:", err)
 		}
 
 		return err
@@ -110,13 +115,18 @@ func SaveNewDocuments(workspaceid int, docs []*Document) error {
 func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 	return mpsc.RunFunc(func() error {
 		if db.IsClosed() {
-			log.Println("[Fulltext] Database is closed, skip updating documents")
+			log.Println("[Documents] Database is closed, skip updating documents")
 			return fmt.Errorf("database is closed")
 		}
 
-		ft, err := GetFT(workspaceid)
+		if isWorkspaceDeleted(workspaceid) {
+			log.Println("[Documents] Error: workspace is deleted, skip updating documents")
+			return fmt.Errorf("workspace is deleted")
+		}
+
+		ft, err := GetWorkspace(workspaceid)
 		if err != nil {
-			log.Println("[Fulltext] Error: failed to get fulltext:", err)
+			log.Println("[Documents] Error: failed to get workspace:", err)
 			return err
 		}
 
@@ -135,7 +145,7 @@ func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 		}
 		err = batch.Commit()
 		if err != nil {
-			log.Println("[Fulltext] Error: failed to update documents:", err)
+			log.Println("[Documents] Error: failed to update documents:", err)
 		}
 
 		return err
@@ -147,19 +157,19 @@ func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 func DeleteDocument(workspaceId int, docId string) error {
 	return mpsc.RunFunc(func() error {
 		if db.IsClosed() {
-			log.Println("[Fulltext] Database is closed, skip deleting document")
+			log.Println("[Documents] Database is closed, skip deleting document")
 			return nil
 		}
 
-		ft, err := GetFT(workspaceId)
+		ft, err := GetWorkspace(workspaceId)
 		if err != nil {
-			log.Println("[Fulltext] Error: failed to get fulltext:", err)
+			log.Println("[Documents] Error: failed to get workspace:", err)
 			return err
 		}
 
 		doc, err := GetDocument(workspaceId, docId, true)
 		if err != nil {
-			log.Println("[Fulltext] Error: failed to get document:", err)
+			log.Println("[Documents] Error: failed to get document:", err)
 			return err
 		}
 
@@ -167,7 +177,7 @@ func DeleteDocument(workspaceId int, docId string) error {
 			return fmt.Errorf("document not found")
 		}
 
-		defer log.Printf("[Fulltext] Document `%s` deleted from workspace `%d`", doc.RelPath, workspaceId)
+		defer log.Printf("[Documents] Document `%s` deleted from workspace `%d`", doc.RelPath, workspaceId)
 
 		invertedindex.Update(ft.InvertedId, docId, []string{}, doc.Words)
 
@@ -178,7 +188,7 @@ func DeleteDocument(workspaceId int, docId string) error {
 		batch.Delete(EncodeDocumentPathKey(workspaceId, docId))
 		err = batch.Commit()
 		if err != nil {
-			log.Println("[Fulltext] Failed to delete document:", err)
+			log.Println("[Documents] Failed to delete document:", err)
 		}
 
 		return err

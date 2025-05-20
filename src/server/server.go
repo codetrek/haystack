@@ -7,7 +7,7 @@ import (
 	"sync"
 
 	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
@@ -50,7 +50,7 @@ func Run() {
 		return
 	}
 
-	if err := fulltext.Init(db, mpsc); err != nil {
+	if err := documents.Init(db, mpsc); err != nil {
 		log.Fatal("[Server] Error initializing storage:", err)
 		running.Shutdown()
 		return
@@ -72,7 +72,7 @@ func Run() {
 	server.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", conf.Get().Global.Port))
 
 	wg.Wait()
-	fulltext.CloseAndWait()
+	documents.CloseAndWait()
 	invertedindex.CloseAndWait()
 	mpsc.Stop()
 

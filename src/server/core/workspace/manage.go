@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
 	"github.com/ai-microsoft/haystack/shared/types"
 	"github.com/ai-microsoft/haystack/utils"
@@ -144,7 +144,7 @@ func Create(workspacePath string) (*Workspace, error) {
 
 	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
 
-	fulltext.Create(workspace.Id, workspacePath)
+	documents.Create(workspace.Id, workspacePath)
 	return workspace, nil
 }
 
@@ -162,7 +162,7 @@ func Delete(workspaceId int) error {
 	delete(workspacePaths, workspace.Path)
 
 	internal.Delete(workspaceId)
-	fulltext.Delete(workspaceId)
+	documents.Delete(workspaceId)
 
 	return nil
 }

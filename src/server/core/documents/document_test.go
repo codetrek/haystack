@@ -1,4 +1,4 @@
-package fulltext_test
+package documents_test
 
 import (
 	"testing"

@@ -75,7 +75,7 @@ func (m *Mpsc) SetQueueSize(size int) {
 func (m *Mpsc) Start() {
 	// Start the queue
 	if m.q != nil {
-		log.Printf("[%s] Write queue already started", m.name)
+		log.Printf("[%s] Queue already started", m.name)
 		return
 	}
 	m.q = make(chan Task, 100)
@@ -85,7 +85,6 @@ func (m *Mpsc) Start() {
 		for {
 			task, ok := <-m.q
 			if !ok {
-				log.Printf("[%s] Write queue closed", m.name)
 				break
 			}
 			task.Run()
@@ -97,7 +96,7 @@ func (m *Mpsc) Start() {
 
 func (m *Mpsc) Stop() {
 	if m.q == nil {
-		log.Printf("[%s] Write queue already stopped", m.name)
+		log.Printf("[%s] Queue already stopped", m.name)
 		return
 	}
 
@@ -106,13 +105,13 @@ func (m *Mpsc) Stop() {
 	m.q = nil
 
 	<-m.done
-	log.Printf("[%s] Write queue stopped", m.name)
+	log.Printf("[%s] Queue stopped", m.name)
 }
 
 func (m *Mpsc) Add(task Task) {
 	// Add a task to the queue
 	if m.q == nil {
-		log.Printf("[%s] Write queue not started", m.name)
+		log.Printf("[%s] Queue not started", m.name)
 		return
 	}
 	m.q <- task
@@ -131,7 +130,7 @@ func (wq *Mpsc) RunTask(task Task) error {
 func (m *Mpsc) AddFunc(fn func() error) {
 	// Add a function to the queue
 	if m.q == nil {
-		log.Printf("[%s] Write queue not started", m.name)
+		log.Printf("[%s] Queue not started", m.name)
 		return
 	}
 	m.q <- &FuncTask{fn: fn}
@@ -140,7 +139,7 @@ func (m *Mpsc) AddFunc(fn func() error) {
 func (m *Mpsc) RunFunc(fn func() error) error {
 	// Add a function to the queue and wait for it to finish
 	if m.q == nil {
-		log.Printf("[%s] Write queue not started", m.name)
+		log.Printf("[%s] Queue not started", m.name)
 		return nil
 	}
 
@@ -156,7 +155,7 @@ func (m *Mpsc) RunFunc(fn func() error) error {
 func (m *Mpsc) AddFuncWithArgs(fn func(args ...interface{}) error, args ...interface{}) {
 	// Add a function with arguments to the queue
 	if m.q == nil {
-		log.Printf("[%s] Write queue not started", m.name)
+		log.Printf("[%s] Queue not started", m.name)
 		return
 	}
 	m.q <- &FuncTaskWithArgs{fn: fn, args: args}
@@ -165,7 +164,7 @@ func (m *Mpsc) AddFuncWithArgs(fn func(args ...interface{}) error, args ...inter
 func (m *Mpsc) RunFuncWithArgs(fn func(args ...interface{}) error, args ...interface{}) error {
 	// Add a function with arguments to the queue and wait for it to finish
 	if m.q == nil {
-		log.Printf("[%s] Write queue not started", m.name)
+		log.Printf("[%s] Queue not started", m.name)
 		return nil
 	}
 

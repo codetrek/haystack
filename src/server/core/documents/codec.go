@@ -1,4 +1,4 @@
-package fulltext
+package documents
 
 import (
 	"encoding/json"
@@ -11,10 +11,10 @@ import (
 )
 
 const (
-	KeyTypeDocPath  = storage.KeyTypeFTDocPath
-	KeyTypeDocMeta  = storage.KeyTypeFTDocMeta
-	KeyTypeDocWords = storage.KeyTypeFTDocWords
-	KeyTypeFTMeta   = storage.KeyTypeFT
+	KeyTypeDocPath      = storage.KeyTypeDocPath
+	KeyTypeDocMeta      = storage.KeyTypeDocMeta
+	KeyTypeDocWords     = storage.KeyTypeDocWords
+	KeyTypeDocWorkspace = storage.KeyTypeDocWorkspace
 
 	InvalidWorkspaceId = -1
 )
@@ -113,12 +113,12 @@ func DecodeDocumentWordsValue(data string) []string {
 	return strings.Split(data, "|")
 }
 
-func EncodeFTMetaKey(workspaceid int) []byte {
-	return []byte(fmt.Sprintf("%c%d", KeyTypeFTMeta, workspaceid))
+func EncodeMetaKey(workspaceid int) []byte {
+	return []byte(fmt.Sprintf("%c%d", KeyTypeDocWorkspace, workspaceid))
 }
 
 func DecodeFTMetaKey(key string) int {
-	if !storage.IsKeyType(key, KeyTypeFTMeta) {
+	if !storage.IsKeyType(key, KeyTypeDocWorkspace) {
 		return InvalidWorkspaceId
 	}
 
@@ -132,16 +132,16 @@ func DecodeFTMetaKey(key string) int {
 	return workspaceid
 }
 
-func EncodeFTMetaValue(info Fulltext) []byte {
+func EncodeFTMetaValue(info Workspace) []byte {
 	content, _ := json.Marshal(info)
 	return content
 }
 
-func DecodeFTMetaValue(data []byte) (Fulltext, error) {
-	ft := Fulltext{}
+func DecodeFTMetaValue(data []byte) (*Workspace, error) {
+	ft := Workspace{}
 	if err := json.Unmarshal(data, &ft); err != nil {
-		return Fulltext{}, err
+		return &Workspace{}, err
 	}
 
-	return ft, nil
+	return &ft, nil
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## [next]
+- Make inverted index engine as a separated components
+- Make "debug/", "release/" as default exclude pattern while scaning
+
 ## [1.3.0]
 - Feature: Finding subparts of camelCase and snake_cased words
 - Add exact phrase matching using quotes
