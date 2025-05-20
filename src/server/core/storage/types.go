@@ -2,17 +2,17 @@ package storage
 
 const (
 	// Workspace key types
-	KeyTypeWorkspaceIncrId = byte(1) // "wi:"
-	KeyTypeWorkspace       = byte(2) // "ws:"
+	KeyTypeWorkspaceIncrId = byte(1)
+	KeyTypeWorkspace       = byte(2)
 
 	// Document key types
 	KeyTypeDocWorkspace = byte(10)
-	KeyTypeDocWords     = byte(11) // "dw:"
-	KeyTypeDocMeta      = byte(12) // "dm:"
-	KeyTypeDocPath      = byte(13) // "dp:"
+	KeyTypeDocWords     = byte(11)
+	KeyTypeDocMeta      = byte(12)
+	KeyTypeDocPath      = byte(13)
 
 	// Inverted index key types
-	KeyTypeInvertedRow         = byte(20) // "kw:"
+	KeyTypeInvertedRow         = byte(20)
 	KeyTypeInvertedTable       = byte(21)
 	KeyTypeInvertedNextTableId = byte(22)
 )

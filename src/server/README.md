@@ -4,52 +4,51 @@ This directory contains the server-side implementation of the Local Code Search 
 
 ## Directory Structure
 
-- **core/**: Core server functionality and business logic
-  - Handles document processing and management
-  - Manages server state and configurations
-  - Provides core services to other components
+- **`core/`**: Core server functionality and business logic.
+  - Contains sub-modules for document handling (`documents`), inverted indexes (`invertedindex`), code parsing (`parser`), database interaction (`pebble`), storage abstractions (`storage`), and workspace management (`workspace`).
+  - Manages server state and configurations.
+  - Provides core services to other components.
 
-- **indexer/**: Search index creation and maintenance
-  - Implements indexing strategies
-  - Manages index storage and updates
-  - Handles index optimization
+- **`indexer/`**: Search index creation and maintenance.
+  - Implements indexing strategies (e.g., `indexer.go`, `scanner.go`, `writer.go`).
+  - Manages index storage and updates.
+  - Handles index optimization.
 
-- **searcher/**: Search query processing
-  - Processes search requests
-  - Implements search algorithms
-  - Manages search results
+- **`searcher/`**: Search query processing.
+  - Processes search requests (e.g., `searcher.go`, `query_parser.go`).
+  - Implements search algorithms.
+  - Manages search results.
 
-- **server/**: Server implementation details
-  - HTTP/gRPC server setup
-  - Request handling
-  - API endpoints
+- **`server/`**: HTTP/gRPC server implementation and API endpoint handling.
+  - Contains specific handlers for different functionalities like document operations (`document.go`), Model Context Protocol (`mcp.go`), search requests (`search.go`), server control (`server_cntl.go`), and workspace operations (`workspace.go`).
+  - The main request handling logic resides in `server.go` within this directory.
+
+- **`log.go`**: Top-level file for server logging implementation.
+- **`server.go`**: Top-level file serving as the main server entry point, handling initialization and orchestration.
 
 ## Key Components
 
-1. **Core Server (`server.go`)**
-   - Main server entry point
-   - Server initialization and configuration
-   - Component orchestration
+1. **Main Server (`src/server/server.go`)**
+   - Main server entry point.
+   - Handles server initialization, configuration, and component orchestration.
 
-2. **Logging (`log.go`)**
-   - Server logging implementation
-   - Log level management
-   - Log formatting and output
+2. **Logging (`src/server/log.go`)**
+   - Implements server-wide logging.
+   - Manages log levels, formatting, and output.
 
-3. **Core Module**
-   - Document processing pipeline
-   - Data management
-   - Core business logic
+3. **Core Module (`src/server/core/`)**
+   - Encapsulates core business logic including document processing, storage management (utilizing PebbleDB via `pebble/`), parsing, and workspace data.
 
-4. **Indexer Module**
-   - Index creation and updates
-   - Index optimization
-   - Index storage management
+4. **Indexer Module (`src/server/indexer/`)**
+   - Responsible for creating, updating, and optimizing search indexes.
+   - Includes components for scanning repositories (`scanner.go`) and writing index data (`writer.go`).
 
-5. **Searcher Module**
-   - Query processing
-   - Search algorithm implementation
-   - Result ranking and filtering
+5. **Searcher Module (`src/server/searcher/`)**
+   - Handles incoming search queries, parsing them (`query_parser.go`), and executing search operations using defined algorithms.
+
+6. **API and Request Handling (`src/server/server/`)**
+   - Manages the specifics of API endpoints and request/response cycles.
+   - Implements handlers for search, document management, MCP, and other server interactions.
 
 ## Development Guidelines
 
@@ -76,6 +75,7 @@ This directory contains the server-side implementation of the Local Code Search 
 ## Configuration
 
 Server configuration is handled through:
+
 - Environment variables
 - Configuration files
 - Command-line arguments
@@ -83,6 +83,7 @@ Server configuration is handled through:
 ## API Documentation
 
 The server exposes the following main APIs:
+
 - Search API
 - Index management API
 - System status API
