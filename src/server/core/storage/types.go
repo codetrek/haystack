@@ -5,13 +5,16 @@ const (
 	KeyTypeWorkspaceIncrId = byte(1) // "wi:"
 	KeyTypeWorkspace       = byte(2) // "ws:"
 
-	// Document key types
-	KeyTypeDocWords = byte(10) // "dw:"
-	KeyTypeDocMeta  = byte(11) // "dm:"
-	KeyTypeDocPath  = byte(12) // "dp:"
+	// Fulltext key types
+	KeyTypeFT         = byte(10)
+	KeyTypeFTDocWords = byte(11) // "dw:"
+	KeyTypeFTDocMeta  = byte(12) // "dm:"
+	KeyTypeFTDocPath  = byte(13) // "dp:"
 
 	// Inverted index key types
-	KeyTypeKeyword = byte(20) // "kw:"
+	KeyTypeInvertedRow         = byte(20) // "kw:"
+	KeyTypeInvertedTable       = byte(21)
+	KeyTypeInvertedNextTableId = byte(22)
 )
 
 func IsKeyType(key string, keyType byte) bool {

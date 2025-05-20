@@ -1,4 +1,4 @@
-package fulltext
+package invertedindex
 
 import (
 	"context"
@@ -32,7 +32,19 @@ func (m *Merging) MergedRowCount() int {
 
 type mergeKeywordTask struct {
 	merging Merging
-	done    chan Merging
+}
+
+func (m *mergeKeywordTask) Run() error {
+	if len(pendingWrites) != 0 {
+		// There are pending writes, wo we need to wait
+		// for them to be flushed before merging
+		// the keywords index
+		m.merging.WaitingForFlushCache = true
+		return nil
+	}
+	m.merging.WaitingForFlushCache = false
+	m.merging = mergeKeywordsIndex(m.merging, MaxInvertedIndexSize)
+	return nil
 }
 
 func (km *KeywordsMerger) Shutdown() {
@@ -49,7 +61,7 @@ func (km *KeywordsMerger) GetWait() <-chan struct{} {
 
 func (km *KeywordsMerger) Start() {
 	km.merging = Merging{
-		NextIter: string(KeyTypeKeyword),
+		NextIter: string(KeyTypeRow),
 	}
 
 	km.shutdown, km.shutdownFn = context.WithCancel(context.Background())
@@ -58,37 +70,37 @@ func (km *KeywordsMerger) Start() {
 }
 
 func (km *KeywordsMerger) run() {
-	log.Printf("[Fulltext] Keywords merger: started")
+	log.Printf("[Inverted] Keywords merger: started")
 
 	nextDelay := 300 * time.Second
 
 	for {
 		select {
 		case <-km.shutdown.Done():
-			log.Printf("[Fulltext] Keywords merger: shutdown")
+			log.Printf("[Inverted] Keywords merger: shutdown")
 			close(km.mergerDone)
 			return
 		case <-time.After(nextDelay):
 			if km.merging.NextIter == "" {
 				km.merging = Merging{
-					NextIter: string(KeyTypeKeyword),
+					NextIter: string(KeyTypeRow),
 				}
 
-				log.Printf("[Fulltext] Keywords merger: new scan started.")
+				log.Printf("[Inverted] Keywords merger: new scan started.")
 			}
 		}
 
 		m := &mergeKeywordTask{
 			merging: km.merging,
-			done:    make(chan Merging),
 		}
 
 		before := km.merging
-		writeQueue <- m
-		km.merging = m.Wait()
+		mpscQueue.RunTask(m)
+		km.merging = m.merging
+
 		if !km.merging.WaitingForFlushCache && before.MergedRowCount() != km.merging.MergedRowCount() {
 			// we've reached the end of the database
-			log.Printf("[Fulltext] Keywords merger: merged %s keywords, row count reduced: %s\n",
+			log.Printf("[Inverted] Keywords merger: merged %s keywords, row count reduced: %s\n",
 				humanize.Comma(int64(km.merging.TotalKeywords)),
 				humanize.Comma(int64(km.merging.MergedRowCount()-before.MergedRowCount())))
 		}
@@ -103,11 +115,11 @@ func (km *KeywordsMerger) run() {
 			if float32(m.TotalRowsBefore-m.TotalRowsAfter)/float32(m.TotalRowsBefore) > 0.25 {
 				// we've merged a lot of keywords, so we need to
 				// compact the database to free up space
-				log.Printf("[Fulltext] Keywords merger: scheduling compact")
+				log.Printf("[Inverted] Keywords merger: scheduling compact")
 				db.ScheduleCompact()
 			}
 
-			log.Printf("[Fulltext] Keywords merge done, total keywords: %s", humanize.Comma(int64(km.merging.TotalKeywords)))
+			log.Printf("[Inverted] Keywords merge done, total keywords: %s", humanize.Comma(int64(km.merging.TotalKeywords)))
 			// we've reached the end of the database
 			// reset the nextIter to the beginning
 			// and set a longer delay time
@@ -116,34 +128,16 @@ func (km *KeywordsMerger) run() {
 	}
 }
 
-func (m *mergeKeywordTask) Run() {
-	if len(pendingWrites) != 0 {
-		// There are pending writes, wo we need to wait
-		// for them to be flushed before merging
-		// the keywords index
-		m.merging.WaitingForFlushCache = true
-		m.done <- m.merging
-		return
-	}
-	m.merging.WaitingForFlushCache = false
-	m.done <- mergeKeywordsIndex(m.merging, MaxKeywordIndexSize)
-}
-
-func (m *mergeKeywordTask) Wait() Merging {
-	defer close(m.done)
-	return <-m.done
-}
-
 type RecordRow struct {
 	Key      string
 	Value    string
 	DocCount int
 }
 type InvertedIndex struct {
-	WorkspaceId int
-	Keyword     string
-	Rows        []RecordRow
-	DocCount    int
+	TableId  int
+	Keyword  string
+	Rows     []RecordRow
+	DocCount int
 }
 
 var rewriteIndex = func(batch pebble.Batch, index *InvertedIndex, maxKeywordIndexSize int) int {
@@ -167,7 +161,7 @@ var rewriteIndex = func(batch pebble.Batch, index *InvertedIndex, maxKeywordInde
 			remainingDocCount -= row.DocCount
 
 			batch.Delete([]byte(row.Key))
-			for _, docid := range DecodeInvertedValueStr(row.Value) {
+			for _, docid := range decodeInvertedValueStr(row.Value) {
 				docids[docid] = struct{}{}
 			}
 		}
@@ -177,7 +171,7 @@ var rewriteIndex = func(batch pebble.Batch, index *InvertedIndex, maxKeywordInde
 			ids = append(ids, id)
 		}
 
-		writeKeywordIndex(batch, index.WorkspaceId, index.Keyword, ids, nil)
+		writeInvertedIndex(batch, index.TableId, index.Keyword, ids, nil)
 		mergedCount++
 	}
 
@@ -191,22 +185,22 @@ func mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
 	}
 
 	batch := NewBatch(db)
-	lastWorkspaceId := -1
+	lastTableId := -1
 	current := &InvertedIndex{Rows: []RecordRow{}}
 	nextIter := m.NextIter
 	pending := []*InvertedIndex{}
 	for {
 		var next *InvertedIndex
-		db.ScanRange([]byte(nextIter), append([]byte{KeyTypeKeyword}, 0xff), func(key []byte, value []byte) bool {
-			workspaceid, keyword, doccount, _ := DecodeInvertedKey(string(key))
-			if lastWorkspaceId == -1 {
-				lastWorkspaceId = workspaceid
+		db.ScanRange([]byte(nextIter), append([]byte{KeyTypeRow}, 0xff), func(key []byte, value []byte) bool {
+			tableId, keyword, doccount, _ := decodeInvertedKey(string(key))
+			if lastTableId == -1 {
+				lastTableId = tableId
 				current.Keyword = keyword
-				current.WorkspaceId = workspaceid
+				current.TableId = tableId
 			}
 
-			if lastWorkspaceId != workspaceid {
-				lastWorkspaceId = workspaceid
+			if lastTableId != tableId {
+				lastTableId = tableId
 			} else {
 				if doccount > maxKeywordIndexSize/2 {
 					m.TotalRowsBefore += len(current.Rows)
@@ -229,8 +223,8 @@ func mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
 			}
 
 			next = &InvertedIndex{
-				WorkspaceId: workspaceid,
-				Keyword:     keyword,
+				TableId: tableId,
+				Keyword: keyword,
 				Rows: append([]RecordRow{}, RecordRow{
 					Key:      string(key),
 					Value:    string(value),
@@ -272,7 +266,7 @@ func mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
 
 		if isTimeout() {
 			// We'll reset NextIter to the next keyword
-			m.NextIter = string(EncodeInvertedKeyPrefix(next.WorkspaceId, next.Keyword))
+			m.NextIter = string(encodeInvertedKeyPrefix(next.TableId, next.Keyword))
 			break
 		}
 

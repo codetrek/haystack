@@ -25,7 +25,7 @@ func Init(database pebble.DB) error {
 
 	workspaces = make(map[int]*Workspace)
 	workspacePaths = make(map[string]*Workspace)
-	allWorkspaces, err := internal.GetAllWorkspaces()
+	allWorkspaces, err := internal.ScanAll()
 	if err != nil {
 		return err
 	}

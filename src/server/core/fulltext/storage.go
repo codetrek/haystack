@@ -1,94 +1,29 @@
 package fulltext
 
 import (
-	"context"
-	"log"
-	"time"
-
 	"github.com/ai-microsoft/haystack/server/core/pebble"
+	"github.com/ai-microsoft/haystack/utils/queue"
 )
 
 const Shards = 8
 
 var (
-	db             pebble.DB
-	writeQueue     chan WriteTask
-	closeStorage   context.CancelFunc
-	keywordsMerger *KeywordsMerger
+	db   pebble.DB
+	mpsc *queue.Mpsc
+	ft   map[int]*Fulltext
 )
 
-type WriteTask interface {
-	Run()
-}
-
-type closeWriteQueue struct {
-	done chan struct{}
-}
-
-func (c *closeWriteQueue) Run() {
-	close(writeQueue)
-
-	// flush pending writes
-	t := &flushPendingWritesTask{
-		closing: true,
-	}
-	t.Run()
-
-	c.done <- struct{}{}
-}
-
-func (c *closeWriteQueue) Wait() {
-	<-c.done
-}
-
-func Init(database pebble.DB) error {
-	var ctxCloseDB context.Context
-	ctxCloseDB, closeStorage = context.WithCancel(context.Background())
+func Init(database pebble.DB, q *queue.Mpsc) error {
 	db = database
-
-	writeQueue = make(chan WriteTask)
-
-	go func() {
-		for {
-			task, ok := <-writeQueue
-			if !ok {
-				log.Println("[Fulltext] Write queue closed")
-				break
-			}
-			task.Run()
-		}
-	}()
-
-	go func() {
-		timer := time.NewTicker(1 * time.Second)
-		defer timer.Stop()
-
-		for {
-			select {
-			case <-ctxCloseDB.Done():
-				return
-			case <-timer.C:
-				writeQueue <- &flushPendingWritesTask{
-					closing: false,
-				}
-			}
-		}
-	}()
-
-	keywordsMerger = &KeywordsMerger{}
-	keywordsMerger.Start()
-
+	mpsc = q
+	ft = make(map[int]*Fulltext)
 	return nil
 }
 
 func CloseAndWait() {
-	closeStorage()
-	keywordsMerger.Shutdown()
-	keywordsMerger.Wait()
+	mpsc.RunTask(&queue.NopeTask{})
 
-	closeWriteQueue := &closeWriteQueue{
-		done: make(chan struct{}),
-	}
-	writeQueue <- closeWriteQueue
-	closeWriteQueue.Wait()
+	db = nil
+	mpsc = nil
+	ft = nil
 }

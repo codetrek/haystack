@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 // DB represents a Pebble database instance
 type DB interface {
+	GetIncrementalId(key []byte) (int, error)
 	ScheduleCompact()
 	Close() error
 	IsClosed() bool
@@ -93,6 +95,35 @@ func (d *PebbleDB) ScheduleCompact() {
 		d.db.Compact([]byte{0}, []byte{0xff}, false)
 		log.Println("[Pebble] Compact done, took", time.Since(start))
 	}()
+}
+
+// GetIncrementalId retrieves an incremental ID for a given key
+// It increments the ID and stores it back in the database
+// Returns -1 if the key is not found
+// Returns 0 if the key is not found and the ID is set to 0
+// Returns the next ID if the key is found
+func (d *PebbleDB) GetIncrementalId(key []byte) (int, error) {
+	if d.IsClosed() {
+		return 0, fmt.Errorf("database is closed")
+	}
+
+	str, err := d.Get(key)
+	if err != nil {
+		return -1, err
+	}
+
+	var nextId int = 0
+	if str != nil {
+		i, err := strconv.Atoi(string(str))
+		if err != nil {
+			return -1, err
+		}
+		nextId = i
+	}
+
+	d.Put(key, []byte(strconv.Itoa(nextId+1)))
+
+	return nextId, nil
 }
 
 // Close closes the database

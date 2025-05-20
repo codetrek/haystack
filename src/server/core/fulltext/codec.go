@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"time"
 
 	"strings"
 
@@ -12,10 +11,10 @@ import (
 )
 
 const (
-	KeyTypeDocPath  = storage.KeyTypeDocPath
-	KeyTypeDocMeta  = storage.KeyTypeDocMeta
-	KeyTypeDocWords = storage.KeyTypeDocWords
-	KeyTypeKeyword  = storage.KeyTypeKeyword
+	KeyTypeDocPath  = storage.KeyTypeFTDocPath
+	KeyTypeDocMeta  = storage.KeyTypeFTDocMeta
+	KeyTypeDocWords = storage.KeyTypeFTDocWords
+	KeyTypeFTMeta   = storage.KeyTypeFT
 
 	InvalidWorkspaceId = -1
 )
@@ -114,80 +113,35 @@ func DecodeDocumentWordsValue(data string) []string {
 	return strings.Split(data, "|")
 }
 
-func EncodeInvertedSearchKey(workspaceid int, query string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", KeyTypeKeyword, workspaceid, query))
+func EncodeFTMetaKey(workspaceid int) []byte {
+	return []byte(fmt.Sprintf("%c%d", KeyTypeFTMeta, workspaceid))
 }
 
-func EncodeInvertedKeyPrefix(workspaceid int, keyword string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s|", KeyTypeKeyword, workspaceid, keyword))
-}
-
-func EncodeInvertedKey(workspaceid int, keyword string, doccount int) []byte {
-	return []byte(fmt.Sprintf("%s%d|%d",
-		string(EncodeInvertedKeyPrefix(workspaceid, keyword)), doccount, time.Now().UnixMicro()))
-}
-
-func DecodeInvertedKey(key string) (int, string, int, string) {
-	if !storage.IsKeyType(key, KeyTypeKeyword) {
-		return InvalidWorkspaceId, "", 0, ""
+func DecodeFTMetaKey(key string) int {
+	if !storage.IsKeyType(key, KeyTypeFTMeta) {
+		return InvalidWorkspaceId
 	}
 
 	key = key[1:]
 
-	parts := strings.Split(key, "|")
-	if len(parts) != 4 {
-		return InvalidWorkspaceId, "", 0, ""
-	}
-
-	workspaceid := ParseWorkspaceId(parts[0])
-	keyword := parts[1]
-	doccount, err := strconv.Atoi(parts[2])
+	workspaceid, err := strconv.Atoi(key)
 	if err != nil {
-		return InvalidWorkspaceId, "", 0, ""
+		return InvalidWorkspaceId
 	}
-	tick := parts[3]
 
-	return workspaceid, keyword, doccount, tick
+	return workspaceid
 }
 
-func EncodeInvertedValue(docids []string) []byte {
-	// Each docid is a 16-byte string
-	return []byte(strings.Join(docids, ""))
+func EncodeFTMetaValue(info Fulltext) []byte {
+	content, _ := json.Marshal(info)
+	return content
 }
 
-func DecodeInvertedValue(data []byte) []string {
-	// Each docid is a 16-byte string
-	if len(data)%16 != 0 || len(data) == 0 {
-		return []string{}
+func DecodeFTMetaValue(data []byte) (Fulltext, error) {
+	ft := Fulltext{}
+	if err := json.Unmarshal(data, &ft); err != nil {
+		return Fulltext{}, err
 	}
 
-	const size = 16
-	var chunks []string
-	for i := 0; i < len(data); i += size {
-		end := i + size
-		if end > len(data) {
-			end = len(data)
-		}
-		chunks = append(chunks, string(data[i:end]))
-	}
-	return chunks
-}
-
-func DecodeInvertedValueStr(data string) []string {
-	// Each docid is a 16-byte string
-	if len(data)%16 != 0 || len(data) == 0 {
-		return []string{}
-	}
-
-	const size = 16
-	var chunks []string
-	for i := 0; i < len(data); i += size {
-		end := i + size
-		if end > len(data) {
-			end = len(data)
-		}
-		chunks = append(chunks, data[i:end])
-	}
-
-	return chunks
+	return ft, nil
 }

@@ -1,5 +1,12 @@
 package fulltext
 
+import (
+	"fmt"
+	"log"
+
+	"github.com/ai-microsoft/haystack/server/core/invertedindex"
+)
+
 type Document struct {
 	ID           string `json:"-"`
 	RelPath      string `json:"rel_path"`
@@ -72,38 +79,108 @@ func GetDocumentWords(workspaceid int, docid string) ([]string, error) {
 // SaveNewDocuments saves new documents to the database
 // It also updates the pending writes cache to merge with other documents and flush later
 func SaveNewDocuments(workspaceid int, docs []*Document) error {
-	t := &saveNewDocumentsTask{
-		WorkspaceID: workspaceid,
-		Docs:        docs,
-		done:        make(chan error),
-	}
+	return mpsc.RunFunc(func() error {
+		if db.IsClosed() {
+			log.Println("[Fulltext] Database is closed, skip saving new documents")
+			return nil
+		}
 
-	writeQueue <- t
-	return t.Wait()
+		ft, err := GetFT(workspaceid)
+		if err != nil {
+			log.Println("[Fulltext] Error: failed to get fulltext:", err)
+			return err
+		}
+
+		batch := NewBatch(db)
+		for _, doc := range docs {
+			invertedindex.Update(ft.InvertedId, doc.ID, doc.Words, nil)
+			saveDocument(batch, workspaceid, doc)
+		}
+		err = batch.Commit()
+		if err != nil {
+			log.Println("[Fulltext] Error: failed to save new documents:", err)
+		}
+
+		return err
+	})
 }
 
 // UpdateDocuments updates the words of a document
 // It also updates the pending writes cache to merge with other documents and flush later
 func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
-	t := &updateDocumentsTask{
-		WorkspaceID: workspaceid,
-		Docs:        updatedDocs,
-		done:        make(chan error),
-	}
+	return mpsc.RunFunc(func() error {
+		if db.IsClosed() {
+			log.Println("[Fulltext] Database is closed, skip updating documents")
+			return fmt.Errorf("database is closed")
+		}
 
-	writeQueue <- t
-	return t.Wait()
+		ft, err := GetFT(workspaceid)
+		if err != nil {
+			log.Println("[Fulltext] Error: failed to get fulltext:", err)
+			return err
+		}
+
+		batch := NewBatch(db)
+		for _, updatedDoc := range updatedDocs {
+			// Get the current document words from the database
+			oldWords, err := GetDocumentWords(workspaceid, updatedDoc.ID)
+			if err != nil {
+				continue
+			}
+
+			invertedindex.Update(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
+
+			// Save the updated document
+			saveDocument(batch, workspaceid, updatedDoc)
+		}
+		err = batch.Commit()
+		if err != nil {
+			log.Println("[Fulltext] Error: failed to update documents:", err)
+		}
+
+		return err
+	})
 }
 
 // DeleteDocument deletes a document from the database
 // It will delete the document from the keywords index and the document meta
-func DeleteDocument(workspaceid int, docid string) error {
-	t := &deleteDocumentTask{
-		WorkspaceID: workspaceid,
-		DocId:       docid,
-		done:        make(chan error),
-	}
+func DeleteDocument(workspaceId int, docId string) error {
+	return mpsc.RunFunc(func() error {
+		if db.IsClosed() {
+			log.Println("[Fulltext] Database is closed, skip deleting document")
+			return nil
+		}
 
-	writeQueue <- t
-	return t.Wait()
+		ft, err := GetFT(workspaceId)
+		if err != nil {
+			log.Println("[Fulltext] Error: failed to get fulltext:", err)
+			return err
+		}
+
+		doc, err := GetDocument(workspaceId, docId, true)
+		if err != nil {
+			log.Println("[Fulltext] Error: failed to get document:", err)
+			return err
+		}
+
+		if doc == nil {
+			return fmt.Errorf("document not found")
+		}
+
+		defer log.Printf("[Fulltext] Document `%s` deleted from workspace `%d`", doc.RelPath, workspaceId)
+
+		invertedindex.Update(ft.InvertedId, docId, []string{}, doc.Words)
+
+		// delete the document meta and words
+		batch := NewBatch(db)
+		batch.Delete(EncodeDocumentMetaKey(workspaceId, docId))
+		batch.Delete(EncodeDocumentWordsKey(workspaceId, docId))
+		batch.Delete(EncodeDocumentPathKey(workspaceId, docId))
+		err = batch.Commit()
+		if err != nil {
+			log.Println("[Fulltext] Failed to delete document:", err)
+		}
+
+		return err
+	})
 }

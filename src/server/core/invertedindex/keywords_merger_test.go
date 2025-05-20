@@ -1,4 +1,4 @@
-package fulltext
+package invertedindex
 
 import (
 	"fmt"
@@ -10,17 +10,17 @@ import (
 )
 
 const (
-	workspace1 = 1
-	workspace2 = 2
+	testTable1 = 1
+	testTable2 = 2
 )
 
 // mockBatchWrite implements BatchWrite interface for testing
 type mockBatchWrite struct {
-	deleted      []string
-	writtenKeys  []string
-	writtenData  [][]string
-	workspaceIDs []int
-	keywords     []string
+	deleted     []string
+	writtenKeys []string
+	writtenData [][]string
+	tableIds    []int
+	keywords    []string
 }
 
 func (m *mockBatchWrite) Delete(key []byte) error {
@@ -46,16 +46,16 @@ func (m *mockBatchWrite) DeletePrefix(prefix []byte) error {
 // setupTestMocks sets up the mocks used by all rewrite index tests
 func setupTestMocks() func() {
 	// Override the writeKeywordIndex function for testing
-	originalWriteKeywordIndex := writeKeywordIndex
-	writeKeywordIndex = func(batch pebble.Batch, workspaceID int, keyword string, docIDs []string, data []byte) {
+	originalWriteKeywordIndex := writeInvertedIndex
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		mockBatch := batch.(*mockBatchWrite)
-		mockBatch.workspaceIDs = append(mockBatch.workspaceIDs, workspaceID)
+		mockBatch.tableIds = append(mockBatch.tableIds, tableId)
 		mockBatch.keywords = append(mockBatch.keywords, keyword)
 		mockBatch.writtenData = append(mockBatch.writtenData, docIDs)
 	}
 
 	// Return restore functions
-	restoreWriteKeywordIndex := func() { writeKeywordIndex = originalWriteKeywordIndex }
+	restoreWriteKeywordIndex := func() { writeInvertedIndex = originalWriteKeywordIndex }
 
 	return restoreWriteKeywordIndex
 }
@@ -63,25 +63,25 @@ func setupTestMocks() func() {
 // Helper function to create a new mock batch
 func newMockBatch(db pebble.DB) *mockBatchWrite {
 	return &mockBatchWrite{
-		deleted:      []string{},
-		writtenKeys:  []string{},
-		writtenData:  [][]string{},
-		workspaceIDs: []int{},
-		keywords:     []string{},
+		deleted:     []string{},
+		writtenKeys: []string{},
+		writtenData: [][]string{},
+		tableIds:    []int{},
+		keywords:    []string{},
 	}
 }
 
 // Helper function to verify write operations and document IDs
 func verifyWriteOperations(t *testing.T, mockBatch *mockBatchWrite, index *InvertedIndex, expectedWriteCount int, expectedDocIDs int) {
 	// Check write calls
-	if len(mockBatch.workspaceIDs) != expectedWriteCount {
-		t.Errorf("Expected %d writes, got %d", expectedWriteCount, len(mockBatch.workspaceIDs))
+	if len(mockBatch.tableIds) != expectedWriteCount {
+		t.Errorf("Expected %d writes, got %d", expectedWriteCount, len(mockBatch.tableIds))
 	}
 
-	// Check workspace ID and keyword are correctly passed
-	for i, wsID := range mockBatch.workspaceIDs {
-		if wsID != index.WorkspaceId {
-			t.Errorf("Expected workspaceID %d, got %d", index.WorkspaceId, wsID)
+	// Check table ID and keyword are correctly passed
+	for i, wsID := range mockBatch.tableIds {
+		if wsID != index.TableId {
+			t.Errorf("Expected table %d, got %d", index.TableId, wsID)
 		}
 		if mockBatch.keywords[i] != index.Keyword {
 			t.Errorf("Expected keyword %s, got %s", index.Keyword, mockBatch.keywords[i])
@@ -112,8 +112,8 @@ func TestRewriteIndexSingleRow(t *testing.T) {
 	encodedValue := "doc1|doc2"
 
 	index := &InvertedIndex{
-		WorkspaceId: workspace1,
-		Keyword:     "keyword1",
+		TableId: testTable1,
+		Keyword: "keyword1",
 		Rows: []RecordRow{
 			{Key: "key1", Value: encodedValue, DocCount: 2},
 		},
@@ -143,8 +143,8 @@ func TestRewriteIndexMultipleRows(t *testing.T) {
 
 	// Use actual encoded document IDs
 	index := &InvertedIndex{
-		WorkspaceId: workspace1,
-		Keyword:     "keyword1",
+		TableId: testTable1,
+		Keyword: "keyword1",
 		Rows: []RecordRow{
 			{Key: "key1", Value: "docdocdocdocdoc1docdocdocdocdoc2", DocCount: 2},
 			{Key: "key2", Value: "docdocdocdocdoc3docdocdocdocdoc4", DocCount: 2},
@@ -181,8 +181,8 @@ func TestRewriteIndexWellBatched(t *testing.T) {
 
 	// Use actual encoded document IDs
 	index := &InvertedIndex{
-		WorkspaceId: workspace1,
-		Keyword:     "keyword1",
+		TableId: testTable1,
+		Keyword: "keyword1",
 		Rows: []RecordRow{
 			{Key: "key1", Value: "doc1|doc2|doc3|doc4|doc5|doc6|doc7|doc8|doc9|doc10", DocCount: 10},
 			{Key: "key2", Value: "doc11|doc12|doc13|doc14|doc15|doc16|doc17|doc18|doc19|doc20", DocCount: 10},
@@ -231,8 +231,8 @@ func TestRewriteIndexMultipleBatches(t *testing.T) {
 
 	// Use actual encoded document IDs
 	index := &InvertedIndex{
-		WorkspaceId: workspace1,
-		Keyword:     "keyword1",
+		TableId: testTable1,
+		Keyword: "keyword1",
 		Rows: []RecordRow{
 			{Key: "key1", Value: MakeDocsForKeyword("doc1", "doc2"), DocCount: 2},
 			{Key: "key2", Value: MakeDocsForKeyword("doc3", "doc4"), DocCount: 2},
@@ -318,6 +318,10 @@ func (d *mockDB) Scan(prefix []byte, cb func(key, value []byte) bool) error {
 func (d *mockDB) ScheduleCompact() {
 }
 
+func (d *mockDB) GetIncrementalId(key []byte) (int, error) {
+	return 0, nil
+}
+
 // TestMergeKeywordsIndexEmptyInput tests merging with an empty initial state
 func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 	// Create a mock database for testing
@@ -332,7 +336,7 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 
 	// Set up test data
 	input := Merging{
-		NextIter:        string(KeyTypeKeyword),
+		NextIter:        string(KeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
 		TotalRowsAfter:  0,
@@ -356,20 +360,20 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 	}
 }
 
-// TestMergeKeywordsIndexSingleWorkspace tests merging keywords from a single workspace
-func TestMergeKeywordsIndexSingleWorkspace(t *testing.T) {
+// TestMergeKeywordsIndexSingleTable tests merging keywords from a single table
+func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 	// Save original functions
 	originalDB := db
-	originalWriteKeywordIndex := writeKeywordIndex
+	originalWriteKeywordIndex := writeInvertedIndex
 
-	writtenWorkspaces := []int{}
+	writtenTables := []int{}
 	writtenKeywords := []string{}
 	writtenDocIDs := [][]string{}
 
 	batch := newMockBatch(nil)
 	// Mock only the writeKeywordIndex function
-	writeKeywordIndex = func(batch pebble.Batch, workspaceID int, keyword string, docIDs []string, data []byte) {
-		writtenWorkspaces = append(writtenWorkspaces, workspaceID)
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+		writtenTables = append(writtenTables, tableId)
 		writtenKeywords = append(writtenKeywords, keyword)
 		writtenDocIDs = append(writtenDocIDs, docIDs)
 	}
@@ -379,8 +383,8 @@ func TestMergeKeywordsIndexSingleWorkspace(t *testing.T) {
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Create real formatted keys and values
 			keys := [][]byte{
-				EncodeInvertedKey(workspace1, "keyword1", 2),
-				EncodeInvertedKey(workspace1, "keyword1", 3),
+				encodeInvertedKey(testTable1, "keyword1", 2),
+				encodeInvertedKey(testTable1, "keyword1", 3),
 			}
 			values := []string{
 				MakeDocsForKeyword("doc1", "doc2"),
@@ -400,7 +404,7 @@ func TestMergeKeywordsIndexSingleWorkspace(t *testing.T) {
 
 	// Set up test data
 	input := Merging{
-		NextIter:        string(KeyTypeKeyword),
+		NextIter:        string(KeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
 		TotalRowsAfter:  0,
@@ -411,7 +415,7 @@ func TestMergeKeywordsIndexSingleWorkspace(t *testing.T) {
 
 	// Restore original functions
 	db = originalDB
-	writeKeywordIndex = originalWriteKeywordIndex
+	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Validate results
 	if result.NextIter != "" {
@@ -428,10 +432,10 @@ func TestMergeKeywordsIndexSingleWorkspace(t *testing.T) {
 	}
 
 	// Validate writes
-	if len(writtenWorkspaces) != 1 {
-		t.Errorf("Expected 1 workspace write, got %d", len(writtenWorkspaces))
-	} else if writtenWorkspaces[0] != workspace1 {
-		t.Errorf("Expected workspace 'workspace1', got %q", writtenWorkspaces[0])
+	if len(writtenTables) != 1 {
+		t.Errorf("Expected 1 table write, got %d", len(writtenTables))
+	} else if writtenTables[0] != testTable1 {
+		t.Errorf("Expected table 'table1', got %q", writtenTables[0])
 	}
 
 	if len(writtenKeywords) != 1 {
@@ -466,14 +470,14 @@ func TestMergeKeywordsIndexSingleWorkspace(t *testing.T) {
 	}
 }
 
-// TestMergeKeywordsIndexMultipleWorkspaces tests merging keywords from multiple workspaces
-func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
+// TestMergeKeywordsIndexMultipleTables tests merging keywords from multiple tables
+func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	// Save original functions
 	originalDB := db
-	originalWriteKeywordIndex := writeKeywordIndex
+	originalWriteKeywordIndex := writeInvertedIndex
 
-	// Track writes by workspace
-	writtenData := make(map[int]map[string][]string) // workspace -> keyword -> docIDs
+	// Track writes by table
+	writtenData := make(map[int]map[string][]string) // tableId -> keyword -> docIDs
 	deletedKeys := []string{}
 
 	// Create mock batch
@@ -495,26 +499,26 @@ func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeKeywordIndex = func(batch pebble.Batch, workspaceID int, keyword string, docIDs []string, data []byte) {
-		if _, ok := writtenData[workspaceID]; !ok {
-			writtenData[workspaceID] = make(map[string][]string)
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+		if _, ok := writtenData[tableId]; !ok {
+			writtenData[tableId] = make(map[string][]string)
 		}
-		writtenData[workspaceID][keyword] = docIDs
+		writtenData[tableId][keyword] = docIDs
 	}
 
 	NewBatch = func(db pebble.DB) pebble.Batch {
 		return mockBatch
 	}
 
-	// Mock database with test data for multiple workspaces - using real key/value formats
+	// Mock database with test data for multiple tables - using real key/value formats
 	db = &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Create real formatted keys and values
 			keys := [][]byte{
-				EncodeInvertedKey(workspace1, "keyword1", 2),
-				EncodeInvertedKey(workspace1, "keyword1", 3),
-				EncodeInvertedKey(workspace2, "keyword1", 2),
-				EncodeInvertedKey(workspace2, "keyword1", 3),
+				encodeInvertedKey(testTable1, "keyword1", 2),
+				encodeInvertedKey(testTable1, "keyword1", 3),
+				encodeInvertedKey(testTable2, "keyword1", 2),
+				encodeInvertedKey(testTable2, "keyword1", 3),
 			}
 			values := []string{
 				MakeDocsForKeyword("doc1", "doc2"),
@@ -533,7 +537,7 @@ func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
 
 	// Set up test data
 	input := Merging{
-		NextIter:        string(KeyTypeKeyword),
+		NextIter:        string(KeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
 		TotalRowsAfter:  0,
@@ -544,7 +548,7 @@ func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
 
 	// Restore original functions
 	db = originalDB
-	writeKeywordIndex = originalWriteKeywordIndex
+	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Validate results
 	if result.NextIter != "" {
@@ -562,19 +566,19 @@ func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
 
 	// Validate writes
 	if len(writtenData) != 2 {
-		t.Errorf("Expected writes for 2 workspaces, got %d", len(writtenData))
+		t.Errorf("Expected writes for 2 tables, got %d", len(writtenData))
 	}
 
-	// Check workspace1 data
-	if ws1Data, ok := writtenData[workspace1]; !ok {
-		t.Errorf("Expected data for workspace1 but found none")
+	// Check table1 data
+	if ws1Data, ok := writtenData[testTable1]; !ok {
+		t.Errorf("Expected data for table1 but found none")
 	} else {
 		if len(ws1Data) != 1 {
-			t.Errorf("Expected 1 keyword for workspace1, got %d", len(ws1Data))
+			t.Errorf("Expected 1 keyword for table1, got %d", len(ws1Data))
 		}
 
 		if docs, ok := ws1Data["keyword1"]; !ok {
-			t.Errorf("Expected keyword1 data for workspace1 but found none")
+			t.Errorf("Expected keyword1 data for table1 but found none")
 		} else {
 			uniqueDocs := make(map[string]struct{})
 			for _, doc := range docs {
@@ -582,28 +586,28 @@ func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
 			}
 
 			if len(uniqueDocs) != 5 {
-				t.Errorf("Expected 5 unique docs for workspace1, got %d", len(uniqueDocs))
+				t.Errorf("Expected 5 unique docs for table1, got %d", len(uniqueDocs))
 			}
 
 			expectedDocs := []string{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
 			for _, doc := range expectedDocs {
 				if _, ok := uniqueDocs[doc]; !ok {
-					t.Errorf("Expected doc %s in workspace1 but it was missing", doc)
+					t.Errorf("Expected doc %s in table1 but it was missing", doc)
 				}
 			}
 		}
 	}
 
-	// Check workspace2 data
-	if ws2Data, ok := writtenData[workspace2]; !ok {
-		t.Errorf("Expected data for workspace2 but found none")
+	// Check table2 data
+	if ws2Data, ok := writtenData[testTable2]; !ok {
+		t.Errorf("Expected data for table2 but found none")
 	} else {
 		if len(ws2Data) != 1 {
-			t.Errorf("Expected 1 keyword for workspace2, got %d", len(ws2Data))
+			t.Errorf("Expected 1 keyword for table2, got %d", len(ws2Data))
 		}
 
 		if docs, ok := ws2Data["keyword1"]; !ok {
-			t.Errorf("Expected keyword1 data for workspace2 but found none")
+			t.Errorf("Expected keyword1 data for table2 but found none")
 		} else {
 			uniqueDocs := make(map[string]struct{})
 			for _, doc := range docs {
@@ -611,13 +615,13 @@ func TestMergeKeywordsIndexMultipleWorkspaces(t *testing.T) {
 			}
 
 			if len(uniqueDocs) != 5 {
-				t.Errorf("Expected 5 unique docs for workspace2, got %d", len(uniqueDocs))
+				t.Errorf("Expected 5 unique docs for table2, got %d", len(uniqueDocs))
 			}
 
 			expectedDocs := []string{Doc2ID("doc6"), Doc2ID("doc7"), Doc2ID("doc8"), Doc2ID("doc9"), Doc2ID("doc10")}
 			for _, doc := range expectedDocs {
 				if _, ok := uniqueDocs[doc]; !ok {
-					t.Errorf("Expected doc %s in workspace2 but it was missing", doc)
+					t.Errorf("Expected doc %s in table2 but it was missing", doc)
 				}
 			}
 		}
@@ -675,7 +679,7 @@ func (m *mockBatchWriteWithFuncs) DeletePrefix(prefix []byte) error {
 func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	// Save original functions
 	originalDB := db
-	originalWriteKeywordIndex := writeKeywordIndex
+	originalWriteKeywordIndex := writeInvertedIndex
 
 	// Create a lot of entries with properly formatted keys to trigger timeout
 	keyCount := 1000
@@ -685,7 +689,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	// Generate properly formatted keys and values
 	for i := 0; i < keyCount; i++ {
 		keyword := "keyword" + string(rune('a'+i%26))
-		keys[i] = EncodeInvertedKey(workspace1, keyword, 2)
+		keys[i] = encodeInvertedKey(testTable1, keyword, 2)
 		values[i] = fmt.Sprintf("doc%d|doc%d", i*2, i*2+1)
 	}
 
@@ -714,7 +718,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeKeywordIndex = func(batch pebble.Batch, workspaceID int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		// No-op for this test
 	}
 
@@ -728,7 +732,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 
 	// Run the function
 	input := Merging{
-		NextIter:        string(KeyTypeKeyword),
+		NextIter:        string(KeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
 		TotalRowsAfter:  0,
@@ -738,7 +742,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 
 	// Restore original functions
 	db = originalDB
-	writeKeywordIndex = originalWriteKeywordIndex
+	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Verify we hit the timeout (NextIter should be non-empty)
 	if result.NextIter == "" {

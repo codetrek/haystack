@@ -42,10 +42,10 @@ func TestWorkspaceStorage(t *testing.T) {
 		t.Fatalf("Failed to marshal workspace data: %v", err)
 	}
 
-	SaveWorkspace(workspaceID, string(workspaceJSON))
+	Save(workspaceID, string(workspaceJSON))
 
 	// Test getting workspaces
-	workspaces, err := GetAllWorkspaces()
+	workspaces, err := ScanAll()
 	if err != nil {
 		t.Fatalf("Failed to get all workspaces: %v", err)
 	}
@@ -65,10 +65,10 @@ func TestWorkspaceStorage(t *testing.T) {
 	}
 
 	// Test deleting a workspace
-	DeleteWorkspace(workspaceID)
+	Delete(workspaceID)
 
 	// Verify workspace is deleted
-	workspaces, err = GetAllWorkspaces()
+	workspaces, err = ScanAll()
 	if err != nil {
 		t.Fatalf("Failed to get all workspaces: %v", err)
 	}

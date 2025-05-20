@@ -10,8 +10,10 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
+	"github.com/ai-microsoft/haystack/utils/queue"
 )
 
 func TestInit(t *testing.T) {
@@ -26,9 +28,14 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir, 0)
+	db, _ := storage.Open(tempDir, 0)
 	defer db.Close()
-	err = fulltext.Init(db)
+
+	mpsc := queue.NewMpsc("TestQueue")
+	mpsc.Start()
+	defer mpsc.Stop()
+
+	err = fulltext.Init(db, mpsc)
 	if err != nil {
 		t.Fatalf("Storage Init failed: %v", err)
 	}
@@ -76,12 +83,17 @@ func TestWorkspaceManagement(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir, 0)
+	db, _ := storage.Open(tempDir, 0)
 	defer db.Close()
-	err = fulltext.Init(db)
-	if err != nil {
-		t.Fatalf("Storage Init failed: %v", err)
-	}
+
+	mpsc := queue.NewMpsc("TestQueue")
+	mpsc.Start()
+	defer mpsc.Stop()
+
+	invertedindex.Init(db, mpsc)
+	defer invertedindex.CloseAndWait()
+
+	fulltext.Init(db, mpsc)
 	defer fulltext.CloseAndWait()
 
 	// Initialize workspace manager
@@ -170,12 +182,17 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, err := storage.Open(tempDir, 0)
+	db, _ := storage.Open(tempDir, 0)
 	defer db.Close()
-	err = fulltext.Init(db)
-	if err != nil {
-		t.Fatalf("Storage Init failed: %v", err)
-	}
+
+	mpsc := queue.NewMpsc("TestQueue")
+	mpsc.Start()
+	defer mpsc.Stop()
+
+	invertedindex.Init(db, mpsc)
+	defer invertedindex.CloseAndWait()
+
+	fulltext.Init(db, mpsc)
 	defer fulltext.CloseAndWait()
 
 	// Initialize workspace manager

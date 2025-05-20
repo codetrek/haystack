@@ -8,7 +8,7 @@ import (
 	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
-const StorageVersion = "1.1"
+const StorageVersion = "1.2"
 
 func cleanup(storagePath string) {
 	// Perform cleanup tasks here, such as removing old files or directories
@@ -16,6 +16,7 @@ func cleanup(storagePath string) {
 	cleanupList := []string{
 		"index", // It's the first version of the index, we can safely remove it now
 		"1.0",
+		"1.1",
 	}
 
 	for _, item := range cleanupList {

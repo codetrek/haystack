@@ -1,0 +1,179 @@
+package queue
+
+import "log"
+
+type Task interface {
+	Run() error
+}
+
+type NopeTask struct{}
+
+func (nt *NopeTask) Run() error {
+	return nil
+}
+
+type FuncTask struct {
+	fn func() error
+}
+
+func (ft *FuncTask) Run() error {
+	return ft.fn()
+}
+
+type FuncTaskWithArgs struct {
+	fn   func(args ...interface{}) error
+	args []interface{}
+}
+
+func (ft *FuncTaskWithArgs) Run() error {
+	return ft.fn(ft.args...)
+}
+
+type WaitTask struct {
+	task Task
+	done chan error
+}
+
+func (wt *WaitTask) Run() error {
+	defer close(wt.done)
+	wt.done <- wt.task.Run()
+	return nil
+}
+
+// Mpsc is a multi-producer, single-consumer queue
+// that allows multiple producers to add tasks to the queue
+// and a single consumer to process them in the order they were added.
+type Mpsc struct {
+	name      string
+	queueSize int
+
+	q    chan Task
+	done chan struct{}
+}
+
+func NewMpsc(name string) *Mpsc {
+	return &Mpsc{
+		name:      name,
+		queueSize: 100,
+	}
+}
+
+func (m *Mpsc) SetQueueSize(size int) {
+	if size <= 0 {
+		log.Printf("[%s] Invalid queue size: %d", m.name, size)
+		return
+	}
+
+	if m.q != nil {
+		log.Printf("[%s] Changing queue size to %d, but queue already started", m.name, size)
+		return
+	}
+
+	m.queueSize = size
+}
+
+func (m *Mpsc) Start() {
+	// Start the queue
+	if m.q != nil {
+		log.Printf("[%s] Write queue already started", m.name)
+		return
+	}
+	m.q = make(chan Task, 100)
+	m.done = make(chan struct{})
+
+	go func() {
+		for {
+			task, ok := <-m.q
+			if !ok {
+				log.Printf("[%s] Write queue closed", m.name)
+				break
+			}
+			task.Run()
+		}
+	}()
+
+	close(m.done)
+}
+
+func (m *Mpsc) Stop() {
+	if m.q == nil {
+		log.Printf("[%s] Write queue already stopped", m.name)
+		return
+	}
+
+	// Stop the queue
+	close(m.q)
+	m.q = nil
+
+	<-m.done
+	log.Printf("[%s] Write queue stopped", m.name)
+}
+
+func (m *Mpsc) Add(task Task) {
+	// Add a task to the queue
+	if m.q == nil {
+		log.Printf("[%s] Write queue not started", m.name)
+		return
+	}
+	m.q <- task
+}
+
+func (wq *Mpsc) RunTask(task Task) error {
+	WaitTask := &WaitTask{
+		task: task,
+		done: make(chan error),
+	}
+	wq.Add(WaitTask)
+
+	return <-WaitTask.done
+}
+
+func (m *Mpsc) AddFunc(fn func() error) {
+	// Add a function to the queue
+	if m.q == nil {
+		log.Printf("[%s] Write queue not started", m.name)
+		return
+	}
+	m.q <- &FuncTask{fn: fn}
+}
+
+func (m *Mpsc) RunFunc(fn func() error) error {
+	// Add a function to the queue and wait for it to finish
+	if m.q == nil {
+		log.Printf("[%s] Write queue not started", m.name)
+		return nil
+	}
+
+	WaitTask := &WaitTask{
+		task: &FuncTask{fn: fn},
+		done: make(chan error),
+	}
+	m.q <- WaitTask
+
+	return <-WaitTask.done
+}
+
+func (m *Mpsc) AddFuncWithArgs(fn func(args ...interface{}) error, args ...interface{}) {
+	// Add a function with arguments to the queue
+	if m.q == nil {
+		log.Printf("[%s] Write queue not started", m.name)
+		return
+	}
+	m.q <- &FuncTaskWithArgs{fn: fn, args: args}
+}
+
+func (m *Mpsc) RunFuncWithArgs(fn func(args ...interface{}) error, args ...interface{}) error {
+	// Add a function with arguments to the queue and wait for it to finish
+	if m.q == nil {
+		log.Printf("[%s] Write queue not started", m.name)
+		return nil
+	}
+
+	WaitTask := &WaitTask{
+		task: &FuncTaskWithArgs{fn: fn, args: args},
+		done: make(chan error),
+	}
+	m.q <- WaitTask
+
+	return <-WaitTask.done
+}

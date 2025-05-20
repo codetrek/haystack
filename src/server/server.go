@@ -8,12 +8,14 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/server/searcher"
 	"github.com/ai-microsoft/haystack/server/server"
 	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/ai-microsoft/haystack/utils/queue"
 )
 
 func Run() {
@@ -39,7 +41,16 @@ func Run() {
 		return
 	}
 
-	if err := fulltext.Init(db); err != nil {
+	mpsc := queue.NewMpsc("DBQueue")
+	mpsc.Start()
+
+	if err := invertedindex.Init(db, mpsc); err != nil {
+		log.Fatal("[Server] Error initializing inverted index:", err)
+		running.Shutdown()
+		return
+	}
+
+	if err := fulltext.Init(db, mpsc); err != nil {
 		log.Fatal("[Server] Error initializing storage:", err)
 		running.Shutdown()
 		return
@@ -62,6 +73,8 @@ func Run() {
 
 	wg.Wait()
 	fulltext.CloseAndWait()
+	invertedindex.CloseAndWait()
+	mpsc.Stop()
 
 	// DB could be closed safely now!
 	log.Println("[Server] Closing storage...")

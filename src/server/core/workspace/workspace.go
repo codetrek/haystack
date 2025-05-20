@@ -101,7 +101,7 @@ func (w *Workspace) Save() error {
 		return err
 	}
 
-	internal.SaveWorkspace(w.Id, string(json))
+	internal.Save(w.Id, string(json))
 	return nil
 }
 

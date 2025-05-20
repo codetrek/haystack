@@ -8,6 +8,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/ai-microsoft/haystack/utils/queue"
 )
 
 func TestInit(t *testing.T) {
@@ -23,7 +24,12 @@ func TestInit(t *testing.T) {
 
 	// Test initialization
 	db, _ := storage.Open(tempDir, 0)
-	err = Init(db)
+
+	mpsc := queue.NewMpsc("TestQueue")
+	mpsc.Start()
+	defer mpsc.Stop()
+
+	err = Init(db, mpsc)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -67,7 +73,11 @@ func TestCloseAndWait(t *testing.T) {
 
 	// Initialize
 	db, _ := storage.Open(tempDir, 0)
-	err = Init(db)
+
+	mpsc := queue.NewMpsc("TestQueue")
+	mpsc.Start()
+
+	err = Init(db, mpsc)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -78,6 +88,7 @@ func TestCloseAndWait(t *testing.T) {
 		CloseAndWait()
 		db.Close()
 		close(done)
+		mpsc.Stop()
 	}()
 
 	// Wait for closing to complete or timeout

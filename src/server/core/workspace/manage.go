@@ -144,6 +144,7 @@ func Create(workspacePath string) (*Workspace, error) {
 
 	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
 
+	fulltext.Create(workspace.Id, workspacePath)
 	return workspace, nil
 }
 
@@ -160,7 +161,8 @@ func Delete(workspaceId int) error {
 	delete(workspaces, workspaceId)
 	delete(workspacePaths, workspace.Path)
 
-	internal.DeleteWorkspace(workspaceId)
-	fulltext.DeleteDatabase(workspaceId)
+	internal.Delete(workspaceId)
+	fulltext.Delete(workspaceId)
+
 	return nil
 }

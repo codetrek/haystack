@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ai-microsoft/haystack/server/core/fulltext"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
@@ -30,8 +31,8 @@ type SimpleContentSearchEngineTerm struct {
 	Prefix  string
 }
 
-func (q *SimpleContentSearchEngine) CollectDocuments() (*fulltext.SearchResult, error) {
-	rs := []*fulltext.SearchResult{}
+func (q *SimpleContentSearchEngine) CollectDocuments() (*invertedindex.SearchResult, error) {
+	rs := []*invertedindex.SearchResult{}
 	// Collect the documents for each or clause
 	for _, orClause := range q.OrClauses {
 		r, err := orClause.CollectDocuments(q.Workspace.Id)
@@ -43,7 +44,7 @@ func (q *SimpleContentSearchEngine) CollectDocuments() (*fulltext.SearchResult, 
 	}
 
 	if len(rs) == 0 {
-		return &fulltext.SearchResult{}, nil
+		return &invertedindex.SearchResult{}, nil
 	}
 
 	// Merge the results, we use the first result as the base and merge all other results into it
@@ -61,16 +62,16 @@ func (q *SimpleContentSearchEngine) CollectDocuments() (*fulltext.SearchResult, 
 	return result, nil
 }
 
-func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (*fulltext.SearchResult, error) {
+func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (*invertedindex.SearchResult, error) {
 	// Collect the documents for each term
-	rs := []*fulltext.SearchResult{}
+	rs := []*invertedindex.SearchResult{}
 	for _, term := range q.AndTerms {
 		r := term.CollectDocuments(workspaceId)
 		rs = append(rs, &r)
 	}
 
 	if len(rs) == 0 {
-		return &fulltext.SearchResult{
+		return &invertedindex.SearchResult{
 			DocIds: make(map[string]struct{}),
 		}, nil
 	}
@@ -93,8 +94,14 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (
 	return result, nil
 }
 
-func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) fulltext.SearchResult {
-	r := fulltext.Search(workspaceId, q.Prefix, -1)
+func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invertedindex.SearchResult {
+	ft, err := fulltext.GetFT(workspaceId)
+	if err != nil {
+		log.Printf("[Searcher] CollectDocuments: failed to get fulltext index: %v", err)
+		return invertedindex.SearchResult{}
+	}
+
+	r := invertedindex.Search(ft.InvertedId, q.Prefix, -1)
 	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents", q.String(), len(r.DocIds))
 	return r
 }

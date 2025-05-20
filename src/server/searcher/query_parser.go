@@ -1,9 +1,9 @@
 package searcher
 
 import (
+	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/alecthomas/participle/v2"
 	"github.com/alecthomas/participle/v2/lexer"
-	"github.com/ai-microsoft/haystack/server/core/fulltext"
 )
 
 // Query represents the complete search query
@@ -82,20 +82,20 @@ func processQuery(q *Query) {
 // SearchFiles searches the files in the workspace
 // input is the search result from the previous query
 // returns the search result for the current query
-func (q *Query) SearchFiles() (*fulltext.SearchResult, error) {
-	result := &fulltext.SearchResult{}
+func (q *Query) SearchFiles() (*invertedindex.SearchResult, error) {
+	result := &invertedindex.SearchResult{}
 	return q.Expression.SearchFiles(result)
 }
 
-func (o *OrExpression) SearchFiles(input *fulltext.SearchResult) (*fulltext.SearchResult, error) {
+func (o *OrExpression) SearchFiles(input *invertedindex.SearchResult) (*invertedindex.SearchResult, error) {
 	return input, nil
 }
 
-func (a *AndExpression) SearchFiles(input *fulltext.SearchResult) *fulltext.SearchResult {
+func (a *AndExpression) SearchFiles(input *invertedindex.SearchResult) *invertedindex.SearchResult {
 	return nil
 }
 
-func (t *Term) SearchFiles(input *fulltext.SearchResult) *fulltext.SearchResult {
+func (t *Term) SearchFiles(input *invertedindex.SearchResult) *invertedindex.SearchResult {
 	return nil
 }
 
