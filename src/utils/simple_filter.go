@@ -2,6 +2,7 @@ package utils
 
 import (
 	"path/filepath"
+	"strings"
 
 	gitignore "github.com/sabhiram/go-gitignore"
 )
@@ -27,7 +28,7 @@ func (f *SimpleFilter) Match(relPath string, isDir bool) bool {
 		relPath += "/"
 	}
 
-	match := f.ignore.MatchesPath(relPath)
+	match := f.ignore.MatchesPath(strings.ToLower(relPath))
 	if f.negate {
 		return !match
 	}

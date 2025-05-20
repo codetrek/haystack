@@ -34,7 +34,8 @@ const (
 var (
 	DefaultInclude = []string{"**/*"}
 	DefaultExclude = []string{
-		"node_modules/", "dist/", "build/", "vendor/", "out/", "obj/", "log/", "logs/", ".*", "*.log", "*.log.*",
+		"node_modules/", "dist/", "build/", "vendor/", "out/", "obj/", "log/", "logs/", "debug/", "release/",
+		".*", "*.log", "*.log.*",
 	}
 )
 
