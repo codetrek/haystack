@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -29,6 +30,8 @@ const (
 
 // mcpInit initializes and sets up the Model Context Protocol (MCP) server
 func mcpInit() {
+	hooks := &server.Hooks{}
+
 	// Create a new MCP server instance
 	mcpServer := server.NewMCPServer(
 		"Haystack",
@@ -36,6 +39,7 @@ func mcpInit() {
 		server.WithResourceCapabilities(true, true),
 		server.WithPromptCapabilities(true),
 		server.WithLogging(),
+		server.WithHooks(hooks),
 	)
 
 	// Register MCP tools (framework only, implementations will be added later)
@@ -43,9 +47,9 @@ func mcpInit() {
 
 	sse := server.NewSSEServer(mcpServer,
 		server.WithBaseURL(fmt.Sprintf("http://localhost:%d", conf.Get().Global.Port)),
-		server.WithBasePath("/mcp"),
+		server.WithStaticBasePath("/mcp"),
 		server.WithKeepAlive(true),
-		server.WithKeepAliveInterval(10*time.Second),
+		server.WithKeepAliveInterval(20*time.Second),
 	)
 
 	http.HandleFunc("/mcp/", func(w http.ResponseWriter, r *http.Request) {
@@ -117,7 +121,7 @@ func registerMCPTools(mcpServer *server.MCPServer) {
 
 // searchHandler handles search requests from MCP
 func handleSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	arguments := request.Params.Arguments
+	arguments := request.GetArguments()
 	query, ok1 := arguments["query"].(string)
 	workspacePath, ok2 := arguments["workspace"].(string)
 	limit, _ := arguments["limit"].(float64)
@@ -160,7 +164,18 @@ func handleSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 		BeforeAfter: 1,
 	}
 
+	start := time.Now()
 	results, truncate := searcher.SearchContent(workspace, &req, nil, context.Background(), 10*time.Second)
+	defer func() {
+		totalHits := 0
+		for _, result := range results {
+			totalHits += len(result.Lines)
+		}
+		req, _ := json.Marshal(request)
+		log.Printf("[MCP] HaystackSearch `%s`: took %s, found %d results in %d files, truncate: %t",
+			string(req), time.Since(start), totalHits, len(results), truncate)
+	}()
+
 	resultCount := 0
 	for _, result := range results {
 		resultCount += len(result.Lines)
@@ -208,7 +223,7 @@ func handleSearch(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallTo
 }
 
 func searchFilesToolHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	arguments := request.Params.Arguments
+	arguments := request.GetArguments()
 	query, ok1 := arguments["query"].(string)
 	workspacePath, ok2 := arguments["workspace"].(string)
 	limitCount, ok3 := arguments["limit"].(float64)
