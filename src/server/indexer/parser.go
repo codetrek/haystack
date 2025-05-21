@@ -135,7 +135,7 @@ func parse(file ParseFile) (*documents.Document, bool, error) {
 			return nil, false, nil
 		}
 
-		hash := GetContentHash(content)
+		hash = GetContentHash(content)
 		// If the document exists and the hash is the same, return nil
 		if existing != nil && existing.Hash == hash {
 			return nil, false, nil
