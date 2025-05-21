@@ -22,7 +22,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test", Prefix: "test"},
+							{Pattern: "test", Prefixes: []string{"test"}},
 						},
 					},
 				},
@@ -35,8 +35,8 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test1", Prefix: "test1"},
-							{Pattern: "test2", Prefix: "test2"},
+							{Pattern: "test1", Prefixes: []string{"test1"}},
+							{Pattern: "test2", Prefixes: []string{"test2"}},
 						},
 					},
 				},
@@ -49,13 +49,13 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test1", Prefix: "test1"},
-							{Pattern: "test2", Prefix: "test2"},
+							{Pattern: "test1", Prefixes: []string{"test1"}},
+							{Pattern: "test2", Prefixes: []string{"test2"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test3", Prefix: "test3"},
+							{Pattern: "test3", Prefixes: []string{"test3"}},
 						},
 					},
 				},
@@ -68,7 +68,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "prefix:value", Prefix: "prefix"},
+							{Pattern: "prefix:value", Prefixes: []string{"prefix"}},
 						},
 					},
 				},
@@ -81,13 +81,13 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "field1:value1", Prefix: "field1"},
-							{Pattern: "field2:value2", Prefix: "field2"},
+							{Pattern: "field1:value1", Prefixes: []string{"field1"}},
+							{Pattern: "field2:value2", Prefixes: []string{"field2"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "field3:value3", Prefix: "field3"},
+							{Pattern: "field3:value3", Prefixes: []string{"field3"}},
 						},
 					},
 				},
@@ -100,7 +100,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"test1 test2\"", Prefix: "test1"}, // We expect the first word to be used as prefix
+							{Pattern: "\"test1 test2\"", Prefixes: []string{"test1", "test2"}}, // We expect all valid prefixes to be used
 						},
 					},
 				},
@@ -113,9 +113,9 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "regular", Prefix: "regular"},
-							{Pattern: "\"quoted phrase\"", Prefix: "quoted"},
-							{Pattern: "another", Prefix: "another"},
+							{Pattern: "regular", Prefixes: []string{"regular"}},
+							{Pattern: "\"quoted phrase\"", Prefixes: []string{"quoted", "phrase"}},
+							{Pattern: "another", Prefixes: []string{"another"}},
 						},
 					},
 				},
@@ -128,13 +128,13 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"exact phrase\"", Prefix: "exact"},
+							{Pattern: "\"exact phrase\"", Prefixes: []string{"exact", "phrase"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "regular", Prefix: "regular"},
-							{Pattern: "term", Prefix: "term"},
+							{Pattern: "regular", Prefixes: []string{"regular"}},
+							{Pattern: "term", Prefixes: []string{"term"}},
 						},
 					},
 				},
@@ -147,7 +147,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"test.with[special]chars\"", Prefix: "test"}, // First word before special chars
+							{Pattern: "\"test.with[special]chars\"", Prefixes: []string{"test"}}, // First word before special chars
 						},
 					},
 				},
@@ -160,7 +160,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"singleword\"", Prefix: "singleword"},
+							{Pattern: "\"singleword\"", Prefixes: []string{"singleword"}},
 						},
 					},
 				},
@@ -173,7 +173,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"hello, world! how are you?\"", Prefix: "hello"},
+							{Pattern: "\"hello, world! how are you?\"", Prefixes: []string{"hello", "world", "how", "are", "you"}},
 						},
 					},
 				},
@@ -186,7 +186,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"version 1.2.3-beta+build.456\"", Prefix: "version"},
+							{Pattern: "\"version 1.2.3-beta+build.456\"", Prefixes: []string{"version"}},
 						},
 					},
 				},
@@ -199,14 +199,14 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"first phrase\"", Prefix: "first"},
-							{Pattern: "second", Prefix: "second"},
+							{Pattern: "\"first phrase\"", Prefixes: []string{"first", "phrase"}},
+							{Pattern: "second", Prefixes: []string{"second"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "third", Prefix: "third"},
-							{Pattern: "\"fourth phrase\"", Prefix: "fourth"},
+							{Pattern: "third", Prefixes: []string{"third"}},
+							{Pattern: "\"fourth phrase\"", Prefixes: []string{"fourth", "phrase"}},
 						},
 					},
 				},
@@ -219,7 +219,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"code with \\\"quoted\\\" text\"", Prefix: "code"},
+							{Pattern: "\"code with \\\"quoted\\\" text\"", Prefixes: []string{"code", "with", "text"}},
 						},
 					},
 				},
@@ -232,8 +232,8 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "exactly-with-dash", Prefix: "exactly-with-dash"},
-							{Pattern: "another", Prefix: "another"},
+							{Pattern: "exactly-with-dash", Prefixes: []string{"exactly-with-dash"}},
+							{Pattern: "another", Prefixes: []string{"another"}},
 						},
 					},
 				},
@@ -270,8 +270,15 @@ func TestParseQuerySimple(t *testing.T) {
 					if pattern.Pattern != wantPattern.Pattern {
 						t.Errorf("pattern %d in OR clause %d: got pattern %q, want %q", j, i, pattern.Pattern, wantPattern.Pattern)
 					}
-					if pattern.Prefix != wantPattern.Prefix {
-						t.Errorf("pattern %d in OR clause %d: got prefix %q, want %q", j, i, pattern.Prefix, wantPattern.Prefix)
+					if len(pattern.Prefixes) != len(wantPattern.Prefixes) {
+						t.Errorf("pattern %d in OR clause %d: got %d prefixes, want %d", j, i, len(pattern.Prefixes), len(wantPattern.Prefixes))
+						continue
+					}
+					for k, prefix := range pattern.Prefixes {
+						if prefix != wantPattern.Prefixes[k] {
+							t.Errorf("pattern %d in OR clause %d: prefix %d got %q, want %q",
+								j, i, k, prefix, wantPattern.Prefixes[k])
+						}
 					}
 				}
 			}

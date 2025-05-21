@@ -27,8 +27,8 @@ type SimpleContentSearchEngineAndClause struct {
 }
 
 type SimpleContentSearchEngineTerm struct {
-	Pattern string
-	Prefix  string
+	Pattern  string
+	Prefixes []string // First element serves as main prefix
 }
 
 func (q *SimpleContentSearchEngine) CollectDocuments() (*invertedindex.SearchResult, error) {
@@ -100,10 +100,34 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invert
 		log.Printf("[Searcher] CollectDocuments: failed to get fulltext index: %v", err)
 		return invertedindex.SearchResult{}
 	}
+	// If no prefixes, return empty result
+	if len(q.Prefixes) == 0 {
+		return invertedindex.SearchResult{}
+	}
 
-	r := invertedindex.Search(ft.InvertedId, q.Prefix, -1)
-	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents", q.String(), len(r.DocIds))
-	return r
+	// Get results for first prefix
+	result := invertedindex.Search(ft.InvertedId, q.Prefixes[0], -1)
+	if len(q.Prefixes) == 1 {
+		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using prefix `%s`", q.String(), len(result.DocIds), q.Prefixes[0])
+		return result
+	}
+
+	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", q.Prefixes[0], q.String(), len(result.DocIds))
+	// Intersect with results from other prefixes
+	for _, prefix := range q.Prefixes[1:] {
+		r := invertedindex.Search(ft.InvertedId, prefix, -1)
+		log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", prefix, q.String(), len(r.DocIds))
+		// Keep only documents that exist in both results
+		for docId := range result.DocIds {
+			if _, exists := r.DocIds[docId]; !exists {
+				delete(result.DocIds, docId)
+			}
+		}
+	}
+
+	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using %d prefixes",
+		q.String(), len(result.DocIds), len(q.Prefixes))
+	return result
 }
 
 func NewSimpleContentSearchEngine(workspace *workspace.Workspace, maxWildLen, maxKwDist int) *SimpleContentSearchEngine {
@@ -290,56 +314,45 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 
 	// Handle quoted phrases specially for exact matching
 	if IsQuotedPhrase(token) {
-		// Extract the content inside quotes
 		unwrappedPhrase := UnwrapQuotes(token)
+		words := strings.Fields(unwrappedPhrase)
 
-		// For the prefix, use the first meaningful word in the phrase
-		// to find candidate documents
-		prefixWord := unwrappedPhrase
-		if spaceIdx := strings.IndexByte(unwrappedPhrase, ' '); spaceIdx > 0 {
-			prefixWord = unwrappedPhrase[:spaceIdx]
+		// Collect all valid prefixes
+		var prefixes []string
+		for _, word := range words {
+			if matches := rePrefix.FindAllString(word, 1); len(matches) > 0 {
+				prefixes = append(prefixes, strings.ToLower(matches[0]))
+			}
 		}
 
-		// Make sure we have a valid prefix
-		prefixes := rePrefix.FindAllString(prefixWord, 1)
-		prefixToUse := unwrappedPhrase
-		if len(prefixes) > 0 {
-			prefixToUse = strings.ToLower(prefixes[0])
+		// If no valid prefixes found, use first word or entire phrase
+		if len(prefixes) == 0 {
+			prefixWord := unwrappedPhrase
+			if spaceIdx := strings.IndexByte(unwrappedPhrase, ' '); spaceIdx > 0 {
+				prefixWord = unwrappedPhrase[:spaceIdx]
+			}
+			if matches := rePrefix.FindAllString(prefixWord, 1); len(matches) > 0 {
+				prefixes = append(prefixes, strings.ToLower(matches[0]))
+			} else {
+				prefixes = append(prefixes, unwrappedPhrase)
+			}
 		}
 
-		// Custom handling for escaped quotes
-		// First handle literal escaped quotes in the source - look for the pattern \"
+		// Handle escaped quotes
 		if strings.Contains(unwrappedPhrase, "\\\"") {
-			// For escaped quotes, we need an even more special approach
-			// Create a pattern that directly matches the escaped quotes in the text
-			// For example, if the query is "function that \"returns\" a value"
-			// we want to match "function that "returns" a value" in the text
-
-			// First, create a version where the escaped quotes are replaced with actual quotes
-			// This is what we expect to find in the text
 			textPattern := strings.ReplaceAll(unwrappedPhrase, "\\\"", "\"")
-
-			// Now escape the pattern for regex, but carefully handle the quotes
 			escapedPhrase := regexp.QuoteMeta(textPattern)
-
-			// Use consistent word boundaries approach for all phrases
-			regPattern := escapedPhrase
-
 			return &SimpleContentSearchEngineTerm{
-				Pattern: token,
-				Prefix:  prefixToUse,
-			}, regPattern
+				Pattern:  token,
+				Prefixes: prefixes,
+			}, escapedPhrase
 		}
 
 		escapedPhrase := regexp.QuoteMeta(unwrappedPhrase)
-
-		// Use consistent word boundaries approach for all phrases
-		regPattern := escapedPhrase
-
 		return &SimpleContentSearchEngineTerm{
-			Pattern: token,       // Keep original pattern with quotes
-			Prefix:  prefixToUse, // Use first word or entire phrase without quotes
-		}, regPattern
+			Pattern:  token,
+			Prefixes: prefixes,
+		}, escapedPhrase
 	}
 
 	// Handle regular patterns (non-quoted)
@@ -356,8 +369,8 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 		regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
 
 		return &SimpleContentSearchEngineTerm{
-			Pattern: token,
-			Prefix:  strings.ToLower(prefixes[0]),
+			Pattern:  token,
+			Prefixes: []string{strings.ToLower(prefixes[0])},
 		}, regPattern
 	}
 
