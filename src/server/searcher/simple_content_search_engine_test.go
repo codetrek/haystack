@@ -399,6 +399,23 @@ func TestParseQuerySimple(t *testing.T) {
 			},
 		})
 	})
+
+	t.Run("trailing special chars", func(t *testing.T) {
+		runCase(t, OneCase{
+			query: "For this, u",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "For", RegPattern: "For", Keywords: []string{"For"}},
+							{Pattern: "this,", RegPattern: "this,", Keywords: []string{"this"}},
+							{Pattern: "u", RegPattern: "u", Keywords: []string{}},
+						},
+					},
+				},
+			},
+		})
+	})
 }
 
 // Add a new test function to verify TokenizeWithQuotes works correctly
@@ -850,5 +867,11 @@ func TestContentLineMatch(t *testing.T) {
 		eng = CreateSimpleEngine(t, "\"version 1.2.3-beta\"", true, 4, 4)
 		actual = eng.IsLineMatch("We're currently using version 1.2.3-beta+build.123 of the software.")
 		assert.Equal(t, [][]int{{22, 40}}, actual)
+	})
+
+	t.Run("Test with short keywords", func(t *testing.T) {
+		eng := CreateSimpleEngine(t, "For this, u", true, 4, 4)
+		actual := eng.IsLineMatch("For this, use Visual studio.")
+		assert.Equal(t, [][]int{{0, 11}}, actual)
 	})
 }

@@ -68,8 +68,10 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (
 	// Collect the documents for each term
 	rs := []*invertedindex.SearchResult{}
 	for _, term := range q.AndTerms {
-		r := term.CollectDocuments(workspaceId)
-		rs = append(rs, &r)
+		if len(term.Keywords) > 0 {
+			r := term.CollectDocuments(workspaceId)
+			rs = append(rs, &r)
+		}
 	}
 
 	if len(rs) == 0 {
@@ -339,33 +341,28 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 		}
 	}
 
+	regPattern := token
+	regPattern = strings.ReplaceAll(regPattern, "\\", "\\\\")
+	regPattern = strings.ReplaceAll(regPattern, ".", "\\.")
+	regPattern = strings.ReplaceAll(regPattern, "{", "\\{")
+	regPattern = strings.ReplaceAll(regPattern, "}", "\\}")
+	regPattern = strings.ReplaceAll(regPattern, "*", ".{0,"+maxWildcardLength+"}")
+	regPattern = strings.ReplaceAll(regPattern, "?", ".?")
+	regPattern = strings.ReplaceAll(regPattern, "(", "\\(")
+	regPattern = strings.ReplaceAll(regPattern, ")", "\\)")
+	regPattern = strings.ReplaceAll(regPattern, "[", "\\[")
+	regPattern = strings.ReplaceAll(regPattern, "]", "\\]")
+	regPattern = strings.ReplaceAll(regPattern, "^", "\\^")
+	regPattern = strings.ReplaceAll(regPattern, "$", "\\$")
+	regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
+	regPattern = strings.ReplaceAll(regPattern, "+", "\\+")
+
 	// Handle regular patterns (non-quoted)
-	keywords := tokenizer.TokenizeForSearch(token, false)
-	if len(keywords) > 0 {
-		regPattern := token
-		regPattern = strings.ReplaceAll(regPattern, "\\", "\\\\")
-		regPattern = strings.ReplaceAll(regPattern, ".", "\\.")
-		regPattern = strings.ReplaceAll(regPattern, "{", "\\{")
-		regPattern = strings.ReplaceAll(regPattern, "}", "\\}")
-		regPattern = strings.ReplaceAll(regPattern, "*", ".{0,"+maxWildcardLength+"}")
-		regPattern = strings.ReplaceAll(regPattern, "?", ".?")
-		regPattern = strings.ReplaceAll(regPattern, "(", "\\(")
-		regPattern = strings.ReplaceAll(regPattern, ")", "\\)")
-		regPattern = strings.ReplaceAll(regPattern, "[", "\\[")
-		regPattern = strings.ReplaceAll(regPattern, "]", "\\]")
-		regPattern = strings.ReplaceAll(regPattern, "^", "\\^")
-		regPattern = strings.ReplaceAll(regPattern, "$", "\\$")
-		regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
-		regPattern = strings.ReplaceAll(regPattern, "+", "\\+")
-
-		return &SimpleContentSearchEngineTerm{
-			Pattern:    token,
-			RegPattern: regPattern,
-			Keywords:   keywords,
-		}
+	return &SimpleContentSearchEngineTerm{
+		Pattern:    token,
+		RegPattern: regPattern,
+		Keywords:   tokenizer.TokenizeForSearch(token, false),
 	}
-
-	return nil
 }
 
 // finalizeOrClause creates a SimpleContentSearchEngineAndClause from the given terms and patterns
