@@ -9,10 +9,11 @@ import (
 
 	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex/tokenizer"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
-var rePrefix = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9_-]+`)
+// SimpleContentSearchEngine is a simple search engine that uses regex to find documents
 
 type SimpleContentSearchEngine struct {
 	MaxWildcardLength  int
@@ -27,8 +28,9 @@ type SimpleContentSearchEngineAndClause struct {
 }
 
 type SimpleContentSearchEngineTerm struct {
-	Pattern  string
-	Prefixes []string // First element serves as main prefix
+	Pattern    string
+	RegPattern string
+	Keywords   []string // First element serves as main prefix
 }
 
 func (q *SimpleContentSearchEngine) CollectDocuments() (*invertedindex.SearchResult, error) {
@@ -101,32 +103,42 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invert
 		return invertedindex.SearchResult{}
 	}
 	// If no prefixes, return empty result
-	if len(q.Prefixes) == 0 {
+	if len(q.Keywords) == 0 {
 		return invertedindex.SearchResult{}
 	}
 
 	// Get results for first prefix
-	result := invertedindex.Search(ft.InvertedId, q.Prefixes[0], -1)
-	if len(q.Prefixes) == 1 {
-		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using prefix `%s`", q.String(), len(result.DocIds), q.Prefixes[0])
+	result := invertedindex.Search(ft.InvertedId, q.Keywords[0], -1)
+	if len(q.Keywords) == 1 {
+		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using keyword `%s`", q.String(), len(result.DocIds), q.Keywords[0])
 		return result
 	}
 
-	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", q.Prefixes[0], q.String(), len(result.DocIds))
+	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", q.Keywords[0], q.String(), len(result.DocIds))
 	// Intersect with results from other prefixes
-	for _, prefix := range q.Prefixes[1:] {
+	for _, prefix := range q.Keywords[1:] {
 		r := invertedindex.Search(ft.InvertedId, prefix, -1)
 		log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", prefix, q.String(), len(r.DocIds))
+
+		if len(r.DocIds) < len(result.DocIds) {
+			// Swap result and r to ensure result is always the smaller set
+			result, r = r, result
+		}
+
 		// Keep only documents that exist in both results
 		for docId := range result.DocIds {
 			if _, exists := r.DocIds[docId]; !exists {
 				delete(result.DocIds, docId)
 			}
 		}
+
+		if len(result.DocIds) == 0 {
+			break
+		}
 	}
 
-	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using %d prefixes",
-		q.String(), len(result.DocIds), len(q.Prefixes))
+	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using %d keywords",
+		q.String(), len(result.DocIds), len(q.Keywords))
 	return result
 }
 
@@ -235,10 +247,7 @@ func IsQuotedPhrase(token string) bool {
 
 // UnwrapQuotes removes surrounding quotes from a quoted phrase
 func UnwrapQuotes(token string) string {
-	if IsQuotedPhrase(token) {
-		return token[1 : len(token)-1]
-	}
-	return token
+	return token[1 : len(token)-1]
 }
 
 func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) error {
@@ -280,10 +289,10 @@ func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) er
 		}
 
 		// Process the token
-		pattern, regPattern := q.processToken(token, maxWildcardLength)
+		pattern := q.processToken(token, maxWildcardLength)
 		if pattern != nil {
 			currentOrClause = append(currentOrClause, pattern)
-			currentRegPatterns = append(currentRegPatterns, regPattern)
+			currentRegPatterns = append(currentRegPatterns, pattern.RegPattern)
 		}
 	}
 
@@ -306,75 +315,57 @@ func (q *SimpleContentSearchEngine) Compile(query string, caseSensitive bool) er
 
 // processToken handles a single token (quoted phrase or regular term) and returns
 // the corresponding SimpleContentSearchEngineTerm and regex pattern
-func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength string) (*SimpleContentSearchEngineTerm, string) {
+func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength string) *SimpleContentSearchEngineTerm {
 	token = strings.TrimSpace(token)
 	if token == "" || token == "AND" {
-		return nil, ""
+		return nil
 	}
 
 	// Handle quoted phrases specially for exact matching
 	if IsQuotedPhrase(token) {
 		unwrappedPhrase := UnwrapQuotes(token)
-		words := strings.Fields(unwrappedPhrase)
-
-		// Collect all valid prefixes
-		var prefixes []string
-		for _, word := range words {
-			if matches := rePrefix.FindAllString(word, 1); len(matches) > 0 {
-				prefixes = append(prefixes, strings.ToLower(matches[0]))
-			}
-		}
-
-		// If no valid prefixes found, use first word or entire phrase
-		if len(prefixes) == 0 {
-			prefixWord := unwrappedPhrase
-			if spaceIdx := strings.IndexByte(unwrappedPhrase, ' '); spaceIdx > 0 {
-				prefixWord = unwrappedPhrase[:spaceIdx]
-			}
-			if matches := rePrefix.FindAllString(prefixWord, 1); len(matches) > 0 {
-				prefixes = append(prefixes, strings.ToLower(matches[0]))
-			} else {
-				prefixes = append(prefixes, unwrappedPhrase)
-			}
-		}
+		keywords := tokenizer.TokenizeForSearch(unwrappedPhrase, true)
 
 		// Handle escaped quotes
 		if strings.Contains(unwrappedPhrase, "\\\"") {
-			textPattern := strings.ReplaceAll(unwrappedPhrase, "\\\"", "\"")
-			escapedPhrase := regexp.QuoteMeta(textPattern)
-			return &SimpleContentSearchEngineTerm{
-				Pattern:  token,
-				Prefixes: prefixes,
-			}, escapedPhrase
+			unwrappedPhrase = strings.ReplaceAll(unwrappedPhrase, "\\\"", "\"")
 		}
 
 		escapedPhrase := regexp.QuoteMeta(unwrappedPhrase)
 		return &SimpleContentSearchEngineTerm{
-			Pattern:  token,
-			Prefixes: prefixes,
-		}, escapedPhrase
+			Pattern:    token,
+			RegPattern: escapedPhrase,
+			Keywords:   keywords,
+		}
 	}
 
 	// Handle regular patterns (non-quoted)
-	prefixes := rePrefix.FindAllString(token, 1)
-	if len(prefixes) > 0 {
+	keywords := tokenizer.TokenizeForSearch(token, false)
+	if len(keywords) > 0 {
 		regPattern := token
+		regPattern = strings.ReplaceAll(regPattern, "\\", "\\\\")
 		regPattern = strings.ReplaceAll(regPattern, ".", "\\.")
+		regPattern = strings.ReplaceAll(regPattern, "{", "\\{")
+		regPattern = strings.ReplaceAll(regPattern, "}", "\\}")
 		regPattern = strings.ReplaceAll(regPattern, "*", ".{0,"+maxWildcardLength+"}")
 		regPattern = strings.ReplaceAll(regPattern, "?", ".?")
+		regPattern = strings.ReplaceAll(regPattern, "(", "\\(")
+		regPattern = strings.ReplaceAll(regPattern, ")", "\\)")
 		regPattern = strings.ReplaceAll(regPattern, "[", "\\[")
 		regPattern = strings.ReplaceAll(regPattern, "]", "\\]")
 		regPattern = strings.ReplaceAll(regPattern, "^", "\\^")
 		regPattern = strings.ReplaceAll(regPattern, "$", "\\$")
 		regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
+		regPattern = strings.ReplaceAll(regPattern, "+", "\\+")
 
 		return &SimpleContentSearchEngineTerm{
-			Pattern:  token,
-			Prefixes: []string{strings.ToLower(prefixes[0])},
-		}, regPattern
+			Pattern:    token,
+			RegPattern: regPattern,
+			Keywords:   keywords,
+		}
 	}
 
-	return nil, ""
+	return nil
 }
 
 // finalizeOrClause creates a SimpleContentSearchEngineAndClause from the given terms and patterns

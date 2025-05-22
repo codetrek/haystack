@@ -5,14 +5,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/documents"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex/tokenizer"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 )
 
@@ -142,7 +140,7 @@ func parse(file ParseFile) (*documents.Document, bool, error) {
 		}
 
 		// We only index the content if the file size is below the limit
-		words = parseString(string(content))
+		words = tokenizer.TokenizeForIndex(string(content))
 	}
 
 	return &documents.Document{
@@ -153,93 +151,6 @@ func parse(file ParseFile) (*documents.Document, bool, error) {
 		LastSyncTime: time.Now().UnixNano(),
 		Hash:         hash,
 		Words:        words,
-		PathWords:    parseString(file.RelFilePath),
+		PathWords:    tokenizer.TokenizeForIndex(file.RelFilePath),
 	}, existing == nil, nil
-}
-
-var re = regexp.MustCompile(`[a-zA-Z0-9_][a-zA-Z0-9_-]+`)
-
-// parseString extracts unique words from a string
-func parseString(str string) []string {
-	words := re.FindAllString(str, -1)
-
-	uniqueWords := make(map[string]struct{})
-	pushWord := func(word string) {
-		if len(word) < 3 || len(word) > 80 {
-			return
-		}
-		uniqueWords[strings.ToLower(word)] = struct{}{}
-	}
-
-	for _, word := range words {
-		pushWord(word)
-		camelSplited := camelSnakeSplit(word)
-
-		if len(camelSplited) == 1 {
-			continue
-		}
-
-		for _, word := range camelSplited {
-			pushWord(word)
-		}
-	}
-
-	result := make([]string, 0, len(uniqueWords))
-	for word := range uniqueWords {
-		result = append(result, word)
-	}
-
-	sort.Strings(result)
-	return result
-}
-
-func camelSnakeSplit(s string) []string {
-	var result = []string{}
-	var pieces = strings.FieldsFunc(s, func(r rune) bool {
-		return r == '-' || r == '_'
-	})
-
-	for _, s := range pieces {
-		var currentWord string
-		for i, r := range s {
-			if i > 0 {
-				if r >= 'A' && r <= 'Z' {
-					// If previous character was lowercase or this is the start of a new uppercase sequence
-					if s[i-1] >= 'a' && s[i-1] <= 'z' || (i < len(s)-1 && s[i+1] >= 'a' && s[i+1] <= 'z') {
-						if currentWord != "" {
-							result = append(result, currentWord)
-						}
-						currentWord = string(r)
-					} else {
-						currentWord += string(r)
-					}
-				} else {
-					currentWord += string(r)
-				}
-			} else {
-				currentWord += string(r)
-			}
-		}
-
-		if currentWord != "" {
-			result = append(result, currentWord)
-		}
-
-	}
-
-	return result
-}
-
-// isValidWord checks if a word meets the criteria for inclusion
-func isValidWord(word string) bool {
-	if len(word) < 3 || len(word) > 80 {
-		return false
-	}
-
-	for _, r := range word {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
-			return false
-		}
-	}
-	return true
 }

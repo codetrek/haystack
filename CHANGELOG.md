@@ -3,6 +3,8 @@
 ## [next]
 - Make inverted index engine as a separated components
 - Make "debug/", "release/" as default exclude pattern while scaning
+- Speed up 10X+ for: `bool function`, `obj->func()`
+- Supports finding substrings within CamelCase identifiers (e.g., `bookmarkbar` in `UpdateBookmarkBarIfNecessary`).
 
 ## [1.3.0]
 - Feature: Finding subparts of camelCase and snake_cased words

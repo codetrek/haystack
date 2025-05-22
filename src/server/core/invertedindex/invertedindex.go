@@ -1,5 +1,7 @@
 package invertedindex
 
+import "strings"
+
 const MaxInvertedIndexSize = 1000
 
 type SearchResult struct {
@@ -11,7 +13,7 @@ func Search(tableId int, query string, limit int) SearchResult {
 		DocIds: make(map[string]struct{}),
 	}
 
-	db.Scan(encodeInvertedSearchKey(tableId, query), func(key, value []byte) bool {
+	db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
 		docids := decodeInvertedValue(value)
 		if len(docids) > 0 {
 			for _, docid := range docids {

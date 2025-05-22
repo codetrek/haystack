@@ -6,412 +6,553 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func CreateSimpleEngine(t *testing.T, query string, caseSensitive bool, maxWildLen, maxKwDist int) *SimpleContentSearchEngine {
+	eng := NewSimpleContentSearchEngine(nil, maxWildLen, maxKwDist)
+	assert.NoError(t, eng.Compile(query, caseSensitive))
+	return eng
+}
+
 func TestParseQuerySimple(t *testing.T) {
-	tests := []struct {
-		name    string
+	type OneCase struct {
 		query   string
 		want    *SimpleContentSearchEngine
 		wantErr bool
-	}{
-		{name: "empty query", query: "", wantErr: true},
-		{name: "whitespace only", query: "   ", wantErr: true},
-		{
-			name:  "single pattern",
+	}
+
+	runCase := func(t *testing.T, tt OneCase) {
+		got := NewSimpleContentSearchEngine(nil, 4, 4)
+		err := got.Compile(tt.query, true)
+
+		if tt.wantErr {
+			assert.Error(t, err, "Compile() expected an error, but got none for query: %s", tt.query)
+			return
+		}
+		assert.NoError(t, err, "Compile() returned an unexpected error: %v for query: %s", err, tt.query)
+		if err != nil { // If assert.NoError marked a failure, err might be non-nil.
+			return
+		}
+
+		// Use require for critical assertions that should stop the test if they fail.
+		// Use assert for non-critical assertions where the test can continue.
+		if !assert.Equal(t, len(tt.want.OrClauses), len(got.OrClauses), "Number of OR clauses mismatch for query: %s", tt.query) {
+			return // Stop further checks if the number of OR clauses is different.
+		}
+
+		for i, orClause := range got.OrClauses {
+			wantOrClause := tt.want.OrClauses[i]
+			if !assert.Equal(t, len(wantOrClause.AndTerms), len(orClause.AndTerms), "OR clause %d: number of AND patterns mismatch for query: %s", i, tt.query) {
+				continue // Continue to the next OR clause if AND terms count differs for this one.
+			}
+
+			for j, pattern := range orClause.AndTerms {
+				wantPattern := wantOrClause.AndTerms[j]
+				assert.Equal(t, wantPattern.Pattern, pattern.Pattern, "Pattern %d in OR clause %d: pattern mismatch for query: %s", j, i, tt.query)
+				assert.Equal(t, wantPattern.RegPattern, pattern.RegPattern, "RegPattern %d in OR clause %d: pattern mismatch for query: %s", j, i, tt.query)
+				assert.Equal(t, wantPattern.Keywords, pattern.Keywords, "Keywords %d in OR clause %d: pattern mismatch for query: %s", j, i, tt.query)
+			}
+		}
+	}
+
+	t.Run("empty query", func(t *testing.T) {
+		runCase(t, OneCase{query: "", wantErr: true})
+	})
+
+	t.Run("whitespace only", func(t *testing.T) {
+		runCase(t, OneCase{query: "   ", wantErr: true})
+	})
+
+	t.Run("single pattern", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "test",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test", Prefixes: []string{"test"}},
+							{Pattern: "test", RegPattern: "test", Keywords: []string{"test"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "multiple AND patterns",
+		})
+	})
+
+	t.Run("multiple AND patterns", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "test1 test2",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test1", Prefixes: []string{"test1"}},
-							{Pattern: "test2", Prefixes: []string{"test2"}},
+							{Pattern: "test1", RegPattern: "test1", Keywords: []string{"test1"}},
+							{Pattern: "test2", RegPattern: "test2", Keywords: []string{"test2"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "OR clauses",
+		})
+	})
+
+	t.Run("OR clauses", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "test1 test2 | test3",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test1", Prefixes: []string{"test1"}},
-							{Pattern: "test2", Prefixes: []string{"test2"}},
+							{Pattern: "test1", RegPattern: "test1", Keywords: []string{"test1"}},
+							{Pattern: "test2", RegPattern: "test2", Keywords: []string{"test2"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "test3", Prefixes: []string{"test3"}},
+							{Pattern: "test3", RegPattern: "test3", Keywords: []string{"test3"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "pattern with prefix",
+		})
+	})
+
+	t.Run("pattern with prefix", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "prefix:value",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "prefix:value", Prefixes: []string{"prefix"}},
+							{Pattern: "prefix:value", RegPattern: "prefix\\:value", Keywords: []string{"prefix", "value"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "complex query with prefixes and OR",
+		})
+	})
+
+	t.Run("complex query with prefixes and OR", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "field1:value1 field2:value2 | field3:value3",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "field1:value1", Prefixes: []string{"field1"}},
-							{Pattern: "field2:value2", Prefixes: []string{"field2"}},
+							{Pattern: "field1:value1", RegPattern: "field1\\:value1", Keywords: []string{"field1", "value1"}},
+							{Pattern: "field2:value2", RegPattern: "field2\\:value2", Keywords: []string{"field2", "value2"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "field3:value3", Prefixes: []string{"field3"}},
+							{Pattern: "field3:value3", RegPattern: "field3\\:value3", Keywords: []string{"field3", "value3"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "quoted query for exact matching",
+		})
+	})
+
+	t.Run("quoted query for exact matching", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"test1 test2\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"test1 test2\"", Prefixes: []string{"test1", "test2"}}, // We expect all valid prefixes to be used
+							{Pattern: "\"test1 test2\"", RegPattern: "test1 test2", Keywords: []string{"test1", "test2"}}, // We expect all valid prefixes to be used
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "mixed regular and quoted terms",
+		})
+	})
+
+	t.Run("mixed regular and quoted terms", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "regular \"quoted phrase\" another",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "regular", Prefixes: []string{"regular"}},
-							{Pattern: "\"quoted phrase\"", Prefixes: []string{"quoted", "phrase"}},
-							{Pattern: "another", Prefixes: []string{"another"}},
+							{Pattern: "regular", RegPattern: "regular", Keywords: []string{"regular"}},
+							{Pattern: "\"quoted phrase\"", RegPattern: "quoted phrase", Keywords: []string{"quoted", "phrase"}},
+							{Pattern: "another", RegPattern: "another", Keywords: []string{"another"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "quoted term with OR clause",
+		})
+	})
+
+	t.Run("quoted term with OR clause", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"exact phrase\" | regular term",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"exact phrase\"", Prefixes: []string{"exact", "phrase"}},
+							{Pattern: "\"exact phrase\"", RegPattern: "exact phrase", Keywords: []string{"exact", "phrase"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "regular", Prefixes: []string{"regular"}},
-							{Pattern: "term", Prefixes: []string{"term"}},
+							{Pattern: "regular", RegPattern: "regular", Keywords: []string{"regular"}},
+							{Pattern: "term", RegPattern: "term", Keywords: []string{"term"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "quoted term with special characters",
+		})
+	})
+
+	t.Run("quoted term with special characters", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"test.with[special]chars\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"test.with[special]chars\"", Prefixes: []string{"test"}}, // First word before special chars
+							{
+								Pattern:    "\"test.with[special]chars\"",
+								RegPattern: "test\\.with\\[special\\]chars",
+								Keywords:   []string{"test", "with", "special", "chars"},
+							},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "single word quoted term",
+		})
+	})
+
+	t.Run("single word quoted term", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"singleword\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"singleword\"", Prefixes: []string{"singleword"}},
+							{Pattern: "\"singleword\"", RegPattern: "singleword", Keywords: []string{"singleword"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "quoted phrase with multiple words and punctuation",
+		})
+	})
+
+	t.Run("quoted phrase with multiple words and punctuation", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"hello, world! how are you?\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"hello, world! how are you?\"", Prefixes: []string{"hello", "world", "how", "are", "you"}},
+							{
+								Pattern:    "\"hello, world! how are you?\"",
+								RegPattern: "hello, world! how are you\\?",
+								Keywords:   []string{"hello", "world", "how", "are", "you"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "quoted phrase with numbers and symbols",
+		})
+	})
+
+	t.Run("quoted phrase with numbers and symbols", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"version 1.2.3-beta+build.456\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"version 1.2.3-beta+build.456\"", Prefixes: []string{"version"}},
+							{
+								Pattern:    "\"version 1.2.3-beta+build.456\"",
+								RegPattern: "version 1\\.2\\.3-beta\\+build\\.456",
+								Keywords:   []string{"version", "1.2.3", "beta", "build", "456"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "mixed quoted phrases with AND and OR operators",
+		})
+	})
+
+	t.Run("mixed quoted phrases with AND and OR operators", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"first phrase\" second | third \"fourth phrase\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"first phrase\"", Prefixes: []string{"first", "phrase"}},
-							{Pattern: "second", Prefixes: []string{"second"}},
+							{Pattern: "\"first phrase\"", RegPattern: "first phrase", Keywords: []string{"first", "phrase"}},
+							{Pattern: "second", RegPattern: "second", Keywords: []string{"second"}},
 						},
 					},
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "third", Prefixes: []string{"third"}},
-							{Pattern: "\"fourth phrase\"", Prefixes: []string{"fourth", "phrase"}},
+							{Pattern: "third", RegPattern: "third", Keywords: []string{"third"}},
+							{Pattern: "\"fourth phrase\"", RegPattern: "fourth phrase", Keywords: []string{"fourth", "phrase"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "quoted phrase with escaped quotes",
+		})
+	})
+
+	t.Run("quoted phrase with escaped quotes", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "\"code with \\\"quoted\\\" text\"",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "\"code with \\\"quoted\\\" text\"", Prefixes: []string{"code", "with", "text"}},
+							{
+								Pattern:    "\"code with \\\"quoted\\\" text\"",
+								RegPattern: "code with \"quoted\" text",
+								Keywords:   []string{"code", "with", "quoted", "text"}},
 						},
 					},
 				},
 			},
-		},
-		{
-			name:  "term with dash",
+		})
+	})
+
+	t.Run("with wild match", func(t *testing.T) {
+		runCase(t, OneCase{
+			query: "test*abc?defg-hij.efg",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{
+								Pattern:    "test*abc?defg-hij.efg",
+								RegPattern: "test.{0,4}abc.?defg-hij\\.efg",
+								Keywords:   []string{"test", "hij", "efg"}},
+						},
+					},
+				},
+			},
+		})
+
+		runCase(t, OneCase{
+			query: "abc?--defg*--hij",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "abc?--defg*--hij", RegPattern: "abc.?--defg.{0,4}--hij", Keywords: []string{"abc", "defg", "hij"}},
+						},
+					},
+				},
+			},
+		})
+
+		runCase(t, OneCase{
+			query: "abc?..defg",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "abc?..defg", RegPattern: "abc.?\\.\\.defg", Keywords: []string{"abc", "defg"}},
+						},
+					},
+				},
+			},
+		})
+	})
+
+	t.Run("term with dash", func(t *testing.T) {
+		runCase(t, OneCase{
 			query: "exactly-with-dash another",
 			want: &SimpleContentSearchEngine{
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "exactly-with-dash", Prefixes: []string{"exactly-with-dash"}},
-							{Pattern: "another", Prefixes: []string{"another"}},
+							{Pattern: "exactly-with-dash", RegPattern: "exactly-with-dash", Keywords: []string{"exactly", "with", "dash"}},
+							{Pattern: "another", RegPattern: "another", Keywords: []string{"another"}},
 						},
 					},
 				},
 			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := &SimpleContentSearchEngine{}
-			err := got.Compile(tt.query, true)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseQuerySimple() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if tt.wantErr {
-				return
-			}
-
-			if len(got.OrClauses) != len(tt.want.OrClauses) {
-				t.Errorf("ParseQuerySimple() got %d OR clauses, want %d", len(got.OrClauses), len(tt.want.OrClauses))
-				return
-			}
-
-			for i, orClause := range got.OrClauses {
-				wantOrClause := tt.want.OrClauses[i]
-				if len(orClause.AndTerms) != len(wantOrClause.AndTerms) {
-					t.Errorf("OR clause %d: got %d AND patterns, want %d", i, len(orClause.AndTerms), len(wantOrClause.AndTerms))
-					continue
-				}
-
-				for j, pattern := range orClause.AndTerms {
-					wantPattern := wantOrClause.AndTerms[j]
-					if pattern.Pattern != wantPattern.Pattern {
-						t.Errorf("pattern %d in OR clause %d: got pattern %q, want %q", j, i, pattern.Pattern, wantPattern.Pattern)
-					}
-					if len(pattern.Prefixes) != len(wantPattern.Prefixes) {
-						t.Errorf("pattern %d in OR clause %d: got %d prefixes, want %d", j, i, len(pattern.Prefixes), len(wantPattern.Prefixes))
-						continue
-					}
-					for k, prefix := range pattern.Prefixes {
-						if prefix != wantPattern.Prefixes[k] {
-							t.Errorf("pattern %d in OR clause %d: prefix %d got %q, want %q",
-								j, i, k, prefix, wantPattern.Prefixes[k])
-						}
-					}
-				}
-			}
 		})
-	}
+	})
+
+	t.Run("leading special chars", func(t *testing.T) {
+		runCase(t, OneCase{
+			query: "->with-pointer",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "->with-pointer", RegPattern: "->with-pointer", Keywords: []string{"with", "pointer"}},
+						},
+					},
+				},
+			},
+		})
+
+		runCase(t, OneCase{
+			query: "$with-pointer",
+			want: &SimpleContentSearchEngine{
+				OrClauses: []*SimpleContentSearchEngineAndClause{
+					{
+						AndTerms: []*SimpleContentSearchEngineTerm{
+							{Pattern: "$with-pointer", RegPattern: "\\$with-pointer", Keywords: []string{"with", "pointer"}},
+						},
+					},
+				},
+			},
+		})
+	})
 }
 
 // Add a new test function to verify TokenizeWithQuotes works correctly
 func TestTokenizeWithQuotes(t *testing.T) {
-	tests := []struct {
-		name  string
+	type OneCase struct {
 		input string
 		want  []string
-	}{
-		{
-			name:  "simple space-separated terms",
+	}
+
+	runCase := func(t *testing.T, tt OneCase) {
+		got := TokenizeWithQuotes(tt.input)
+
+		if !assert.Equal(t, len(tt.want), len(got), "TokenizeWithQuotes() token count mismatch for input: %s", tt.input) {
+			return
+		}
+
+		for i, token := range got {
+			assert.Equal(t, tt.want[i], token, "TokenizeWithQuotes() token %d mismatch for input: %s", i, tt.input)
+		}
+	}
+
+	t.Run("simple space-separated terms", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "term1 term2 term3",
 			want:  []string{"term1", "term2", "term3"},
-		},
-		{
-			name:  "pattern with prefix",
+		})
+	})
+	t.Run("pattern with prefix", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "prefix:value",
 			want:  []string{"prefix:value"},
-		},
-		{
-			name:  "quoted query for exact matching",
+		})
+	})
+	t.Run("quoted query for exact matching", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "\"test1 test2\"",
 			want:  []string{"\"test1 test2\""},
-		},
-		{
-			name:  "mixed regular and quoted terms",
+		})
+	})
+	t.Run("mixed regular and quoted terms", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "term1 \"quoted phrase\" term2",
 			want:  []string{"term1", "\"quoted phrase\"", "term2"},
-		},
-		{
-			name:  "quoted term with OR clause",
+		})
+	})
+	t.Run("quoted term with OR clause", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "\"exact phrase\" | regular term",
 			want:  []string{"\"exact phrase\"", "|", "regular", "term"},
-		},
-		{
-			name:  "quoted term with special characters",
+		})
+	})
+	t.Run("quoted term with special characters", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "\"test.with[special]chars\"",
 			want:  []string{"\"test.with[special]chars\""},
-		},
-		{
-			name:  "single word quoted term",
+		})
+	})
+	t.Run("single word quoted term", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "\"singleword\"",
 			want:  []string{"\"singleword\""},
-		},
-		{
-			name:  "multiple quoted phrases",
+		})
+	})
+	t.Run("multiple quoted phrases", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "\"first phrase\" regular \"second phrase\"",
 			want:  []string{"\"first phrase\"", "regular", "\"second phrase\""},
-		},
-		{
-			name:  "quoted phrase with internal quotes",
+		})
+	})
+	t.Run("quoted phrase with internal quotes", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "before \"phrase with \\\"internal quotes\\\"\" after",
 			want:  []string{"before", "\"phrase with \\\"internal quotes\\\"\"", "after"},
-		},
-		{
-			name:  "unclosed quote",
+		})
+	})
+	t.Run("unclosed quote", func(t *testing.T) {
+		runCase(t, OneCase{
 			input: "term1 \"unclosed quote",
 			want:  []string{"term1", "\"unclosed quote"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := TokenizeWithQuotes(tt.input)
-
-			if len(got) != len(tt.want) {
-				t.Errorf("TokenizeWithQuotes() got %d tokens, want %d tokens", len(got), len(tt.want))
-				return
-			}
-
-			for i, token := range got {
-				if token != tt.want[i] {
-					t.Errorf("TokenizeWithQuotes() token %d: got %q, want %q", i, token, tt.want[i])
-				}
-			}
 		})
-	}
+	})
 }
 
 // Test helper functions for quoted phrases
 func TestQuoteHelpers(t *testing.T) {
-	quotedTests := []struct {
-		input string
-		want  bool
-	}{
-		{"\"quoted\"", true},
-		{"notquoted", false},
-		{"\"multiple words\"", true},
-		{"\"", false},
-		{"\"\"", true},
-		{"\"partial", false},
-		{"partial\"", false},
-	}
-
-	for _, tt := range quotedTests {
-		t.Run("IsQuotedPhrase_"+tt.input, func(t *testing.T) {
-			got := IsQuotedPhrase(tt.input)
-			if got != tt.want {
-				t.Errorf("IsQuotedPhrase(%q) = %v, want %v", tt.input, got, tt.want)
-			}
-		})
-	}
+	// Test cases for IsQuotedPhrase
+	t.Run("IsQuotedPhrase_empty string", func(t *testing.T) {
+		input := ""
+		want := false
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_\"quoted\"", func(t *testing.T) {
+		input := "\"quoted\""
+		want := true
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_notquoted", func(t *testing.T) {
+		input := "notquoted"
+		want := false
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_\"multiple words\"", func(t *testing.T) {
+		input := "\"multiple words\""
+		want := true
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_\"", func(t *testing.T) {
+		input := "\""
+		want := false
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_\"\"", func(t *testing.T) {
+		input := "\"\""
+		want := true
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_\"partial", func(t *testing.T) {
+		input := "\"partial"
+		want := false
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
+	t.Run("IsQuotedPhrase_partial\"", func(t *testing.T) {
+		input := "partial\""
+		want := false
+		got := IsQuotedPhrase(input)
+		assert.Equal(t, want, got, "IsQuotedPhrase(%q)", input)
+	})
 
 	// Test UnwrapQuotes
-	unwrapTests := []struct {
-		input string
-		want  string
-	}{
-		{"\"quoted\"", "quoted"},
-		{"notquoted", "notquoted"},
-		{"\"multiple words\"", "multiple words"},
-		{"\"\"", ""},
-	}
-
-	for _, tt := range unwrapTests {
-		t.Run("UnwrapQuotes_"+tt.input, func(t *testing.T) {
-			got := UnwrapQuotes(tt.input)
-			if got != tt.want {
-				t.Errorf("UnwrapQuotes(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func CreateSimpleEngine(t *testing.T, query string, caseSensitive bool, maxWildLen, maxKwDist int) *SimpleContentSearchEngine {
-	eng := NewSimpleContentSearchEngine(nil, maxWildLen, maxKwDist)
-	assert.NoError(t, eng.Compile(query, caseSensitive))
-	return eng
+	t.Run("UnwrapQuotes_\"quoted\"", func(t *testing.T) {
+		input := "\"quoted\""
+		want := "quoted"
+		got := UnwrapQuotes(input)
+		assert.Equal(t, want, got, "UnwrapQuotes(%q)", input)
+	})
+	t.Run("UnwrapQuotes_\"multiple words\"", func(t *testing.T) {
+		input := "\"multiple words\""
+		want := "multiple words"
+		got := UnwrapQuotes(input)
+		assert.Equal(t, want, got, "UnwrapQuotes(%q)", input)
+	})
+	t.Run("UnwrapQuotes_\"\"", func(t *testing.T) {
+		input := "\"\""
+		want := ""
+		got := UnwrapQuotes(input)
+		assert.Equal(t, want, got, "UnwrapQuotes(%q)", input)
+	})
 }
 
 func TestContentLineMatch(t *testing.T) {
@@ -629,6 +770,12 @@ func TestContentLineMatch(t *testing.T) {
 		eng = CreateSimpleEngine(t, "test", true, 4, 4)
 		actual = eng.IsLineMatch("This is a attest line.")
 		assert.Equal(t, [][]int{{12, 16}}, actual)
+	})
+
+	t.Run("Leading special characters", func(t *testing.T) {
+		eng := CreateSimpleEngine(t, ".test", true, 4, 4)
+		actual := eng.IsLineMatch(".test line")
+		assert.Equal(t, [][]int{{0, 5}}, actual)
 	})
 
 	t.Run("Exact phrase matching", func(t *testing.T) {
