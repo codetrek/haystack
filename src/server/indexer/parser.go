@@ -22,9 +22,10 @@ type ParseFile struct {
 
 // Parser handles concurrent file parsing operations
 type Parser struct {
-	ch   chan ParseFile
-	stop chan struct{}
-	done chan struct{}
+	ch      chan ParseFile
+	stop    chan struct{}
+	done    chan struct{}
+	workers int
 }
 
 // NewParser creates a new Parser instance
@@ -38,7 +39,10 @@ func NewParser() *Parser {
 
 // Start initializes the parser with worker goroutines
 func (p *Parser) Start(wg *sync.WaitGroup) {
-	for i := 0; i < conf.Get().Server.IndexWorkers; i++ {
+	// Set worker count based on configuration
+	p.workers = conf.Get().Server.IndexWorkers
+
+	for i := range p.workers {
 		wg.Add(1)
 		go p.run(i, wg)
 	}
@@ -46,7 +50,7 @@ func (p *Parser) Start(wg *sync.WaitGroup) {
 
 func (p *Parser) Stop() {
 	close(p.stop)
-	for range conf.Get().Server.IndexWorkers {
+	for range p.workers {
 		<-p.done
 	}
 	close(p.done)
