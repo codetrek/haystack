@@ -27,6 +27,11 @@ func NewEmbeddingEngine() *EmbeddingEngine {
 }
 
 func (p *EmbeddingEngine) Start(wg *sync.WaitGroup) {
+	if !conf.Get().Embedding.EnvInstalled || !conf.Get().Embedding.Enabled {
+		log.Println("[EmbeddingEngine] EmbeddingEngine did not start")
+		return
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -97,6 +102,10 @@ func (p *EmbeddingEngine) processPendingEmbeddings() {
 }
 
 func (p *EmbeddingEngine) Stop() {
+	if !conf.Get().Embedding.EnvInstalled || !conf.Get().Embedding.Enabled {
+		return
+	}
+
 	close(p.stop)
 	log.Printf("[EmbeddingEngine] EmbeddingEngine stopped")
 	symbols.EmbeddingStop()
