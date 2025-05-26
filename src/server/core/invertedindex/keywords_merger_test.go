@@ -73,6 +73,8 @@ func newMockBatch(db pebble.DB) *mockBatchWrite {
 
 // Helper function to verify write operations and document IDs
 func verifyWriteOperations(t *testing.T, mockBatch *mockBatchWrite, index *InvertedIndex, expectedWriteCount int, expectedDocIDs int) {
+	t.Helper()
+
 	// Check write calls
 	if len(mockBatch.tableIds) != expectedWriteCount {
 		t.Errorf("Expected %d writes, got %d", expectedWriteCount, len(mockBatch.tableIds))

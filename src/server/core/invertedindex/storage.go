@@ -8,28 +8,26 @@ import (
 	"github.com/ai-microsoft/haystack/utils/queue"
 )
 
-const Shards = 8
-
 var (
 	db             pebble.DB
 	mpscQueue      *queue.Mpsc
-	closeStorage   context.CancelFunc
+	cancelFlush    context.CancelFunc
 	keywordsMerger *KeywordsMerger
 )
 
 func Init(database pebble.DB, mpsc *queue.Mpsc) error {
-	var ctxCloseDB context.Context
-	ctxCloseDB, closeStorage = context.WithCancel(context.Background())
+	var flushDB context.Context
+	flushDB, cancelFlush = context.WithCancel(context.Background())
 	db = database
 	mpscQueue = mpsc
 
 	go func() {
-		timer := time.NewTicker(1 * time.Second)
+		timer := time.NewTicker(FlushTicker)
 		defer timer.Stop()
 
 		for {
 			select {
-			case <-ctxCloseDB.Done():
+			case <-flushDB.Done():
 				return
 			case <-timer.C:
 				mpscQueue.Add(&flushPendingWritesTask{
@@ -46,7 +44,7 @@ func Init(database pebble.DB, mpsc *queue.Mpsc) error {
 }
 
 func CloseAndWait() {
-	closeStorage()
+	cancelFlush()
 	keywordsMerger.Shutdown()
 	keywordsMerger.Wait()
 

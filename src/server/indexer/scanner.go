@@ -65,7 +65,7 @@ func (s *Scanner) run(wg *sync.WaitGroup) {
 			case <-s.stop:
 				close(s.done)
 				return
-			case <-time.After(500 * time.Millisecond):
+			case <-time.After(100 * time.Millisecond):
 				continue
 			}
 		}

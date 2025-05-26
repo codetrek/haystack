@@ -13,6 +13,12 @@ var (
 	lastFlushDeleteTime = time.Now()
 )
 
+var (
+	FlushTicker        = 1 * time.Second
+	FlushWaitTimeout   = 2 * time.Second
+	FlushWaitBatchSize = 50
+)
+
 type BufferedWrites struct {
 }
 
@@ -76,7 +82,8 @@ func flushPendingWrites(closing bool) {
 		for kw, relatedDocs := range wp.InvertedIndex {
 			// Skip the keyword if it has been updated in the last 2 seconds
 			// and has less than 50 documents
-			if !closing && len(relatedDocs.DocIds) < 50 && time.Since(relatedDocs.UpdatedAt) < 2*time.Second {
+			if !closing && len(relatedDocs.DocIds) < FlushWaitBatchSize &&
+				time.Since(relatedDocs.UpdatedAt) < FlushWaitTimeout {
 				continue
 			}
 
