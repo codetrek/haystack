@@ -12,6 +12,7 @@ import (
 	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
 	"github.com/ai-microsoft/haystack/utils/queue"
 )
@@ -95,6 +96,9 @@ func TestWorkspaceManagement(t *testing.T) {
 
 	documents.Init(db, mpsc)
 	defer documents.CloseAndWait()
+
+	symbols.Init(db, mpsc)
+	defer symbols.CloseAndWait()
 
 	// Initialize workspace manager
 	err = Init(db)
@@ -194,6 +198,9 @@ func TestWorkspaceConcurrency(t *testing.T) {
 
 	documents.Init(db, mpsc)
 	defer documents.CloseAndWait()
+
+	symbols.Init(db, mpsc)
+	defer symbols.CloseAndWait()
 
 	// Initialize workspace manager
 	err = Init(db)

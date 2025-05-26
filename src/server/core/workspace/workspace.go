@@ -12,9 +12,10 @@ import (
 )
 
 type IndexingStatus struct {
-	StartedAt    *time.Time
-	TotalFiles   int
-	IndexedFiles int
+	StartedAt         *time.Time
+	TotalFiles        int
+	IndexedFiles      int
+	SymbolParsedFiles int
 }
 
 type Workspace struct {
@@ -46,6 +47,15 @@ func (w *Workspace) AddIndexingFiles(n int) {
 
 	if w.indexingStatus != nil {
 		w.indexingStatus.IndexedFiles += n
+	}
+}
+
+func (w *Workspace) AddSymbolParsedFiles(n int) {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	if w.indexingStatus != nil {
+		w.indexingStatus.SymbolParsedFiles += n
 	}
 }
 
@@ -87,9 +97,10 @@ func (w *Workspace) StartIndexing() error {
 
 	now := time.Now()
 	w.indexingStatus = &IndexingStatus{
-		StartedAt:    &now,
-		TotalFiles:   0,
-		IndexedFiles: 0,
+		StartedAt:         &now,
+		TotalFiles:        0,
+		IndexedFiles:      0,
+		SymbolParsedFiles: 0,
 	}
 
 	return nil

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ai-microsoft/haystack/server/core/documents"
+	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
 	"github.com/ai-microsoft/haystack/shared/types"
 	"github.com/ai-microsoft/haystack/utils"
@@ -145,6 +146,7 @@ func Create(workspacePath string) (*Workspace, error) {
 	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
 
 	documents.Create(workspace.Id, workspacePath)
+	symbols.Create(workspace.Id, workspacePath)
 	return workspace, nil
 }
 
@@ -163,6 +165,7 @@ func Delete(workspaceId int) error {
 
 	internal.Delete(workspaceId)
 	documents.Delete(workspaceId)
+	symbols.Delete(workspace.Id)
 
 	return nil
 }

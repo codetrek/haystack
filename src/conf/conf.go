@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	DefaultMaxFileSize  = 2 * 1024 * 1024
-	DefaultIndexWorkers = 4
-	DefaultPort         = 13134
+	DefaultMaxFileSize         = 2 * 1024 * 1024
+	DefaultIndexWorkers        = 4
+	DefaultSymbolParserWorkers = 2
+	DefaultPort                = 13134
 
 	DefaultMaxResults        = 100000
 	DefaultMaxResultsPerFile = 500
@@ -29,6 +30,8 @@ const (
 
 	DefaultMaxSearchWildcardLength  = 24
 	DefaultMaxSearchKeywordDistance = 32
+
+	DefaultEmbeddingPort = 13144
 )
 
 var (
@@ -56,19 +59,29 @@ type Search struct {
 }
 
 type Server struct {
-	MaxFileSize  int64         `yaml:"max_file_size,omitempty"`
-	IndexWorkers int           `yaml:"index_workers,omitempty"`
-	Filters      types.Filters `yaml:"filters,omitempty"`
-	Search       Search        `yaml:"search,omitempty"`
-	CacheSize    int64         `yaml:"cache_size,omitempty"`
+	MaxFileSize         int64         `yaml:"max_file_size,omitempty"`
+	IndexWorkers        int           `yaml:"index_workers,omitempty"`
+	SymbolParserWorkers int           `yaml:"symbol_parser_workers,omitempty"`
+	Filters             types.Filters `yaml:"filters,omitempty"`
+	Search              Search        `yaml:"search,omitempty"`
+	CacheSize           int64         `yaml:"cache_size,omitempty"`
 
 	LoggingStdout bool `yaml:"logging_stdout,omitempty"`
 }
 
+type Embedding struct {
+	Enabled          bool `yaml:"enabled,omitempty"`
+	Port             int  `yaml:"port,omitempty"`
+	EnvInstalled     bool `yaml:"env_installed,omitempty"`
+	EmbeddingPrompt  bool `yaml:"embedding_prompt,omitempty"`
+	EmbeddingSymbols bool `yaml:"embedding_symbols,omitempty"`
+}
+
 type Conf struct {
-	Global Global `yaml:"global,omitempty"`
-	Client Client `yaml:"client,omitempty"`
-	Server Server `yaml:"server,omitempty"`
+	Global    Global    `yaml:"global,omitempty"`
+	Client    Client    `yaml:"client,omitempty"`
+	Server    Server    `yaml:"server,omitempty"`
+	Embedding Embedding `yaml:"embedding,omitempty"`
 
 	ForTest struct {
 		Path string `yaml:"path,omitempty"`
@@ -88,9 +101,10 @@ var conf = &Conf{
 		},
 	},
 	Server: Server{
-		MaxFileSize:  DefaultMaxFileSize,
-		CacheSize:    DefaultCacheSize,
-		IndexWorkers: DefaultIndexWorkers,
+		MaxFileSize:         DefaultMaxFileSize,
+		CacheSize:           DefaultCacheSize,
+		IndexWorkers:        DefaultIndexWorkers,
+		SymbolParserWorkers: DefaultSymbolParserWorkers,
 		Filters: types.Filters{
 			Include: DefaultInclude,
 			Exclude: types.Exclude{
@@ -107,6 +121,13 @@ var conf = &Conf{
 				MaxFilesResults:   DefaultMaxFiles,
 			},
 		},
+	},
+	Embedding: Embedding{
+		Enabled:          false,
+		Port:             DefaultEmbeddingPort,
+		EnvInstalled:     false,
+		EmbeddingPrompt:  false,
+		EmbeddingSymbols: false,
 	},
 }
 
@@ -158,6 +179,10 @@ func Load() error {
 		conf.Server.IndexWorkers = runtime.NumCPU()
 	}
 
+	if conf.Server.SymbolParserWorkers <= 0 || conf.Server.SymbolParserWorkers > runtime.NumCPU() {
+		conf.Server.SymbolParserWorkers = runtime.NumCPU()
+	}
+
 	if conf.Server.MaxFileSize <= 0 {
 		conf.Server.MaxFileSize = DefaultMaxFileSize
 	}
@@ -207,6 +232,10 @@ func Load() error {
 	if conf.Client.DefaultLimit.MaxFilesResults <= 0 ||
 		conf.Client.DefaultLimit.MaxFilesResults > DefaultMaxFiles {
 		conf.Client.DefaultLimit.MaxFilesResults = DefaultMaxFiles
+	}
+
+	if conf.Embedding.Port <= 0 || conf.Embedding.Port > 65535 {
+		conf.Embedding.Port = DefaultEmbeddingPort
 	}
 
 	return nil

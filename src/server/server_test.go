@@ -19,6 +19,7 @@ import (
 	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/server/searcher"
@@ -172,6 +173,9 @@ func startTestServer(t *testing.T) func() {
 	assert.NoError(t, err)
 
 	err = workspace.Init(db)
+	assert.NoError(t, err)
+
+	err = symbols.Init(db, mpsc)
 	assert.NoError(t, err)
 
 	indexer.Run(wg)

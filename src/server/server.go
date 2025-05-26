@@ -10,6 +10,7 @@ import (
 	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/server/searcher"
@@ -62,6 +63,12 @@ func Run() {
 		return
 	}
 
+	if err := symbols.Init(db, mpsc); err != nil {
+		log.Fatal("[Server] Error initializing symbols:", err)
+		running.Shutdown()
+		return
+	}
+
 	indexer.Run(wg)
 	searcher.Run(wg)
 
@@ -74,6 +81,7 @@ func Run() {
 	wg.Wait()
 	documents.CloseAndWait()
 	invertedindex.CloseAndWait()
+	symbols.CloseAndWait()
 	mpsc.Stop()
 
 	// DB could be closed safely now!

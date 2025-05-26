@@ -85,3 +85,31 @@ type SearchFilesResponse struct {
 	Message string            `json:"message"`
 	Data    SearchFilesResult `json:"data,omitempty"`
 }
+
+type SearchSymbolsRequest struct {
+	Workspace string       `json:"workspace,omitempty"`
+	Query     string       `json:"query,omitempty"`
+	Fuzzy     bool         `json:"fuzzy,omitempty"`
+	Limit     *SearchLimit `json:"limit,omitempty"`
+}
+
+type SymbolsFileMatch struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+}
+
+type SymbolContent struct {
+	Name  string             `json:"name"`
+	Files []SymbolsFileMatch `json:"files"`
+}
+
+type SymbolsContentResults struct {
+	Query   string          `json:"query"`
+	Symbols []SymbolContent `json:"symbols,omitempty"`
+}
+
+type SearchSymbolsResponse struct {
+	Code    int                   `json:"code"`
+	Message string                `json:"message"`
+	Data    SymbolsContentResults `json:"data,omitempty"`
+}

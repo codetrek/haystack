@@ -65,6 +65,7 @@ var NotIndexiableFileExts = map[string]struct{}{
 }
 
 func GetDocumentId(fullPath string) string {
+	fullPath = filepath.ToSlash(fullPath)
 	v := md5.Sum([]byte(fullPath))
 	return string(v[:])
 }

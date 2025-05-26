@@ -1,3 +1,11 @@
+# github.com/AntoineAugusti/wordsegmentation v0.0.0-20190117104728-17d202823a3d
+## explicit
+github.com/AntoineAugusti/wordsegmentation
+github.com/AntoineAugusti/wordsegmentation/corpus
+github.com/AntoineAugusti/wordsegmentation/data/english
+github.com/AntoineAugusti/wordsegmentation/helpers
+github.com/AntoineAugusti/wordsegmentation/models
+github.com/AntoineAugusti/wordsegmentation/parsers
 # github.com/DataDog/zstd v1.5.7
 ## explicit; go 1.14
 github.com/DataDog/zstd
@@ -124,6 +132,9 @@ github.com/golang/snappy
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
+# github.com/kennygrant/sanitize v1.2.4
+## explicit
+github.com/kennygrant/sanitize
 # github.com/klauspost/compress v1.18.0
 ## explicit; go 1.22
 github.com/klauspost/compress

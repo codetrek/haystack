@@ -8,15 +8,18 @@ import (
 	"sync"
 
 	"github.com/ai-microsoft/haystack/server/core/documents"
+	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/shared/running"
 	"github.com/ai-microsoft/haystack/shared/types"
 )
 
 var (
-	scanner = NewScanner()
-	parser  = NewParser()
-	writer  = NewWriter()
+	scanner         = NewScanner()
+	parser          = NewParser()
+	writer          = NewWriter()
+	symbolParser    = NewSymbolParser()
+	embeddingEngine = NewEmbeddingEngine()
 )
 
 // Run starts the indexer components in separate goroutines.
@@ -26,6 +29,8 @@ func Run(wg *sync.WaitGroup) {
 	scanner.Start(wg)
 	parser.Start(wg)
 	writer.Start(wg)
+	symbolParser.Start(wg)
+	embeddingEngine.Start(wg)
 	log.Println("[Indexer] Started.")
 
 	go func() {
@@ -34,6 +39,8 @@ func Run(wg *sync.WaitGroup) {
 		scanner.Stop()
 		parser.Stop()
 		writer.Stop()
+		symbolParser.Stop()
+		embeddingEngine.Stop()
 		log.Println("[Indexer] Stopped.")
 	}()
 }
@@ -108,6 +115,10 @@ func RemoveFile(workspace *workspace.Workspace, relPath string) error {
 
 	docid := GetDocumentId(fullPath)
 	if err := documents.DeleteDocument(workspace.Id, docid); err != nil {
+		return err
+	}
+
+	if err := symbols.DeleteDocument(workspace.Id, docid); err != nil {
 		return err
 	}
 

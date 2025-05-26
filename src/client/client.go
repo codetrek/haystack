@@ -25,6 +25,8 @@ func processCommand(args []string) {
 		handleSearch(args[1:])
 	case "files":
 		handleSearchFiles(args[1:])
+	case "symbols":
+		handleSymbols(args[1:])
 	case "workspace":
 		handleWorkspace(args[1:])
 	case "server":

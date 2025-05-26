@@ -87,6 +87,8 @@ func (p *Parser) processFile(file ParseFile) error {
 
 	writer.Add(file.Workspace, doc, newDoc)
 
+	symbolParser.Add(file.Workspace, file.RelFilePath)
+
 	file.Workspace.AddIndexingFiles(1)
 
 	return nil

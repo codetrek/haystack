@@ -30,6 +30,21 @@ func Search(tableId int, query string, limit int) SearchResult {
 	return results
 }
 
+func GetDocs(tableId int, key string) SearchResult {
+	results := SearchResult{
+		DocIds: make(map[string]struct{}),
+	}
+
+	db.Scan(encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
+		for _, docid := range decodeInvertedValue(value) {
+			results.DocIds[docid] = struct{}{}
+		}
+		return true
+	})
+
+	return results
+}
+
 // Update updates the keywords index for a document
 // It will add the document to the keywords index and remove the document from the keywords index
 // if len(newKeywords) == 0, it will remove the document from the keywords index

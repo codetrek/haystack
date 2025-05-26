@@ -15,6 +15,12 @@ const (
 	KeyTypeInvertedRow         = byte(20)
 	KeyTypeInvertedTable       = byte(21)
 	KeyTypeInvertedNextTableId = byte(22)
+
+	// Symbol types
+	KeyTypeSymbol             = byte(30) // symbol inverted id
+	KeyTypeSymbolDocFunctions = byte(31) // "df:"
+	KeyTypeEmbeddingFuncFlag  = byte(32) // "ef:"
+	KeyTypeSymbolWords        = byte(33) // symbol words inverted id
 )
 
 func IsKeyType(key string, keyType byte) bool {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/searcher"
 	"github.com/ai-microsoft/haystack/shared/types"
@@ -190,6 +191,83 @@ func handleSearchFiles(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	json.NewEncoder(w).Encode(types.SearchFilesResponse{
+		Code:    0,
+		Message: "Ok",
+		Data:    result,
+	})
+}
+
+func handleSearchSymbols(w http.ResponseWriter, r *http.Request) {
+	var request types.SearchSymbolsRequest
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if request.Workspace == "" {
+		json.NewEncoder(w).Encode(types.SearchSymbolsResponse{
+			Code:    1,
+			Message: "Workspace is required",
+		})
+		return
+	}
+
+	limit := conf.Get().Server.Search.Limit
+	if request.Limit != nil {
+		if request.Limit.MaxResults > 0 && request.Limit.MaxResults < limit.MaxResults {
+			limit.MaxResults = request.Limit.MaxResults
+		}
+
+		if request.Limit.MaxResultsPerFile > 0 && request.Limit.MaxResultsPerFile < limit.MaxResultsPerFile {
+			limit.MaxResultsPerFile = request.Limit.MaxResultsPerFile
+		}
+	}
+	request.Limit = &limit
+
+	// Normalize the workspace path
+	// If the path is not absolute, return an error
+	workspacePath := utils.NormalizePath(request.Workspace)
+	if !filepath.IsAbs(workspacePath) {
+		json.NewEncoder(w).Encode(types.SearchSymbolsResponse{
+			Code:    1,
+			Message: "Workspace is not absolute",
+		})
+		return
+	}
+
+	// Get the workspace by path
+	// If the workspace is not found, return an error
+	workspace, err := workspace.GetByPath(workspacePath)
+	if err != nil {
+		json.NewEncoder(w).Encode(types.SearchSymbolsResponse{
+			Code:    1,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	// If the query is empty, return an error
+	if request.Query == "" {
+		json.NewEncoder(w).Encode(types.SearchSymbolsResponse{
+			Code:    1,
+			Message: "Query is required",
+		})
+		return
+	}
+
+	start := time.Now()
+	result, err := searcher.SearchSymbols(workspace, &request)
+	defer func() {
+		req, _ := json.Marshal(request)
+		log.Printf("[HTTP] Process /api/v1/search/symbols `%s`: took %s, found %d results, err: %s",
+			string(req), time.Since(start), len(result.Symbols), err)
+	}()
+
+	json.NewEncoder(w).Encode(types.SearchSymbolsResponse{
 		Code:    0,
 		Message: "Ok",
 		Data:    result,
