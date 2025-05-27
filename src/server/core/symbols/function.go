@@ -8,6 +8,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex/tokenizer"
 	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
@@ -194,7 +195,7 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, 
 
 	wordsInNewFuncNames := []string{}
 	for _, fn := range newFuncNames {
-		words := SplitCamelCase(fn)
+		words := tokenizer.TokenizeForIndex(fn)
 		for _, word := range words {
 			wordsInNewFuncNames = append(wordsInNewFuncNames, strings.ToLower(word))
 		}
@@ -202,7 +203,7 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, 
 
 	wordsInOldFuncNames := []string{}
 	for _, fn := range oldFuncNames {
-		words := SplitCamelCase(fn)
+		words := tokenizer.TokenizeForIndex(fn)
 		for _, word := range words {
 			wordsInOldFuncNames = append(wordsInOldFuncNames, strings.ToLower(word))
 		}

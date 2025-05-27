@@ -70,25 +70,16 @@ func getFunctionFileMatch(workspace *workspace.Workspace, queryFunctionWords []s
 	symbolFiles := make(map[string][]types.SymbolsFileMatch)
 
 	for _, f := range functions {
-		functionWords := symbols.SplitCamelCase(f.Name)
-
+		fn := strings.ToLower(f.Name)
 		index := 0
 		matched := true
 		for _, queryWord := range queryFunctionWords {
-
-			found := false
-			for i, functionWord := range functionWords[index:] {
-				if strings.HasPrefix(strings.ToLower(functionWord), strings.ToLower(queryWord)) {
-					index += i
-					found = true
-					break
-				}
-			}
-
-			if !found {
+			pos := strings.Index(fn[index:], strings.ToLower(queryWord))
+			if pos == -1 {
 				matched = false
 				break
 			}
+			index += pos + len(queryWord)
 		}
 
 		if matched {

@@ -37,8 +37,8 @@ func handleSymbols(args []string) {
 	searchCmd := flag.NewFlagSet("files", flag.ExitOnError)
 
 	// Define flags for search command
-	maxResults := searchCmd.Int("limit", conf.Get().Client.DefaultLimit.MaxFilesResults, "Maximum number of results")
-	maxResultsPerFile := searchCmd.Int("limit-per-file", conf.Get().Client.DefaultLimit.MaxResultsPerFile, "Maximum number of results per file")
+	maxResults := searchCmd.Int("limit", conf.Get().Server.Search.Limit.MaxResults, "Maximum number of results")
+	maxResultsPerFile := searchCmd.Int("limit-per-file", conf.Get().Server.Search.Limit.MaxResultsPerFile, "Maximum number of results per file")
 	workspace := searchCmd.String("workspace", conf.Get().Client.DefaultWorkspace, "Workspace path to search in")
 	fuzzy := searchCmd.Bool("fuzzy", false, "Use fuzzy search")
 
