@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -65,7 +66,49 @@ func GetLangFromFilename(filename string) string {
 	}
 }
 
-func parseFunction(inputFile string, language string, workspacePath string) ([]symbols.DocFunction, error) {
+func getCtagsPath() (string, error) {
+	ctagsPath := filepath.Join(running.ExecutablePath(), "ctags")
+	if runtime.GOOS == "windows" {
+		ctagsPath += ".exe"
+	}
+	if _, err := os.Stat(ctagsPath); err == nil {
+		return ctagsPath, nil
+	}
+
+	var cmd *exec.Cmd
+
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("where", "ctags")
+	} else {
+		cmd = exec.Command("which", "-a", "ctags")
+	}
+
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to locate ctags: %v", err)
+	}
+
+	paths := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+
+		versionCmd := exec.Command(path, "--version")
+		if out, err := versionCmd.CombinedOutput(); err == nil {
+			log.Printf("[SymbolParser] ctags found and working at: %s\n", path)
+			log.Println(string(out))
+			return path, nil
+		} else {
+			log.Printf("[SymbolParser] Warning: ctags at %s failed to run: %v\n", path, err)
+		}
+	}
+
+	return "", fmt.Errorf("no working ctags executable found")
+}
+
+func parseFunction(ctagsPath string, inputFile string, language string, workspacePath string) ([]symbols.DocFunction, error) {
 	args := []string{
 		"--fields=+n",             // Include line numbers
 		"--fields=+K",             // Include kind/type
@@ -82,7 +125,6 @@ func parseFunction(inputFile string, language string, workspacePath string) ([]s
 		args = append(args, "--c++-kinds=+p") // Include function prototypes
 	}
 
-	ctagsPath := filepath.Join(running.ExecutablePath(), "ctags")
 	cmd := exec.Command(ctagsPath, args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -99,6 +141,7 @@ func parseFunction(inputFile string, language string, workspacePath string) ([]s
 	// if stderr.Len() > 0 {
 	// 	log.Printf("[SymbolParser] Ctags warning: %s", stderr.String())
 	// }
+	// log.Printf("[SymbolParser] Parsed %d functions from %s", strings.Count(stdout.String(), "\n"), inputFile)
 
 	// Map to organize functions by file path
 	fileMap := make(map[string]*symbols.DocFunction)
@@ -172,9 +215,10 @@ func parseFunction(inputFile string, language string, workspacePath string) ([]s
 
 // Parser handles concurrent file parsing operations
 type SymbolParser struct {
-	ch   chan ParseBatch
-	stop chan struct{}
-	done chan struct{}
+	ch    chan ParseBatch
+	stop  chan struct{}
+	done  chan struct{}
+	ctags string
 
 	// cache files for each workspace
 	cacheMap   map[*workspace.Workspace][]string
@@ -200,6 +244,14 @@ func (p *SymbolParser) Start(wg *sync.WaitGroup) {
 		log.Printf("[SymbolParser] SymbolParser disabled")
 		return
 	}
+
+	ctagsPath, err := getCtagsPath()
+	if err != nil {
+		log.Printf("[SymbolParser] Error getting ctags path: %v", err)
+		return
+	}
+	p.ctags = ctagsPath
+	log.Printf("[SymbolParser] Using ctags at %s", p.ctags)
 
 	for i := 0; i < conf.Get().Server.SymbolParserWorkers; i++ {
 		wg.Add(1)
@@ -288,7 +340,7 @@ func (p *SymbolParser) run(id int, wg *sync.WaitGroup) {
 
 // Add queues a file for parsing
 func (p *SymbolParser) Add(workspace *workspace.Workspace, relPath string) {
-	if !conf.Get().Embedding.Enabled {
+	if !conf.Get().Embedding.Enabled || p.ctags == "" {
 		return
 	}
 	p.cacheMutex.Lock()
@@ -357,7 +409,7 @@ func (p *SymbolParser) processFileBatch(batch ParseBatch) error {
 			return fmt.Errorf("failed to write to temp file for %s: %w", lang, err)
 		}
 		// Process the files for this language
-		docsWithFunction, err := parseFunction(tmpFilePath, lang, batch.Workspace.Path)
+		docsWithFunction, err := parseFunction(p.ctags, tmpFilePath, lang, batch.Workspace.Path)
 		if err != nil {
 			log.Printf("[SymbolParser] Error parsing symbols for language %s: %v", lang, err)
 			continue
