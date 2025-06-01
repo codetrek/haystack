@@ -5,7 +5,8 @@ import "strings"
 const MaxInvertedIndexSize = 1000
 
 type SearchResult struct {
-	DocIds map[string]struct{} `json:"docIds"`
+	DocIds     map[string]struct{} `json:"docIds"`
+	WildDocIds map[string]struct{} `json:"wildDocIds,omitempty"`
 }
 
 func Search(tableId int, query string, limit int) SearchResult {

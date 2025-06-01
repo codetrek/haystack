@@ -31,6 +31,7 @@ type SimpleContentSearchEngineTerm struct {
 	Pattern    string
 	RegPattern string
 	Keywords   []string // First element serves as main prefix
+	Wildcards  []string // Wildcard patterns, if any
 }
 
 func (q *SimpleContentSearchEngine) CollectDocuments() (*invertedindex.SearchResult, error) {
@@ -54,6 +55,9 @@ func (q *SimpleContentSearchEngine) CollectDocuments() (*invertedindex.SearchRes
 	for _, r := range rs[1:] {
 		for docid := range r.DocIds {
 			result.DocIds[docid] = struct{}{}
+		}
+		for docid := range r.WildDocIds {
+			result.WildDocIds[docid] = struct{}{}
 		}
 	}
 
@@ -89,11 +93,16 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (
 				delete(result.DocIds, docid)
 			}
 		}
+
+		for docid := range r.WildDocIds {
+			if _, ok := result.DocIds[docid]; !ok {
+				// If the document is in wildcards but not in keywords, we remove it from the result
+				delete(result.WildDocIds, docid)
+			}
+		}
 	}
 
-	if len(q.AndTerms) > 1 {
-		log.Printf("[Searcher] Merged Documents: =>`%s` found %d documents", q.String(), len(result.DocIds))
-	}
+	log.Printf("[Searcher] Merged Documents: =>`%s` found %d documents, %d wildcard documents", q.String(), len(result.DocIds), len(result.WildDocIds))
 
 	return result, nil
 }
@@ -109,38 +118,60 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invert
 		return invertedindex.SearchResult{}
 	}
 
-	// Get results for first prefix
-	result := invertedindex.Search(ft.InvertedId, q.Keywords[0], -1)
-	if len(q.Keywords) == 1 {
-		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using keyword `%s`", q.String(), len(result.DocIds), q.Keywords[0])
-		return result
+	result := invertedindex.SearchResult{
+		DocIds:     q.collectWithKeywords(ft.InvertedId, q.Keywords),
+		WildDocIds: q.collectWithKeywords(ft.InvertedId, q.Wildcards),
 	}
 
-	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", q.Keywords[0], q.String(), len(result.DocIds))
+	for docId := range result.WildDocIds {
+		if _, exists := result.DocIds[docId]; !exists {
+			// If the document is in wildcards but not in keywords, we remove it from the result
+			delete(result.WildDocIds, docId)
+		}
+	}
+
+	return result
+}
+
+func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws []string) map[string]struct{} {
+	// If no prefixes, return empty result
+	if len(kws) == 0 {
+		return map[string]struct{}{}
+	}
+
+	// Get results for first prefix
+	rs := invertedindex.Search(invertedId, kws[0], -1)
+	if len(kws) == 1 {
+		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using keyword `%s`", q.String(), len(rs.DocIds), kws[0])
+		return rs.DocIds
+	}
+
+	result := rs.DocIds
+	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", kws[0], q.String(), len(result))
 	// Intersect with results from other prefixes
-	for _, prefix := range q.Keywords[1:] {
-		r := invertedindex.Search(ft.InvertedId, prefix, -1)
+	for _, prefix := range kws[1:] {
+		r := invertedindex.Search(invertedId, prefix, -1)
 		log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", prefix, q.String(), len(r.DocIds))
 
-		if len(r.DocIds) < len(result.DocIds) {
+		if len(r.DocIds) < len(result) {
 			// Swap result and r to ensure result is always the smaller set
-			result, r = r, result
+			result, r.DocIds = r.DocIds, result
 		}
 
 		// Keep only documents that exist in both results
-		for docId := range result.DocIds {
+		for docId := range result {
 			if _, exists := r.DocIds[docId]; !exists {
-				delete(result.DocIds, docId)
+				delete(result, docId)
 			}
 		}
 
-		if len(result.DocIds) == 0 {
+		if len(result) == 0 {
 			break
 		}
 	}
 
 	log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using %d keywords",
-		q.String(), len(result.DocIds), len(q.Keywords))
+		q.String(), len(result), len(kws))
 	return result
 }
 
@@ -326,7 +357,7 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 	// Handle quoted phrases specially for exact matching
 	if IsQuotedPhrase(token) {
 		unwrappedPhrase := UnwrapQuotes(token)
-		keywords := tokenizer.TokenizeForSearch(unwrappedPhrase, true)
+		keywords, wildcards := tokenizer.TokenizeForSearch(unwrappedPhrase, true)
 
 		// Handle escaped quotes
 		if strings.Contains(unwrappedPhrase, "\\\"") {
@@ -338,6 +369,7 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 			Pattern:    token,
 			RegPattern: escapedPhrase,
 			Keywords:   keywords,
+			Wildcards:  wildcards,
 		}
 	}
 
@@ -347,7 +379,7 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 	regPattern = strings.ReplaceAll(regPattern, "{", "\\{")
 	regPattern = strings.ReplaceAll(regPattern, "}", "\\}")
 	regPattern = strings.ReplaceAll(regPattern, "*", ".{0,"+maxWildcardLength+"}")
-	regPattern = strings.ReplaceAll(regPattern, "?", ".?")
+	regPattern = strings.ReplaceAll(regPattern, "?", "\\?")
 	regPattern = strings.ReplaceAll(regPattern, "(", "\\(")
 	regPattern = strings.ReplaceAll(regPattern, ")", "\\)")
 	regPattern = strings.ReplaceAll(regPattern, "[", "\\[")
@@ -357,11 +389,13 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 	regPattern = strings.ReplaceAll(regPattern, ":", "\\:")
 	regPattern = strings.ReplaceAll(regPattern, "+", "\\+")
 
+	keywords, wildcards := tokenizer.TokenizeForSearch(token, false)
 	// Handle regular patterns (non-quoted)
 	return &SimpleContentSearchEngineTerm{
 		Pattern:    token,
 		RegPattern: regPattern,
-		Keywords:   tokenizer.TokenizeForSearch(token, false),
+		Keywords:   keywords,
+		Wildcards:  wildcards,
 	}
 }
 

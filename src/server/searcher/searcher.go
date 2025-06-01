@@ -13,6 +13,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/documents"
+	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/shared/running"
@@ -39,20 +40,20 @@ type QueryFilters struct {
 	Exclude *utils.SimpleFilter
 }
 
-func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]struct{},
+func sortDocuments(workspaceId int, editor *types.Editor, sr *invertedindex.SearchResult,
 	filter func(path string) bool) []string {
 	start := time.Now()
 
 	docs := map[string]string{}
-	if len(docIDs) > 10000 {
+	if len(sr.DocIds) > 10000 {
 		documents.ScanFiles(workspaceId, func(docid, relPath string) bool {
-			if _, ok := docIDs[docid]; ok {
+			if _, ok := sr.DocIds[docid]; ok {
 				docs[relPath] = docid
 			}
 			return true
 		})
 	} else {
-		for docid := range docIDs {
+		for docid := range sr.DocIds {
 			relPath := documents.GetDocumentPath(workspaceId, docid)
 			if relPath != "" {
 				docs[relPath] = docid
@@ -61,14 +62,15 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 	}
 
 	for relPath, id := range docs {
-		if _, ok := docIDs[id]; ok {
+		if _, ok := sr.DocIds[id]; ok {
 			if !filter(relPath) {
 				delete(docs, relPath)
+				delete(sr.WildDocIds, id)
 			}
 		}
 	}
 
-	sorted := make([]string, 0, len(docIDs))
+	sorted := make([]string, 0, len(sr.DocIds))
 	if editor != nil {
 		var add = func(dir string) {
 			if dir != "" {
@@ -76,6 +78,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 					if strings.HasPrefix(relPath, dir) {
 						sorted = append(sorted, docid)
 						delete(docs, relPath)
+						delete(sr.WildDocIds, docid)
 					}
 				}
 			}
@@ -86,6 +89,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 			if docid, ok := docs[editor.ActiveFile]; ok {
 				sorted = append(sorted, docid)
 				delete(docs, editor.ActiveFile)
+				delete(sr.WildDocIds, docid)
 			}
 		}
 
@@ -94,6 +98,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 			if docid, ok := docs[f]; ok {
 				sorted = append(sorted, docid)
 				delete(docs, f)
+				delete(sr.WildDocIds, docid)
 			}
 		}
 
@@ -116,8 +121,15 @@ func sortDocuments(workspaceId int, editor *types.Editor, docIDs map[string]stru
 		}
 	}
 
+	for docid := range sr.WildDocIds {
+		sorted = append(sorted, docid)
+	}
+
 	// Append the rest of the files
 	for _, docid := range docs {
+		if _, ok := sr.WildDocIds[docid]; ok {
+			continue // Skip wildcards, they are already added
+		}
 		sorted = append(sorted, docid)
 	}
 
@@ -317,7 +329,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	// - Documents associated with the editor's active file are prioritized first.
 	// - Documents from open files in the editor are prioritized next.
 	// - Remaining documents are sorted based on relevance or other criteria.
-	for _, docid := range sortDocuments(workspace.Id, req.Editor, results.DocIds, wantFile) {
+	for _, docid := range sortDocuments(workspace.Id, req.Editor, results, wantFile) {
 		if isTimeout() {
 			break
 		}

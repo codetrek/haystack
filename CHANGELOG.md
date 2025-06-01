@@ -1,5 +1,8 @@
 # Changelog
 
+## [next]
+- Optimize wildcard search(e.g.: `microsoft*bookmark`), up to 5X+ speed up for cases.
+
 ## [1.4.0]
 - Breaking change: Upgrade storage version to 1.2
 - Make inverted index engine as a separated components

@@ -54,9 +54,10 @@ func TokenizeForIndex(str string) []string {
 // TokenizeForSearch is used to tokenize a string for searching.
 // It collects words from the string, splits them into smaller parts if necessary,
 // and returns a sorted list of unique words. It also handles exact matching.
-func TokenizeForSearch(s string, exactMatching bool) []string {
+func TokenizeForSearch(s string, exactMatching bool) ([]string, []string) {
 	exists := map[string]struct{}{}
-	result := make([]string, 0, 10)
+	result := []string{}
+	wildcards := []string{}
 
 	var push = func(word string) {
 		if _, ok := exists[word]; ok {
@@ -70,7 +71,7 @@ func TokenizeForSearch(s string, exactMatching bool) []string {
 		for _, w := range collectWords(s) {
 			push(w)
 		}
-		return result
+		return result, nil
 	}
 
 	poses := re.FindAllStringIndex(s, -1)
@@ -80,8 +81,9 @@ func TokenizeForSearch(s string, exactMatching bool) []string {
 
 		// For the pattern "*abc-def", we'll skip "abc" since "abc" may not be a keyword,
 		// and we want to match "def" instead.
-		if start > 0 && (s[start-1] == '*' || s[start-1] == '?') {
+		if start > 0 && (s[start-1] == '*') {
 			r := CamelSnakeSplit(s[start:end])
+			wildcards = append(wildcards, r[0])
 			if len(r) > 1 {
 				push(r[1])
 			}
@@ -90,5 +92,5 @@ func TokenizeForSearch(s string, exactMatching bool) []string {
 		push(s[start:end])
 	}
 
-	return result
+	return result, wildcards
 }

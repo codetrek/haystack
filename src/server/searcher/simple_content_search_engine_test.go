@@ -321,8 +321,8 @@ func TestParseQuerySimple(t *testing.T) {
 						AndTerms: []*SimpleContentSearchEngineTerm{
 							{
 								Pattern:    "test*abc?defg-hij.efg",
-								RegPattern: "test.{0,4}abc.?defg-hij\\.efg",
-								Keywords:   []string{"test", "hij", "efg"}},
+								RegPattern: "test.{0,4}abc\\?defg-hij\\.efg",
+								Keywords:   []string{"test", "defg", "hij", "efg"}},
 						},
 					},
 				},
@@ -335,7 +335,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "abc?--defg*--hij", RegPattern: "abc.?--defg.{0,4}--hij", Keywords: []string{"abc", "defg", "hij"}},
+							{Pattern: "abc?--defg*--hij", RegPattern: "abc\\?--defg.{0,4}--hij", Keywords: []string{"abc", "defg", "hij"}},
 						},
 					},
 				},
@@ -348,7 +348,7 @@ func TestParseQuerySimple(t *testing.T) {
 				OrClauses: []*SimpleContentSearchEngineAndClause{
 					{
 						AndTerms: []*SimpleContentSearchEngineTerm{
-							{Pattern: "abc?..defg", RegPattern: "abc.?\\.\\.defg", Keywords: []string{"abc", "defg"}},
+							{Pattern: "abc?..defg", RegPattern: "abc\\?\\.\\.defg", Keywords: []string{"abc", "defg"}},
 						},
 					},
 				},
