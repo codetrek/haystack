@@ -86,18 +86,20 @@ func sortDocuments(workspaceId int, editor *types.Editor, sr *invertedindex.Sear
 
 		if editor.ActiveFile != "" {
 			// Add the active file to the beginning of the list
-			if docid, ok := docs[editor.ActiveFile]; ok {
+			file := filepath.ToSlash(filepath.Clean(editor.ActiveFile))
+			if docid, ok := docs[file]; ok {
 				sorted = append(sorted, docid)
-				delete(docs, editor.ActiveFile)
+				delete(docs, file)
 				delete(sr.WildDocIds, docid)
 			}
 		}
 
 		// Add the files in the editor to the list
 		for _, f := range editor.OpenFiles {
-			if docid, ok := docs[f]; ok {
+			file := filepath.ToSlash(filepath.Clean(f))
+			if docid, ok := docs[file]; ok {
 				sorted = append(sorted, docid)
-				delete(docs, f)
+				delete(docs, file)
 				delete(sr.WildDocIds, docid)
 			}
 		}
