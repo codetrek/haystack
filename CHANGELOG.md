@@ -3,6 +3,7 @@
 ## [next]
 - Optimize wildcard search(e.g.: `microsoft*bookmark`), up to 5X+ speed up for cases.
 - Bugfix: active & open files should be search first
+- Optimize: dedup keywords with prefix
 
 ## [1.4.0]
 - Breaking change: Upgrade storage version to 1.2

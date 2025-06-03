@@ -46,9 +46,22 @@ func TokenizeForIndex(str string) []string {
 	for word := range uniqueWords {
 		result = append(result, word)
 	}
+	if len(result) == 0 {
+		return result
+	}
 
 	sort.Strings(result)
-	return result
+
+	// Remove the words that have prefix duplicate.
+	deduped := make([]string, 0, len(result))
+	for i := 0; i < len(result)-1; i++ {
+		if strings.HasPrefix(result[i+1], result[i]) {
+			continue
+		}
+		deduped = append(deduped, result[i])
+	}
+
+	return append(deduped, result[len(result)-1]) // Append the last word
 }
 
 // TokenizeForSearch is used to tokenize a string for searching.

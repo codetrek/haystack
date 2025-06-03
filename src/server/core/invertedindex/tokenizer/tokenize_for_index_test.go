@@ -36,6 +36,13 @@ func TestTokenizeForIndex(t *testing.T) {
 		assert.ElementsMatch(t, expected, result)
 	})
 
+	t.Run("Test with prefix de-dup", func(t *testing.T) {
+		input := "camel case CamelCaseString"
+		expected := []string{"camelcasestring", "casestring", "string"}
+		result := TokenizeForIndex(input)
+		assert.ElementsMatch(t, expected, result)
+	})
+
 	t.Run("Test with mixed case", func(t *testing.T) {
 		input := "MixedCASEString"
 		expected := []string{"mixedcasestring", "casestring", "string"}
