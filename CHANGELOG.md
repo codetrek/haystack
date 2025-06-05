@@ -1,5 +1,8 @@
 # Changelog
 
+## [next]
+- Bugfix: Path filter with "\" seperate returns no result.
+
 ## [1.4.1]
 - Optimize wildcard search(e.g.: `microsoft*bookmark`), up to 5X+ speed up for cases.
 - Bugfix: active & open files should be search first

@@ -48,7 +48,7 @@ func StartServer(wg *sync.WaitGroup, addr string) {
 	go func() {
 		log.Printf("[HTTP] Server starting on %s", addr)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("[HTTP] ListenAndServe: ", err)
+			log.Fatal("[HTTP] Error: ListenAndServe failed: ", err)
 		}
 	}()
 

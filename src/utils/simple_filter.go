@@ -37,7 +37,7 @@ func (f *SimpleFilter) Match(relPath string, isDir bool) bool {
 }
 
 func NewSimpleFilterExclude(patterns []string) *SimpleFilter {
-	ignore := gitignore.CompileIgnoreLines(patterns...)
+	ignore := gitignore.CompileIgnoreLines(toSlash(patterns)...)
 	return &SimpleFilter{
 		negate:   true,
 		ignore:   ignore,
@@ -46,10 +46,19 @@ func NewSimpleFilterExclude(patterns []string) *SimpleFilter {
 }
 
 func NewSimpleFilter(patterns []string) *SimpleFilter {
-	ignore := gitignore.CompileIgnoreLines(patterns...)
+	ignore := gitignore.CompileIgnoreLines(toSlash(patterns)...)
 	return &SimpleFilter{
 		negate:   false,
 		ignore:   ignore,
 		patterns: patterns,
 	}
+}
+
+func toSlash(patterns []string) []string {
+	normalized := make([]string, 0, len(patterns))
+	for _, pattern := range patterns {
+		// Convert to slash-separated format
+		normalized = append(normalized, filepath.ToSlash(pattern))
+	}
+	return normalized
 }

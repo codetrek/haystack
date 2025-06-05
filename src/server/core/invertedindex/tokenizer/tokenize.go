@@ -9,15 +9,7 @@ import (
 var re = regexp.MustCompile(`[a-zA-Z0-9][a-zA-Z0-9_]{1,78}[a-zA-Z0-9]|([0-9]{1,8}\.|[a-zA-Z0-9]{1,2}\.)+([0-9]{1,8}|[a-zA-Z0-9]{1,2})`)
 
 func collectWords(s string) []string {
-	result := make([]string, 0, 10)
-	for _, w := range re.FindAllString(s, -1) {
-		w = strings.Trim(w, ".-_")
-		if len(w) < 3 || len(w) > 80 {
-			continue
-		}
-		result = append(result, w)
-	}
-	return result
+	return re.FindAllString(s, -1)
 }
 
 // TokenizeForIndex is used to tokenize a string for indexing.
@@ -26,7 +18,7 @@ func collectWords(s string) []string {
 func TokenizeForIndex(str string) []string {
 	words := collectWords(str) //reIndex.FindAllString(str, -1)
 
-	uniqueWords := make(map[string]struct{})
+	uniqueWords := make(map[string]struct{}, len(words))
 	pushWord := func(word string) {
 		if len(word) < 3 || len(word) > 80 {
 			return
