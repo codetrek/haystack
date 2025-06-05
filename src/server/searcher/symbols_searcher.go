@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/shared/types"
 
 	"github.com/AntoineAugusti/wordsegmentation"
@@ -31,15 +33,21 @@ func initEnglishCorpus() {
 	}
 }
 
-func ValidateFile(workspace *workspace.Workspace, doc *documents.Document) bool {
+func isFileChanged(workspace *workspace.Workspace, doc *documents.Document) bool {
 	// Get document information from documents package
 	fullPath := filepath.Join(workspace.Path, doc.RelPath)
 	fileInfo, err := os.Stat(fullPath)
 	if err != nil {
+		indexer.RemoveFile(workspace, doc.RelPath)
 		return false
 	}
 
 	if fileInfo.ModTime().UnixNano() != doc.ModifiedTime {
+		indexer.AddOrSyncFile(workspace, doc.RelPath)
+		return false
+	}
+
+	if doc.Hash == "" {
 		return false
 	}
 
@@ -49,7 +57,12 @@ func ValidateFile(workspace *workspace.Workspace, doc *documents.Document) bool 
 	}
 
 	currentHash := fmt.Sprintf("%x", md5.Sum(fileContent))
-	return currentHash == doc.Hash
+	if currentHash != doc.Hash {
+		indexer.AddOrSyncFile(workspace, doc.RelPath)
+		return false
+	}
+
+	return true
 }
 
 func getFunctionFileMatch(workspace *workspace.Workspace, queryFunctionWords []string, docId string) (map[string][]types.SymbolsFileMatch, error) {
@@ -58,7 +71,7 @@ func getFunctionFileMatch(workspace *workspace.Workspace, queryFunctionWords []s
 		return nil, err
 	}
 
-	if !ValidateFile(workspace, doc) {
+	if !isFileChanged(workspace, doc) {
 		return nil, nil
 	}
 
@@ -178,7 +191,7 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 			continue
 		}
 
-		if !ValidateFile(workspace, doc) {
+		if !isFileChanged(workspace, doc) {
 			continue
 		}
 
@@ -224,12 +237,21 @@ func searchSymbolsEmbedding(workspace *workspace.Workspace, req *types.SearchSym
 		return result, err
 	}
 
+	// Use a map to collect all files for each symbol
 	symbolFiles := make(map[string][]types.SymbolsFileMatch)
+	// Keep track of the order of symbols as they appear in resp.Data
+	var symbolOrder []string
 
 	for _, ss := range resp.Data {
-		log.Printf("Query: %s, Symbol:%s, Score:%f", req.Query, ss.Symbol, ss.Score)
-		r := invertedindex.GetDocs(st.InvertedId, ss.Symbol)
+		if ss.Score > 1.2 {
+			continue
+		}
 
+		symbolOrder = append(symbolOrder, ss.Symbol)
+		r := invertedindex.GetDocs(st.InvertedId, ss.Symbol)
+		// log.Printf("query: %s, symbol: %s, score: %f, len docs: %d", req.Query, ss.Symbol, ss.Score, len(r.DocIds))
+
+		fileCorpusCount := 0
 		for docId := range r.DocIds {
 			// Get document info for file path
 			doc, err := documents.GetDocument(workspace.Id, docId, false)
@@ -237,12 +259,18 @@ func searchSymbolsEmbedding(workspace *workspace.Workspace, req *types.SearchSym
 				continue
 			}
 
-			if !ValidateFile(workspace, doc) {
+			if !isFileChanged(workspace, doc) {
 				continue
 			}
 
 			// Get functions from this document
 			functions, err := symbols.GetDocFunctions(workspace.Id, docId)
+			randomN := 30
+			if len(functions) == randomN {
+				rand.Shuffle(len(functions), func(i, j int) {
+					functions[i], functions[j] = functions[j], functions[i]
+				})
+			}
 			if err != nil {
 				continue
 			}
@@ -250,21 +278,28 @@ func searchSymbolsEmbedding(workspace *workspace.Workspace, req *types.SearchSym
 			// For each function/symbol in the document, add it to our results
 			for _, f := range functions {
 				if f.Name == ss.Symbol {
-					symbolFiles[f.Name] = append(symbolFiles[f.Name], types.SymbolsFileMatch{
+					symbolFiles[ss.Symbol] = append(symbolFiles[f.Name], types.SymbolsFileMatch{
 						Path: doc.RelPath,
 						Line: f.Line,
 					})
 				}
 			}
+
+			if fileCorpusCount++; fileCorpusCount >= req.Limit.MaxResultsPerFile {
+				break
+			}
 		}
 	}
 
-	for name, files := range symbolFiles {
-		result.Symbols = append(result.Symbols, types.SymbolContent{
-			Name:  name,
-			Files: files,
-		})
+	for _, name := range symbolOrder {
+		if files, ok := symbolFiles[name]; ok {
+			result.Symbols = append(result.Symbols, types.SymbolContent{
+				Name:  name,
+				Files: files,
+			})
+		}
 	}
+
 	return result, nil
 
 }

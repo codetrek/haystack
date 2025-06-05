@@ -16,8 +16,9 @@ import (
 
 // ParseFile represents a file to be parsed
 type ParseFile struct {
-	Workspace   *workspace.Workspace
-	RelFilePath string
+	Workspace    *workspace.Workspace
+	RelFilePath  string
+	ForceRefresh bool
 }
 
 // Parser handles concurrent file parsing operations
@@ -75,19 +76,24 @@ func (p *Parser) run(id int, wg *sync.WaitGroup) {
 
 // processFile handles the parsing of a single file
 func (p *Parser) processFile(file ParseFile) error {
-	doc, newDoc, err := parse(file)
+	doc, newDoc, oversize, err := parse(file)
 	if err != nil {
 		return fmt.Errorf("failed to parse file: %w", err)
 	}
 
 	// If the document is nil, it means the file has not changed
 	if doc == nil {
+		if file.ForceRefresh && !oversize {
+			symbolParser.Add(file.Workspace, file.RelFilePath)
+		}
 		return nil
 	}
 
 	writer.Add(file.Workspace, doc, newDoc)
 
-	symbolParser.Add(file.Workspace, file.RelFilePath)
+	if !oversize {
+		symbolParser.Add(file.Workspace, file.RelFilePath)
+	}
 
 	file.Workspace.AddIndexingFiles(1)
 
@@ -95,21 +101,22 @@ func (p *Parser) processFile(file ParseFile) error {
 }
 
 // Add queues a file for parsing
-func (p *Parser) Add(workspace *workspace.Workspace, relPath string) {
+func (p *Parser) Add(workspace *workspace.Workspace, relPath string, forceRefresh bool) {
 	p.ch <- ParseFile{
-		Workspace:   workspace,
-		RelFilePath: relPath,
+		Workspace:    workspace,
+		RelFilePath:  relPath,
+		ForceRefresh: forceRefresh,
 	}
 }
 
 // parse reads and processes a file, returning a Document
-func parse(file ParseFile) (*documents.Document, bool, error) {
+func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool, err error) {
 	fullPath := filepath.Join(file.Workspace.Path, file.RelFilePath)
 	id := GetDocumentId(fullPath)
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed to stat file: %w", err)
+		return nil, false, false, fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	fileSizeExceedLimit := info.Size() > conf.Get().Server.MaxFileSize
@@ -121,7 +128,7 @@ func parse(file ParseFile) (*documents.Document, bool, error) {
 	// If the document exists and the modified time is the same, return nil
 	if existing != nil &&
 		existing.ModifiedTime == info.ModTime().UnixNano() {
-		return nil, false, nil
+		return nil, false, fileSizeExceedLimit, nil
 	}
 
 	var hash string
@@ -132,17 +139,17 @@ func parse(file ParseFile) (*documents.Document, bool, error) {
 	} else {
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
-			return nil, false, fmt.Errorf("failed to read file: %w", err)
+			return nil, false, false, fmt.Errorf("failed to read file: %w", err)
 		}
 		if !IsLikelyText(content) {
 			log.Printf("[Indexer] File `%s` is not a text file, skipping", file.RelFilePath)
-			return nil, false, nil
+			return nil, false, fileSizeExceedLimit, nil
 		}
 
 		hash = GetContentHash(content)
 		// If the document exists and the hash is the same, return nil
 		if existing != nil && existing.Hash == hash {
-			return nil, false, nil
+			return nil, false, fileSizeExceedLimit, nil
 		}
 
 		// We only index the content if the file size is below the limit
@@ -158,5 +165,5 @@ func parse(file ParseFile) (*documents.Document, bool, error) {
 		Hash:         hash,
 		Words:        words,
 		PathWords:    tokenizer.TokenizeForIndex(file.RelFilePath),
-	}, existing == nil, nil
+	}, existing == nil, fileSizeExceedLimit, nil
 }

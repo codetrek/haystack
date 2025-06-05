@@ -5,11 +5,12 @@ import (
 )
 
 type Workspace struct {
-	Id               int      `json:"id"`
-	Path             string   `json:"path"`
-	TotalFiles       int      `json:"total_files"`
-	UseGlobalFilters bool     `json:"use_global_filters"`
-	Filters          *Filters `json:"filters,omitempty" optional:"true"`
+	Id                int      `json:"id"`
+	Path              string   `json:"path"`
+	TotalFiles        int      `json:"total_files"`
+	UseGlobalFilters  bool     `json:"use_global_filters"`
+	Filters           *Filters `json:"filters,omitempty" optional:"true"`
+	EnableSymbolParse bool     `json:"enable_symbol_parse"`
 
 	CreatedAt    time.Time `json:"created_time"`
 	LastAccessed time.Time `json:"last_accessed_time"`
@@ -34,9 +35,10 @@ type CreateWorkspaceResponse struct {
 }
 
 type UpdateWorkspaceRequest struct {
-	Workspace        string   `json:"workspace"`
-	UseGlobalFilters bool     `json:"use_global_filters"`
-	Filters          *Filters `json:"filters,omitempty"`
+	Workspace         string   `json:"workspace"`
+	UseGlobalFilters  bool     `json:"use_global_filters"`
+	Filters           *Filters `json:"filters,omitempty"`
+	EnableSymbolParse bool     `json:"symbol_parse"`
 }
 
 type UpdateWorkspaceResponse struct {

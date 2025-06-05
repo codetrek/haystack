@@ -70,6 +70,10 @@ func EncodeEmbeddingFuncFlagPrefix(done int) []byte {
 	return []byte(fmt.Sprintf("%c%d|", KeyTypeEmbeddingFuncFlag, done))
 }
 
+func EncodeEmbeddingFuncFlagPrefixWithWorkspaceId(done int, workspaceId int) []byte {
+	return []byte(fmt.Sprintf("%c%d|%d|", KeyTypeEmbeddingFuncFlag, done, workspaceId))
+}
+
 func EncodeSymbolTableKey(workspaceid int) []byte {
 	return []byte(fmt.Sprintf("%c%d", KeyTypeSymbolTable, workspaceid))
 }

@@ -31,8 +31,12 @@ type QueryResponse struct {
 	Data    []SymbolScore `json:"data,omitempty"`
 }
 
-func getEmbeddingDBPath(workspaceId int) (string, error) {
-	dbPath := filepath.Join(conf.Get().Global.DataPath, "data", "embedding", fmt.Sprintf("%d", workspaceId))
+func getEmbeddingDBPath(workspaceId int) string {
+	return filepath.Join(conf.Get().Global.DataPath, "data", "embedding", fmt.Sprintf("%d", workspaceId))
+}
+
+func getOrCreateEmbeddingDBPath(workspaceId int) (string, error) {
+	dbPath := getEmbeddingDBPath(workspaceId)
 
 	if _, statErr := os.Stat(dbPath); os.IsNotExist(statErr) {
 		// Directory doesn't exist, create it
@@ -46,14 +50,14 @@ func getEmbeddingDBPath(workspaceId int) (string, error) {
 }
 
 func postMessage(api string, jsonData []byte) (string, error) {
-	req, err := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/%s", conf.Get().Embedding.Port, api), bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/%s", conf.Get().Symbols.EmbeddingPort, api), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 60 * time.Second,
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -106,7 +110,7 @@ func EmbeddingHealth() (QueryResponse, error) {
 func EmbeddingAddSymbolsToDB(workspace2Functions map[int][]string) (int, error) {
 	count := 0
 	for workspaceId, functions := range workspace2Functions {
-		dbPath, err := getEmbeddingDBPath(workspaceId)
+		dbPath, err := getOrCreateEmbeddingDBPath(workspaceId)
 		if err != nil {
 			log.Printf("Failed to get embedding dbPath for workspace %d: %v", workspaceId, err)
 			return 0, err
@@ -149,7 +153,7 @@ func EmbeddingAddSymbolsToDB(workspace2Functions map[int][]string) (int, error) 
 }
 
 func EmbeddingSearch(workspaceId int, query string, limit types.SearchLimit) (QueryResponse, error) {
-	dbPath, err := getEmbeddingDBPath(workspaceId)
+	dbPath, err := getOrCreateEmbeddingDBPath(workspaceId)
 	if err != nil {
 		log.Printf("Failed to get embedding dbPath for workspace %d: %v", workspaceId, err)
 		return QueryResponse{}, err
@@ -179,6 +183,59 @@ func EmbeddingSearch(workspaceId int, query string, limit types.SearchLimit) (Qu
 	if err != nil {
 		fmt.Println("Failed to parse JSON:", err)
 		return QueryResponse{}, err
+	}
+
+	return result, nil
+}
+
+func EmbeddingBuildIndex() (EmbeddingResponse, error) {
+	// Send to the API endpoint
+	response, err := postMessage("buildIndexIfNeeded", nil)
+
+	if err != nil {
+		log.Printf("Failed to send query for embedding: %v", err)
+		return EmbeddingResponse{}, err
+	}
+
+	var result EmbeddingResponse
+	err = json.Unmarshal([]byte(response), &result)
+	if err != nil {
+		fmt.Println("Failed to parse JSON:", err)
+		return EmbeddingResponse{}, err
+	}
+
+	return result, nil
+}
+
+func EmbeddingRemoveDB(workspaceId int) (EmbeddingResponse, error) {
+	dbPath := getEmbeddingDBPath(workspaceId)
+	if _, statErr := os.Stat(dbPath); os.IsNotExist(statErr) {
+		log.Printf("Embedding DB for workspace %d does not exist", workspaceId)
+		return EmbeddingResponse{}, nil
+	}
+
+	requestData := map[string]interface{}{
+		"dbPath": dbPath,
+	}
+
+	jsonData, err := json.Marshal(requestData)
+	if err != nil {
+		log.Printf("Failed to marshal query for embedding: %v", err)
+		return EmbeddingResponse{}, err
+	}
+
+	// Send to the API endpoint
+	response, err := postMessage("removeDB", jsonData)
+	if err != nil {
+		log.Printf("Failed to send query for embedding: %v", err)
+		return EmbeddingResponse{}, err
+	}
+
+	var result EmbeddingResponse
+	err = json.Unmarshal([]byte(response), &result)
+	if err != nil {
+		fmt.Println("Failed to parse JSON:", err)
+		return EmbeddingResponse{}, err
 	}
 
 	return result, nil

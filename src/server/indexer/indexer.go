@@ -55,7 +55,7 @@ func CreateWorkspace(workspacePath string, useGlobalFilter bool, filters *types.
 	w.Filters = filters
 	w.Save()
 
-	Sync(w)
+	Sync(w, false)
 	return w, nil
 }
 
@@ -69,15 +69,15 @@ func SyncIfNeeded(workspacePath string) error {
 	}
 
 	if workspace.LastFullSync.IsZero() {
-		return Sync(workspace)
+		return Sync(workspace, false)
 	} else {
 		log.Printf("[Indexer] Workspace %s is up to date, skipping", workspacePath)
 	}
 	return nil
 }
 
-func Sync(workspace *workspace.Workspace) error {
-	return scanner.Add(workspace)
+func Sync(workspace *workspace.Workspace, forceRefresh bool) error {
+	return scanner.Add(workspace, forceRefresh)
 }
 
 func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
@@ -95,7 +95,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 		}
 
 		// Add new file to the parser queue
-		parser.Add(workspace, relPath)
+		parser.Add(workspace, relPath, false)
 	} else {
 		stat, err := os.Stat(fullPath)
 		if err != nil || stat.IsDir() {
@@ -103,7 +103,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 			RemoveFile(workspace, relPath)
 		} else {
 			// Sync existing file to the parser queue
-			parser.Add(workspace, relPath)
+			parser.Add(workspace, relPath, false)
 		}
 	}
 
@@ -161,7 +161,7 @@ func RefreshFileIfNeeded(workspace *workspace.Workspace, doc *documents.Document
 
 	// If the file has been modified, add it to the parser queue
 	if stat.ModTime().UnixNano() != doc.ModifiedTime {
-		parser.Add(workspace, doc.RelPath)
+		parser.Add(workspace, doc.RelPath, false)
 	}
 
 	return false, nil

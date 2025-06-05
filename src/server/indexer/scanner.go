@@ -32,6 +32,13 @@ type Scanner struct {
 	done    chan struct{}
 }
 
+// ScannTask represents a workspace to be scanned.
+// forceRefresh true means the file will be re-index even if it not changed.
+type ScanTask struct {
+	workspace    *workspace.Workspace
+	forceRefresh bool
+}
+
 // NewScanner creates a new Scanner instance.
 func NewScanner() *Scanner {
 	return &Scanner{
@@ -59,8 +66,9 @@ func (s *Scanner) run(wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
-		workspace := s.tryPopJob()
-		if workspace == nil {
+		scanTask := s.tryPopJob()
+
+		if scanTask == nil {
 			select {
 			case <-s.stop:
 				close(s.done)
@@ -69,9 +77,9 @@ func (s *Scanner) run(wg *sync.WaitGroup) {
 				continue
 			}
 		}
-
+		workspace := scanTask.workspace
 		s.setCurrent(workspace)
-		if err := s.processWorkspace(workspace); err != nil {
+		if err := s.processWorkspace(workspace, scanTask.forceRefresh); err != nil {
 			log.Printf("[Indexer] Error scanning workspace %s: %v", workspace.Path, err)
 		} else {
 			workspace.UpdateLastFullSync()
@@ -111,7 +119,7 @@ func ShouldIndexFile(w *workspace.Workspace, relPath string) bool {
 }
 
 // processWorkspace processes a single workspace by scanning its files and applying filters.
-func (s *Scanner) processWorkspace(w *workspace.Workspace) error {
+func (s *Scanner) processWorkspace(w *workspace.Workspace, forceRefresh bool) error {
 	log.Printf("[Indexer] Scanner start processing workspace %s", w.Path)
 	start := time.Now()
 	fileCount := 0
@@ -146,7 +154,7 @@ func (s *Scanner) processWorkspace(w *workspace.Workspace) error {
 		}
 
 		if include.Match(fileInfo.Path, false) {
-			parser.Add(w, fileInfo.Path)
+			parser.Add(w, fileInfo.Path, forceRefresh)
 			fileCount++
 
 			w.AddIndexingTotalFiles(1)
@@ -178,13 +186,13 @@ func (s *Scanner) processWorkspace(w *workspace.Workspace) error {
 
 // tryPopJob attempts to remove and return the next workspace from the queue.
 // Returns nil if the queue is empty.
-func (s *Scanner) tryPopJob() *workspace.Workspace {
+func (s *Scanner) tryPopJob() *ScanTask {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if s.queue.Len() > 0 {
 		job := s.queue.Remove(s.queue.Front())
-		return job.(*workspace.Workspace)
+		return job.(*ScanTask)
 	}
 	return nil
 }
@@ -197,7 +205,7 @@ func (s *Scanner) setCurrent(w *workspace.Workspace) {
 }
 
 // Add adds a workspace to the scanning queue.
-func (s *Scanner) Add(w *workspace.Workspace) error {
+func (s *Scanner) Add(w *workspace.Workspace, forceRefresh bool) error {
 	if w == nil {
 		return fmt.Errorf("cannot add nil workspace to scanner queue")
 	}
@@ -208,6 +216,10 @@ func (s *Scanner) Add(w *workspace.Workspace) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.queue.PushBack(w)
+
+	s.queue.PushBack(&ScanTask{
+		workspace:    w,
+		forceRefresh: forceRefresh,
+	})
 	return nil
 }

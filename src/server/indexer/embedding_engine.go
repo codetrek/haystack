@@ -1,7 +1,9 @@
 package indexer
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/symbols"
+	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/shared/running"
 )
 
@@ -27,7 +30,7 @@ func NewEmbeddingEngine() *EmbeddingEngine {
 }
 
 func (p *EmbeddingEngine) Start(wg *sync.WaitGroup) {
-	if !conf.Get().Embedding.EnvInstalled || !conf.Get().Embedding.Enabled {
+	if !conf.Get().Symbols.EnvInstalled || !conf.Get().Symbols.EnableFeature {
 		log.Println("[EmbeddingEngine] EmbeddingEngine did not start")
 		return
 	}
@@ -59,15 +62,40 @@ func (p *EmbeddingEngine) Start(wg *sync.WaitGroup) {
 }
 
 func (p *EmbeddingEngine) processPendingEmbeddings() {
-	if !conf.Get().Embedding.EnvInstalled || !conf.Get().Embedding.EmbeddingSymbols {
+	if !conf.Get().Symbols.EnvInstalled {
 		return
 	}
 
 	for {
-		workspace2Functions := symbols.ScanPendingEmbeddingFunctions(500)
-		if len(workspace2Functions) == 0 {
+		allWorkspace := workspace.GetAll()
+		workspaceIds := []int{}
+		for _, ws := range allWorkspace {
+			if ws.EnableSymbolParse {
+				workspaceIds = append(workspaceIds, ws.Id)
+			}
+		}
+		if len(workspaceIds) == 0 {
 			break
 		}
+
+		workspace2Functions := symbols.ScanPendingEmbeddingFunctionsWithWorkspaceIds(workspaceIds, 100)
+		if len(workspace2Functions) == 0 {
+			if total_embedding > 0 {
+				total_embedding = 0
+				symbols.EmbeddingBuildIndex()
+			}
+			break
+		}
+		// logTopN := 5
+		// for _, functions := range workspace2Functions {
+		// 	for _, fn := range functions {
+		// 		log.Printf("[EmbeddingEngine] Embedding function: %s", fn)
+		// 		logTopN--
+		// 		if logTopN == 0 {
+		// 			break
+		// 		}
+		// 	}
+		// }
 
 		workspace2Functions, err := symbols.RemoveComputedEmbeddings(workspace2Functions)
 		if err != nil {
@@ -82,7 +110,6 @@ func (p *EmbeddingEngine) processPendingEmbeddings() {
 		if err != nil {
 			break
 		}
-		log.Printf("[EmbeddingEngine] Embedded %d functions", count)
 
 		err = symbols.UpdateEmbeddingFunctionsFlag(workspace2Functions)
 		if err != nil {
@@ -91,8 +118,11 @@ func (p *EmbeddingEngine) processPendingEmbeddings() {
 		}
 
 		total_embedding += count
+		if total_embedding%10000 == 0 {
+			log.Printf("[EmbeddingEngine] Embedded %d functions", total_embedding)
+		}
 
-		if total_embedding > 50000 {
+		if total_embedding > 100000 {
 			total_embedding = 0
 			symbols.EmbeddingStop()
 			time.Sleep(5 * time.Second)
@@ -102,7 +132,7 @@ func (p *EmbeddingEngine) processPendingEmbeddings() {
 }
 
 func (p *EmbeddingEngine) Stop() {
-	if !conf.Get().Embedding.EnvInstalled || !conf.Get().Embedding.Enabled {
+	if !conf.Get().Symbols.EnvInstalled || !conf.Get().Symbols.EnableFeature {
 		return
 	}
 
@@ -112,30 +142,33 @@ func (p *EmbeddingEngine) Stop() {
 }
 
 func (p *EmbeddingEngine) startEmbeddingProcess() error {
-	nodePath := filepath.Join(running.ExecutablePath(), "node/node")
-	serverJs := filepath.Join(running.ExecutablePath(), "embedding/dist/index.js")
-
-	cmd := exec.Command(nodePath, serverJs, strconv.Itoa(conf.Get().Embedding.Port))
-
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
+	nodePath := conf.Get().BinPath.Node
+	if nodePath == "" {
+		nodePath = filepath.Join(running.ExecutablePath(), "node/node")
 	}
 
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
+	serverJS := conf.Get().BinPath.EmbeddingServerJS
+	if serverJS == "" {
+		serverJS = filepath.Join(running.ExecutablePath(), "embedding/dist/index.js")
 	}
+
+	if nodePath == "" || serverJS == "" {
+		return fmt.Errorf("node or embedding server js not found")
+	}
+
+	cmd := exec.Command(nodePath, serverJS, strconv.Itoa(conf.Get().Symbols.EmbeddingPort))
+
+	// Connect standard input/output of the process to the parent process
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
 		return err
 	}
 
-	log.Printf("[EmbeddingEngine] Started embedding process with PID: %d, port: %d", cmd.Process.Pid, conf.Get().Embedding.Port)
-
+	log.Printf("[EmbeddingEngine] Started embedding process with PID: %d, port: %d", cmd.Process.Pid, conf.Get().Symbols.EmbeddingPort)
 	go func() {
-		defer stdin.Close()
-		defer stdout.Close()
 		err := cmd.Wait()
 		if err != nil {
 			log.Printf("[EmbeddingEngine] Child process exited with error: %v, attempting restart...", err)

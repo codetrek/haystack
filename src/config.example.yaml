@@ -39,3 +39,14 @@ server:
     limit:
       max_results: 5000 # the maximum number of results to return, default is 5000
       max_results_per_file: 500 # the maximum number of results per file to return, default is 500
+
+symbols:
+  enable_feature: false
+  env_installed: true
+  default_enable_symbol_parse: true
+  default_enable_embedding_symbols: true
+
+bin_path:
+  node: ""
+  ctags: ""
+  embedding_server_js: ""

@@ -1,5 +1,5 @@
 import http from 'http';
-import { embeddingSymbolsToDB, querySymbols} from './lanceDB.js';
+import { embeddingSymbolsToDB, querySymbols, buildIndexIfNeeded, removeDB} from './lanceDB.js';
 import { generateEmbedding } from './embedding.js';
 
 /**
@@ -108,9 +108,69 @@ function handleQuery(req: http.IncomingMessage, res: http.ServerResponse) {
         }));
         return;
       }
-
+      
       const resp = await querySymbols(requestBody.dbPath, requestBody.query, requestBody.limit);
       res.end(JSON.stringify(resp));
+    } catch (error) {
+      console.log(error);
+      res.end(JSON.stringify({ 
+        code: 1, 
+        message: 'Bad request',
+        data: []
+      }));
+    }
+  });
+}
+
+function HandleBuildIndexIfNeeded(req: http.IncomingMessage, res: http.ServerResponse) {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json');
+  let data = '';
+  req.on('data', chunk => {
+    data += chunk;
+  });
+  
+  req.on('end', async () => {
+    try {
+      await buildIndexIfNeeded();
+      res.end(JSON.stringify({ code: 0 }));
+    } catch (error) {
+      res.end(JSON.stringify({ 
+        code: 1, 
+        message: 'Bad request',
+        data: []
+      }));
+    }
+  });
+}
+
+/**
+ * 
+ * requestBody {
+ *   dbPath: string;
+ * }
+ */
+function HandleRemoveDB(req: http.IncomingMessage, res: http.ServerResponse) {
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'application/json');
+  let data = '';
+  req.on('data', chunk => {
+    data += chunk;
+  });
+  
+  req.on('end', async () => {
+    try {
+      const requestBody = JSON.parse(data);
+      if (!requestBody.dbPath) {
+        res.end(JSON.stringify({ 
+          code: 1, 
+          message: 'Invalid request body' 
+        }));
+        return;
+      }
+
+      await removeDB(requestBody.dbPath);
+      res.end(JSON.stringify({ code: 0 }));
     } catch (error) {
       res.end(JSON.stringify({ 
         code: 1, 
@@ -122,8 +182,6 @@ function handleQuery(req: http.IncomingMessage, res: http.ServerResponse) {
 }
 
 const server = http.createServer((req, res) => {
-  console.log(`Received request: ${req.method} ${req.url}`);
-
   if (req.url === '/health') {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json');
@@ -150,6 +208,15 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (req.url === '/buildIndexIfNeeded' && req.method === 'POST') {
+    HandleBuildIndexIfNeeded(req, res);
+    return;
+  }
+
+  if (req.url === '/removeDB' && req.method === 'POST') {
+    HandleRemoveDB(req, res);
+    return;
+  }
 
   if (req.url === '/embedding' && req.method === 'POST') {
     handleEmbedding(req, res);
@@ -173,6 +240,6 @@ if (isNaN(PORT)) {
   process.exit(1);
 }
 
-server.listen(PORT, () => {
-  console.log(`Server is running at http://localhost:${PORT}/`);
+server.listen(PORT, '127.0.0.1', () => {
+  console.log(`Server is running at http://127.0.0.1:${PORT}/`);
 });

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 )
 
@@ -43,6 +44,11 @@ func Create(workspaceId int, desc string) error {
 
 // Delete deletes a symbols and all of its documents and keywords
 func Delete(workspaceId int) error {
+	if !conf.Get().Symbols.EnableFeature {
+		return nil
+	}
+	EmbeddingRemoveDB(workspaceId)
+
 	return mpsc.RunFunc(func() error {
 		tableMetaKeys := [][]byte{
 			EncodeSymbolTableKey(workspaceId),

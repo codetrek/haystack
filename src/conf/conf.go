@@ -69,23 +69,31 @@ type Server struct {
 	LoggingStdout bool `yaml:"logging_stdout,omitempty"`
 }
 
-type Embedding struct {
-	Enabled          bool `yaml:"enabled,omitempty"`
-	Port             int  `yaml:"port,omitempty"`
-	EnvInstalled     bool `yaml:"env_installed,omitempty"`
-	EmbeddingPrompt  bool `yaml:"embedding_prompt,omitempty"`
-	EmbeddingSymbols bool `yaml:"embedding_symbols,omitempty"`
+type Symbols struct {
+	EnableFeature                 bool `yaml:"enable_feature,omitempty"`
+	DefaultEnableSymbolParse      bool `yaml:"default_enable_symbol_parse,omitempty"`
+	EmbeddingPort                 int  `yaml:"embedding_port,omitempty"`
+	EnvInstalled                  bool `yaml:"env_installed,omitempty"`
+	DefaultEnableEmbeddingSymbols bool `yaml:"default_enable_embedding_symbols,omitempty"`
+	DefaultEnableEmbeddingPrompt  bool `yaml:"default_enable_embedding_prompt,omitempty"`
 }
 
 type Conf struct {
-	Global    Global    `yaml:"global,omitempty"`
-	Client    Client    `yaml:"client,omitempty"`
-	Server    Server    `yaml:"server,omitempty"`
-	Embedding Embedding `yaml:"embedding,omitempty"`
+	Global  Global  `yaml:"global,omitempty"`
+	Client  Client  `yaml:"client,omitempty"`
+	Server  Server  `yaml:"server,omitempty"`
+	Symbols Symbols `yaml:"symbols,omitempty"`
+	BinPath BinPath `yaml:"bin_path,omitempty"`
 
 	ForTest struct {
 		Path string `yaml:"path,omitempty"`
 	} `yaml:"for_test,omitempty"`
+}
+
+type BinPath struct {
+	Node              string `yaml:"node,omitempty"`
+	CTags             string `yaml:"ctags,omitempty"`
+	EmbeddingServerJS string `yaml:"embedding_server_js,omitempty"`
 }
 
 var conf = &Conf{
@@ -122,12 +130,19 @@ var conf = &Conf{
 			},
 		},
 	},
-	Embedding: Embedding{
-		Enabled:          false,
-		Port:             DefaultEmbeddingPort,
-		EnvInstalled:     false,
-		EmbeddingPrompt:  false,
-		EmbeddingSymbols: false,
+	Symbols: Symbols{
+		EnableFeature:                 false,
+		DefaultEnableSymbolParse:      false,
+		EmbeddingPort:                 DefaultEmbeddingPort,
+		EnvInstalled:                  false,
+		DefaultEnableEmbeddingSymbols: false,
+		DefaultEnableEmbeddingPrompt:  false,
+	},
+
+	BinPath: BinPath{
+		Node:              "",
+		CTags:             "",
+		EmbeddingServerJS: "",
 	},
 }
 
@@ -234,8 +249,8 @@ func Load() error {
 		conf.Client.DefaultLimit.MaxFilesResults = DefaultMaxFiles
 	}
 
-	if conf.Embedding.Port <= 0 || conf.Embedding.Port > 65535 {
-		conf.Embedding.Port = DefaultEmbeddingPort
+	if conf.Symbols.EmbeddingPort <= 0 || conf.Symbols.EmbeddingPort > 65535 {
+		conf.Symbols.EmbeddingPort = DefaultEmbeddingPort
 	}
 
 	return nil

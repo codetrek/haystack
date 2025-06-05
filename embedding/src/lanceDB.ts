@@ -1,6 +1,7 @@
 import * as lancedb from "@lancedb/lancedb";
 import { Schema, Field, Float32, Int32, Utf8, FixedSizeList, List } from "apache-arrow";
 import { generateEmbedding } from "./embedding.js";
+import * as fs from "fs/promises"
 
 const dbVersion = 1;
 const vectorDimensions = 384;
@@ -236,9 +237,15 @@ export class LanceDB {
     });
     this.useDelta = true;
   }
+
   public async hasIndex(table: string): Promise<boolean> {
     const tbl = await this.getTable(table);
     return (await tbl.listIndices()).some(index => index.name === "vector_idx");
+  }
+
+  async count(table: string): Promise<number> {
+    const tbl = await this.getTable(table);
+    return await tbl.countRows();
   }
 
   /**
@@ -331,4 +338,29 @@ export async function querySymbols(dbPath: string, query: string, limit: number 
     message: '',
     data: data || []
   }
+}
+
+export async function buildIndexIfNeeded(): Promise<void> {
+  for (const [dbPath, lancedb] of workspace2VectorDB) {
+    const indexExists = await lancedb.hasIndex("symbol_vec");
+    const rows = await lancedb.count("symbol_vec");
+    console.log(`Index exists: ${indexExists}, rows: ${rows}, dbPath: ${dbPath}`);
+
+    if (!indexExists && rows > 300000) {
+      const now = performance.now();
+      console.log(`Creating index for ${dbPath}`);
+      await lancedb.createIndex();
+      console.log(`Index created for ${dbPath}, rows: ${rows}, time: ${performance.now() - now}`);
+    }
+  }
+  return;
+}
+
+export async function removeDB(dbPath: string): Promise<void> {
+  if (workspace2VectorDB.has(dbPath)) {
+    const lancedb = workspace2VectorDB.get(dbPath);
+    await lancedb?.close();
+    workspace2VectorDB.delete(dbPath);
+  }
+  await fs.rm(dbPath, { recursive: true });
 }

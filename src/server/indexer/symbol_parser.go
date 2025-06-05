@@ -67,45 +67,20 @@ func GetLangFromFilename(filename string) string {
 }
 
 func getCtagsPath() (string, error) {
-	ctagsPath := filepath.Join(running.ExecutablePath(), "ctags")
-	if runtime.GOOS == "windows" {
-		ctagsPath += ".exe"
+	ctagsPath := conf.Get().BinPath.CTags
+	if ctagsPath == "" {
+		ctagsPath = filepath.Join(running.ExecutablePath(), "ctags")
+
+		if runtime.GOOS == "windows" {
+			ctagsPath += ".exe"
+		}
 	}
+
 	if _, err := os.Stat(ctagsPath); err == nil {
 		return ctagsPath, nil
 	}
 
-	var cmd *exec.Cmd
-
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("where", "ctags")
-	} else {
-		cmd = exec.Command("which", "-a", "ctags")
-	}
-
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("failed to locate ctags: %v", err)
-	}
-
-	paths := strings.Split(strings.TrimSpace(string(output)), "\n")
-	for _, path := range paths {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-
-		versionCmd := exec.Command(path, "--version")
-		if out, err := versionCmd.CombinedOutput(); err == nil {
-			log.Printf("[SymbolParser] ctags found and working at: %s\n", path)
-			log.Println(string(out))
-			return path, nil
-		} else {
-			log.Printf("[SymbolParser] Warning: ctags at %s failed to run: %v\n", path, err)
-		}
-	}
-
-	return "", fmt.Errorf("no working ctags executable found")
+	return "", fmt.Errorf("no ctags executable found at %s", ctagsPath)
 }
 
 func parseFunction(ctagsPath string, inputFile string, language string, workspacePath string) ([]symbols.DocFunction, error) {
@@ -240,7 +215,7 @@ func NewSymbolParser() *SymbolParser {
 
 // Start initializes the parser with worker goroutines
 func (p *SymbolParser) Start(wg *sync.WaitGroup) {
-	if !conf.Get().Embedding.Enabled {
+	if !conf.Get().Symbols.EnableFeature {
 		log.Printf("[SymbolParser] SymbolParser disabled")
 		return
 	}
@@ -275,7 +250,7 @@ func (p *SymbolParser) Start(wg *sync.WaitGroup) {
 }
 
 func (p *SymbolParser) Stop() {
-	if !conf.Get().Embedding.Enabled {
+	if !conf.Get().Symbols.EnableFeature {
 		return
 	}
 
@@ -340,7 +315,7 @@ func (p *SymbolParser) run(id int, wg *sync.WaitGroup) {
 
 // Add queues a file for parsing
 func (p *SymbolParser) Add(workspace *workspace.Workspace, relPath string) {
-	if !conf.Get().Embedding.Enabled || p.ctags == "" {
+	if !conf.Get().Symbols.EnableFeature || !workspace.EnableSymbolParse || p.ctags == "" {
 		return
 	}
 	p.cacheMutex.Lock()

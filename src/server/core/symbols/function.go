@@ -112,7 +112,7 @@ func saveDocFunctions(batch pebble.Batch, workspaceid int, doc *DocFunction) {
 			// if len(embeddingFlag) == 0 {
 			// 	batch.Put(EncodeEmbeddingFuncFlagKey(workspaceid, function.Name, 0), nil)
 			// }
-			batch.Put(EncodeEmbeddingFuncFlagKey(workspaceid, function.Name, 0), nil)
+			batch.Put(EncodeEmbeddingFuncFlagKey(workspaceid, function.Name, 0), []byte("0"))
 		}
 
 		var functionEntries []string
@@ -208,12 +208,18 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, 
 			wordsInOldFuncNames = append(wordsInOldFuncNames, strings.ToLower(word))
 		}
 	}
-
 	invertedindex.Update(sw.InvertedId, docId, wordsInNewFuncNames, wordsInOldFuncNames)
+
+	s, err := GetSymbolTable(workspaceid)
+	if err != nil {
+		log.Println("[Symbols] Error: failed to get symbol table:", err)
+		return
+	}
+	invertedindex.Update(s.InvertedId, docId, newFuncNames, oldFuncNames)
 }
 
 func DeleteDocument(workspaceId int, docId string) error {
-	if !conf.Get().Embedding.Enabled {
+	if !conf.Get().Symbols.EnableFeature {
 		return nil
 	}
 
@@ -296,18 +302,46 @@ func ScanPendingEmbeddingFunctions(limit int) map[int][]string {
 	return functions
 }
 
+func ScanPendingEmbeddingFunctionsWithWorkspaceIds(workspaceId []int, limit int) map[int][]string {
+	functions := make(map[int][]string)
+	count := 0
+	for _, id := range workspaceId {
+
+		db.Scan(EncodeEmbeddingFuncFlagPrefixWithWorkspaceId(0, id), func(key, value []byte) bool {
+			workspaceId, _, fn := DecodeEmbeddingFuncFlagKey(string(key))
+
+			functions[workspaceId] = append(functions[workspaceId], fn)
+			count++
+			if limit > 0 && count >= limit {
+				return false
+			}
+
+			return true
+		})
+
+		if count >= limit {
+			break
+		}
+	}
+
+	return functions
+}
+
 func RemoveComputedEmbeddings(workspace2Functions map[int][]string) (map[int][]string, error) {
 	result := make(map[int][]string)
 	needRemove := [][]byte{}
 	for workspaceId, functions := range workspace2Functions {
 		var filteredFunctions []string
 		for _, fn := range functions {
-			_, err := db.Get(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 1))
+			v, err := db.Get(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 1))
 			if err != nil {
-				// Function is not being embedded yet, keep it in the result
-				filteredFunctions = append(filteredFunctions, fn)
-			} else {
+				continue
+			}
+
+			if len(string(v)) > 0 {
 				needRemove = append(needRemove, EncodeEmbeddingFuncFlagKey(workspaceId, fn, 0))
+			} else {
+				filteredFunctions = append(filteredFunctions, fn)
 			}
 		}
 
@@ -343,7 +377,7 @@ func UpdateEmbeddingFunctionsFlag(workspace2Functions map[int][]string) error {
 		for workspaceId, functions := range workspace2Functions {
 			for _, fn := range functions {
 				batch.Delete(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 0))
-				batch.Put(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 1), nil)
+				batch.Put(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 1), []byte("1"))
 			}
 		}
 		batch.Commit()

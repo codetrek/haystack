@@ -19,11 +19,12 @@ type IndexingStatus struct {
 }
 
 type Workspace struct {
-	Id               int            `json:"id"`
-	Path             string         `json:"path"`
-	UseGlobalFilters bool           `json:"use_global_filters"`
-	Filters          *types.Filters `json:"filters,omitempty" optional:"true"`
-	TotalFiles       int            `json:"total_files"`
+	Id                int            `json:"id"`
+	Path              string         `json:"path"`
+	UseGlobalFilters  bool           `json:"use_global_filters"`
+	Filters           *types.Filters `json:"filters,omitempty" optional:"true"`
+	TotalFiles        int            `json:"total_files"`
+	EnableSymbolParse bool           `json:"enable_symbol_parse"`
 
 	CreatedAt    time.Time `json:"created_time"`
 	LastAccessed time.Time `json:"last_accessed_time"`

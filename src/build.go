@@ -67,10 +67,13 @@ func main() {
 			continue
 		}
 
+		pwd, _ := os.Getwd()
+		deps := filepath.Join(pwd, "..", "deps", fmt.Sprintf("%s-%s", t.GOOS, t.GOARCH))
+
 		zipName := fmt.Sprintf("%s-%s-%s-v%s.zip", appName, t.GOOS, t.GOARCH, version)
 		zipPath := filepath.Join(outputDir, zipName)
 
-		if err := zipFile(zipPath, binPath); err != nil {
+		if err := zipFile(zipPath, binPath, deps); err != nil {
 			fmt.Fprintf(os.Stderr, "❌ Zip failed: %v\n", err)
 		} else {
 			fmt.Printf("✅ Built and zipped: %s\n", zipName)
@@ -91,7 +94,7 @@ func getVersion() string {
 	return strings.TrimSpace(string(data))
 }
 
-func zipFile(zipPath, filePath string) error {
+func zipFile(zipPath, filePath string, depsDir string) error {
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
 		return err
@@ -101,6 +104,7 @@ func zipFile(zipPath, filePath string) error {
 	w := zip.NewWriter(zipFile)
 	defer w.Close()
 
+	// Add the main binary file
 	fileToZip, err := os.Open(filePath)
 	if err != nil {
 		return err
@@ -125,5 +129,75 @@ func zipFile(zipPath, filePath string) error {
 	}
 
 	_, err = io.Copy(writer, fileToZip)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add all files from the deps directory if it exists
+	if _, err := os.Stat(depsDir); !os.IsNotExist(err) {
+		err = filepath.Walk(depsDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			// Calculate relative path for the zip file entry
+			relPath, err := filepath.Rel(depsDir, path)
+			if err != nil {
+				return err
+			}
+
+			// For directories, create a directory entry in the zip
+			if info.IsDir() {
+				// Ensure directory path ends with separator to be recognized as a directory
+				if !strings.HasSuffix(relPath, string(os.PathSeparator)) {
+					relPath += string(os.PathSeparator)
+				}
+
+				zipHeader, err := zip.FileInfoHeader(info)
+				if err != nil {
+					return err
+				}
+				zipHeader.Name = relPath
+				zipHeader.Method = zip.Deflate
+				fmt.Printf("Adding directory %s\n", path)
+
+				_, err = w.CreateHeader(zipHeader)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+
+			// Open the file
+			file, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer file.Close()
+
+			// Create zip header
+			zipHeader, err := zip.FileInfoHeader(info)
+			if err != nil {
+				return err
+			}
+			zipHeader.Name = relPath
+			zipHeader.Method = zip.Deflate
+			fmt.Printf("Adding %s\n", path)
+
+			// Create writer and copy file contents
+			zipWriter, err := w.CreateHeader(zipHeader)
+			if err != nil {
+				return err
+			}
+
+			_, err = io.Copy(zipWriter, file)
+			return err
+		})
+
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

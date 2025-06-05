@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 
+	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/shared/types"
@@ -106,6 +107,12 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws.UseGlobalFilters = request.UseGlobalFilters
 	ws.Filters = request.Filters
 
+	forceRefresh := false
+	if conf.Get().Symbols.EnableFeature {
+		forceRefresh = !ws.EnableSymbolParse && request.EnableSymbolParse
+		ws.EnableSymbolParse = request.EnableSymbolParse
+	}
+
 	err = ws.Save()
 	if err != nil {
 		log.Printf("[Server] Update workspace `%s`: failed to save: %v", request.Workspace, err)
@@ -124,6 +131,10 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			Id: ws.Id,
 		},
 	})
+
+	if forceRefresh {
+		indexer.Sync(ws, true)
+	}
 }
 
 func handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -258,7 +269,7 @@ func handleSyncAllWorkspaces(w http.ResponseWriter, r *http.Request) {
 	workspaces := workspace.GetAllPaths()
 	for _, workspacePath := range workspaces {
 		if ws, err := workspace.GetByPath(workspacePath); err == nil {
-			indexer.Sync(ws)
+			indexer.Sync(ws, false)
 		}
 	}
 
@@ -291,7 +302,7 @@ func handleSyncWorkspace(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[Server] Requesting sync for workspace `%s`", ws.Path)
 
-	indexer.Sync(ws)
+	indexer.Sync(ws, false)
 
 	json.NewEncoder(w).Encode(types.CommonResponse{
 		Code:    0,
