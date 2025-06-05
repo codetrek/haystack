@@ -1,6 +1,9 @@
 package invertedindex
 
-import "strings"
+import (
+	"log"
+	"strings"
+)
 
 const MaxInvertedIndexSize = 1000
 
@@ -14,7 +17,7 @@ func Search(tableId int, query string, limit int) SearchResult {
 		DocIds: make(map[string]struct{}),
 	}
 
-	db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
+	err := db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
 		docids := decodeInvertedValue(value)
 		if len(docids) > 0 {
 			for _, docid := range docids {
@@ -28,6 +31,10 @@ func Search(tableId int, query string, limit int) SearchResult {
 
 		return true
 	})
+
+	if err != nil {
+		log.Printf("[Inverted] Error searching for %s: %v", query, err)
+	}
 	return results
 }
 
@@ -36,21 +43,33 @@ func GetDocs(tableId int, key string) SearchResult {
 		DocIds: make(map[string]struct{}),
 	}
 
-	db.Scan(encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
+	err := db.Scan(encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
 		for _, docid := range decodeInvertedValue(value) {
 			results.DocIds[docid] = struct{}{}
 		}
 		return true
 	})
 
+	if err != nil {
+		log.Printf("[Inverted] Error getting docs for key %s: %v", key, err)
+	}
 	return results
 }
 
 // Update updates the keywords index for a document
 // It will add the document to the keywords index and remove the document from the keywords index
 // if len(newKeywords) == 0, it will remove the document from the keywords index
-// This function MUSTE be called in dbMPSCQueue
+// This function MUST be called in dbMPSCQueue
 func Update(tableId int, docid string, newKeywords, oldKeywords []string) {
+	// Handle the case of complete deletion
+	if len(newKeywords) == 0 {
+		if len(oldKeywords) > 0 {
+			removeIndex(tableId, docid, oldKeywords)
+		}
+		return
+	}
+
+	// Handle the case of complete addition
 	if len(oldKeywords) == 0 {
 		updateIndex(tableId, docid, newKeywords)
 		return
@@ -72,8 +91,8 @@ func Update(tableId int, docid string, newKeywords, oldKeywords []string) {
 		}
 	}
 
-	removedWords := []string{}
-	newWords := []string{}
+	removedWords := make([]string, 0, len(oldKeywords))
+	newWords := make([]string, 0, len(newKeywords))
 
 	// Find the words that are added to the current document
 	for _, kw := range newKeywords {

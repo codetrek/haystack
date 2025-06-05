@@ -166,7 +166,7 @@ var rewriteIndex = func(batch pebble.Batch, index *InvertedIndex, maxKeywordInde
 			}
 		}
 
-		ids := []string{}
+		ids := make([]string, 0, len(docids))
 		for id := range docids {
 			ids = append(ids, id)
 		}

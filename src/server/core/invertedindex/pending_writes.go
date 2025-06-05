@@ -141,7 +141,10 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 				continue
 			}
 
-			removeDocumentsFromInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, maxKeywordIndexSize)
+			err := removeDocumentsFromInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, maxKeywordIndexSize)
+			if err != nil {
+				log.Printf("[Inverted] Error removing documents from inverted index: %v", err)
+			}
 			delete(wp.InvertedIndex, kw)
 
 			// delete empty table
