@@ -273,3 +273,88 @@ func handleSearchSymbols(w http.ResponseWriter, r *http.Request) {
 		Data:    result,
 	})
 }
+
+func handleSearchPrompts(w http.ResponseWriter, r *http.Request) {
+	var request types.SearchPromptRequest
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if request.Workspace == "" {
+		json.NewEncoder(w).Encode(types.SearchPromptsResponse{
+			Code:    1,
+			Message: "Workspace is required",
+		})
+		return
+	}
+
+	limit := conf.Get().Server.Search.Limit
+	if request.Limit != nil {
+		if request.Limit.MaxResults > 0 && request.Limit.MaxResults < limit.MaxResults {
+			limit.MaxResults = request.Limit.MaxResults
+		}
+
+		if request.Limit.MaxResultsPerFile > 0 && request.Limit.MaxResultsPerFile < limit.MaxResultsPerFile {
+			limit.MaxResultsPerFile = request.Limit.MaxResultsPerFile
+		}
+	}
+	request.Limit = &limit
+
+	// Normalize the workspace path
+	// If the path is not absolute, return an error
+	workspacePath := utils.NormalizePath(request.Workspace)
+	if !filepath.IsAbs(workspacePath) {
+		json.NewEncoder(w).Encode(types.SearchPromptsResponse{
+			Code:    1,
+			Message: "Workspace is not absolute",
+		})
+		return
+	}
+
+	// Get the workspace by path
+	// If the workspace is not found, return an error
+	workspace, err := workspace.GetByPath(workspacePath)
+	if err != nil {
+		json.NewEncoder(w).Encode(types.SearchPromptsResponse{
+			Code:    1,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	// If the query is empty, return an error
+	if request.Query == "" {
+		json.NewEncoder(w).Encode(types.SearchPromptsResponse{
+			Code:    1,
+			Message: "Query is required",
+		})
+		return
+	}
+
+	start := time.Now()
+	result, err := searcher.PromptSearch(workspace, &request)
+	defer func() {
+		req, _ := json.Marshal(request)
+		log.Printf("[HTTP] Process /api/v1/search/prompts `%s`: took %s, found %d results, err: %s",
+			string(req), time.Since(start), len(result), err)
+	}()
+
+	if err != nil {
+		json.NewEncoder(w).Encode(types.SearchPromptsResponse{
+			Code:    1,
+			Message: err.Error(),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(types.SearchPromptsResponse{
+		Code:    0,
+		Message: "Ok",
+		Data:    result,
+	})
+}

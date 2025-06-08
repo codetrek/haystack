@@ -49,7 +49,7 @@ func getOrCreateEmbeddingDBPath(workspaceId int) (string, error) {
 	return dbPath, nil
 }
 
-func postMessage(api string, jsonData []byte) (string, error) {
+func PostMessage(api string, jsonData []byte) (string, error) {
 	req, err := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/%s", conf.Get().Symbols.EmbeddingPort, api), bytes.NewBuffer(jsonData))
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %v", err)
@@ -78,7 +78,7 @@ func postMessage(api string, jsonData []byte) (string, error) {
 }
 
 func EmbeddingStop() (QueryResponse, error) {
-	response, err := postMessage("stop", nil)
+	response, err := PostMessage("stop", nil)
 	if err != nil {
 		return QueryResponse{}, err
 	}
@@ -93,7 +93,7 @@ func EmbeddingStop() (QueryResponse, error) {
 }
 
 func EmbeddingHealth() (QueryResponse, error) {
-	response, err := postMessage("health", nil)
+	response, err := PostMessage("health", nil)
 	if err != nil {
 		return QueryResponse{}, err
 	}
@@ -129,7 +129,7 @@ func EmbeddingAddSymbolsToDB(workspace2Functions map[int][]string) (int, error) 
 		}
 
 		// Send to the API endpoint
-		response, err := postMessage("embeddingSymbolToDB", jsonData)
+		response, err := PostMessage("embeddingSymbolToDB", jsonData)
 		if err != nil {
 			log.Printf("Failed to send functions for embedding: %v", err)
 			return 0, err
@@ -172,7 +172,7 @@ func EmbeddingSearch(workspaceId int, query string, limit types.SearchLimit) (Qu
 	}
 
 	// Send to the API endpoint
-	response, err := postMessage("query", jsonData)
+	response, err := PostMessage("query", jsonData)
 	if err != nil {
 		log.Printf("Failed to send query for embedding: %v", err)
 		return QueryResponse{}, err
@@ -190,7 +190,7 @@ func EmbeddingSearch(workspaceId int, query string, limit types.SearchLimit) (Qu
 
 func EmbeddingBuildIndex() (EmbeddingResponse, error) {
 	// Send to the API endpoint
-	response, err := postMessage("buildIndexIfNeeded", nil)
+	response, err := PostMessage("buildIndexIfNeeded", nil)
 
 	if err != nil {
 		log.Printf("Failed to send query for embedding: %v", err)
@@ -225,7 +225,7 @@ func EmbeddingRemoveDB(workspaceId int) (EmbeddingResponse, error) {
 	}
 
 	// Send to the API endpoint
-	response, err := postMessage("removeDB", jsonData)
+	response, err := PostMessage("removeDB", jsonData)
 	if err != nil {
 		log.Printf("Failed to send query for embedding: %v", err)
 		return EmbeddingResponse{}, err

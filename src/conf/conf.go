@@ -38,7 +38,7 @@ var (
 	DefaultInclude = []string{"**/*"}
 	DefaultExclude = []string{
 		"node_modules/", "dist/", "build/", "vendor/", "out/", "obj/", "log/", "logs/", "debug/", "release/",
-		".*", "*.log", "*.log.*",
+		".*", "*.log", "*.log.*", "!.github/",
 	}
 )
 
@@ -71,11 +71,12 @@ type Server struct {
 
 type Symbols struct {
 	EnableFeature                 bool `yaml:"enable_feature,omitempty"`
+	EnablePromptSearch            bool `yaml:"enable_prompt_search,omitempty"`
 	DefaultEnableSymbolParse      bool `yaml:"default_enable_symbol_parse,omitempty"`
 	EmbeddingPort                 int  `yaml:"embedding_port,omitempty"`
 	EnvInstalled                  bool `yaml:"env_installed,omitempty"`
 	DefaultEnableEmbeddingSymbols bool `yaml:"default_enable_embedding_symbols,omitempty"`
-	DefaultEnableEmbeddingPrompt  bool `yaml:"default_enable_embedding_prompt,omitempty"`
+	DefaultEnablePromptSearch     bool `yaml:"default_enable_embedding_prompt,omitempty"`
 }
 
 type Conf struct {
@@ -132,11 +133,12 @@ var conf = &Conf{
 	},
 	Symbols: Symbols{
 		EnableFeature:                 false,
+		EnablePromptSearch:            false,
 		DefaultEnableSymbolParse:      false,
 		EmbeddingPort:                 DefaultEmbeddingPort,
 		EnvInstalled:                  false,
 		DefaultEnableEmbeddingSymbols: false,
-		DefaultEnableEmbeddingPrompt:  false,
+		DefaultEnablePromptSearch:     false,
 	},
 
 	BinPath: BinPath{

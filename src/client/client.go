@@ -27,6 +27,8 @@ func processCommand(args []string) {
 		handleSearchFiles(args[1:])
 	case "symbols":
 		handleSymbols(args[1:])
+	case "prompts":
+		handlePrompts(args[1:])
 	case "workspace":
 		handleWorkspace(args[1:])
 	case "server":
@@ -51,6 +53,7 @@ func printUsage() {
 	fmt.Println("  version         Show current version")
 	fmt.Println("  search          Search for documents matching the query")
 	fmt.Println("  files           Search for files matching the query")
+	fmt.Println("  prompts         Search for prompts matching the query")
 	fmt.Println("  server          Server commands")
 	fmt.Println("  workspace       Workspace commands")
 	fmt.Println("  help <command>  Show help for a specific command")

@@ -19,6 +19,7 @@ type ToolName string
 const (
 	HaystackSearch ToolName = "HaystackSearch"
 	HaystackFiles  ToolName = "HaystackFiles"
+	HaystackPromptSearch ToolName = "HaystackPromptSearch"
 )
 
 var (
@@ -115,6 +116,26 @@ func registerMCPTools(mcpServer *server.MCPServer) {
 			Desc("Maximum number of results to return. \n"+
 				fmt.Sprintf("Currently, the default limit is %d.\n", config.Client.DefaultLimit.MaxFilesResults))),
 	), mcptools.SearchFiles)
+
+	mcpServer.AddTool(mcp.NewTool(string(HaystackPromptSearch),
+		mcp.WithDescription("Search for prompts in current project, supports fuzzy matching "+
+			"on prompt names and attempts to return a list of the most relevant prompts"),
+		mcp.WithString("workspace",
+			mcp.Description("The workspace to search in, normally it's the absolute path to the project directory, "+
+				"e.g. /home/user/projects/project1. Please always passing current workspace path."),
+			mcp.Required(),
+		),
+		mcp.WithString("query",
+			mcp.Description("The search query which is case-insensitive."),
+		),
+		mcp.WithString("path",
+			mcp.Description("The path to search in, related to workspace. e.g. components/"),
+			mcp.Required(),
+		),
+		mcp.WithNumber("limit",
+			mcp.Description("Maximum number of results to return. \n"+
+				fmt.Sprintf("Currently, the default limit is %d.\n", config.Client.DefaultLimit.MaxFilesResults))),
+	), mcptools.SearchPromtToolHandler)
 
 	log.Println("[MCP] Tools registered")
 }

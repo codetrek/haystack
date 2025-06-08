@@ -18,20 +18,34 @@ import (
 
 var total_embedding int
 
+type InitResult struct {
+	Success bool
+	Error   error
+	Message string
+}
+
 type EmbeddingEngine struct {
-	stop chan struct{}
+	stop        chan struct{}
+	initialized chan InitResult
 }
 
 func NewEmbeddingEngine() *EmbeddingEngine {
 	p := &EmbeddingEngine{
-		stop: make(chan struct{}),
+		stop:        make(chan struct{}),
+		initialized: make(chan InitResult, 1),
 	}
 	return p
 }
 
 func (p *EmbeddingEngine) Start(wg *sync.WaitGroup) {
-	if !conf.Get().Symbols.EnvInstalled || !conf.Get().Symbols.EnableFeature {
+	if !conf.Get().Symbols.EnvInstalled || !(conf.Get().Symbols.EnableFeature || conf.Get().Symbols.EnablePromptSearch) {
 		log.Println("[EmbeddingEngine] EmbeddingEngine did not start")
+		p.initialized <- InitResult{
+			Success: false,
+			Error:   nil,
+			Message: "Environment not installed or feature disabled",
+		}
+		close(p.initialized)
 		return
 	}
 
@@ -47,8 +61,22 @@ func (p *EmbeddingEngine) Start(wg *sync.WaitGroup) {
 
 		if err := p.startEmbeddingProcess(); err != nil {
 			log.Printf("[EmbeddingEngine] Failed to start embedding child process: %v", err)
+			p.initialized <- InitResult{
+				Success: false,
+				Error:   err,
+				Message: "Failed to start embedding child process",
+			}
+			close(p.initialized)
 			return
 		}
+
+		log.Println("[EmbeddingEngine] EmbeddingEngine started successfully")
+		p.initialized <- InitResult{
+			Success: true,
+			Error:   nil,
+			Message: "EmbeddingEngine started successfully",
+		}
+		close(p.initialized)
 
 		for {
 			select {

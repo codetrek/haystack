@@ -5,12 +5,13 @@ import (
 )
 
 type Workspace struct {
-	Id                int      `json:"id"`
-	Path              string   `json:"path"`
-	TotalFiles        int      `json:"total_files"`
-	UseGlobalFilters  bool     `json:"use_global_filters"`
-	Filters           *Filters `json:"filters,omitempty" optional:"true"`
-	EnableSymbolParse bool     `json:"enable_symbol_parse"`
+	Id                 int      `json:"id"`
+	Path               string   `json:"path"`
+	TotalFiles         int      `json:"total_files"`
+	UseGlobalFilters   bool     `json:"use_global_filters"`
+	Filters            *Filters `json:"filters,omitempty" optional:"true"`
+	EnableSymbolParse  bool     `json:"enable_symbol_parse"`
+	EnablePromptSearch bool     `json:"enable_prompt_search,omitempty"`
 
 	CreatedAt    time.Time `json:"created_time"`
 	LastAccessed time.Time `json:"last_accessed_time"`

@@ -9,6 +9,7 @@ import (
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/documents"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
+	"github.com/ai-microsoft/haystack/server/core/prompts"
 	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/symbols"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
@@ -65,6 +66,12 @@ func Run() {
 
 	if err := symbols.Init(db, mpsc); err != nil {
 		log.Fatal("[Server] Error initializing symbols:", err)
+		running.Shutdown()
+		return
+	}
+
+	if err := prompts.Init(db, mpsc); err != nil {
+		log.Fatal("[Server] Error initializing prompts:", err)
 		running.Shutdown()
 		return
 	}

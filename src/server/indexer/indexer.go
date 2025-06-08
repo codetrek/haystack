@@ -17,6 +17,7 @@ import (
 var (
 	scanner         = NewScanner()
 	parser          = NewParser()
+	promptScanner   = NewPromptScanner()
 	writer          = NewWriter()
 	symbolParser    = NewSymbolParser()
 	embeddingEngine = NewEmbeddingEngine()
@@ -28,6 +29,7 @@ func Run(wg *sync.WaitGroup) {
 
 	scanner.Start(wg)
 	parser.Start(wg)
+	promptScanner.Start(wg)
 	writer.Start(wg)
 	symbolParser.Start(wg)
 	embeddingEngine.Start(wg)
@@ -38,6 +40,7 @@ func Run(wg *sync.WaitGroup) {
 		log.Println("[Indexer] Stopping...")
 		scanner.Stop()
 		parser.Stop()
+		promptScanner.Stop()
 		writer.Stop()
 		symbolParser.Stop()
 		embeddingEngine.Stop()

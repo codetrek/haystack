@@ -42,16 +42,17 @@ func GetAll() []types.Workspace {
 		}
 
 		result = append(result, types.Workspace{
-			Id:                workspace.Id,
-			Path:              workspace.Path,
-			CreatedAt:         workspace.CreatedAt,
-			TotalFiles:        totalFiles,
-			UseGlobalFilters:  workspace.UseGlobalFilters,
-			Filters:           workspace.Filters,
-			EnableSymbolParse: workspace.EnableSymbolParse,
-			LastAccessed:      workspace.LastAccessed,
-			LastFullSync:      workspace.LastFullSync,
-			Indexing:          workspace.indexingStatus != nil,
+			Id:                 workspace.Id,
+			Path:               workspace.Path,
+			CreatedAt:          workspace.CreatedAt,
+			TotalFiles:         totalFiles,
+			UseGlobalFilters:   workspace.UseGlobalFilters,
+			Filters:            workspace.Filters,
+			EnableSymbolParse:  workspace.EnableSymbolParse,
+			EnablePromptSearch: workspace.EnablePromptSearch,
+			LastAccessed:       workspace.LastAccessed,
+			LastFullSync:       workspace.LastFullSync,
+			Indexing:           workspace.indexingStatus != nil,
 		})
 	}
 
@@ -131,12 +132,13 @@ func Create(workspacePath string) (*Workspace, error) {
 	}
 
 	workspace = &Workspace{
-		Id:                id,
-		Path:              workspacePath,
-		UseGlobalFilters:  true,
-		EnableSymbolParse: conf.Get().Symbols.DefaultEnableSymbolParse,
-		CreatedAt:         time.Now(),
-		LastAccessed:      time.Now(),
+		Id:                 id,
+		Path:               workspacePath,
+		UseGlobalFilters:   true,
+		EnableSymbolParse:  conf.Get().Symbols.DefaultEnableSymbolParse,
+		EnablePromptSearch: conf.Get().Symbols.DefaultEnablePromptSearch,
+		CreatedAt:          time.Now(),
+		LastAccessed:       time.Now(),
 	}
 
 	if err := workspace.Save(); err != nil {
