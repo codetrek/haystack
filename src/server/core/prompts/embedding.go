@@ -14,7 +14,6 @@ type EmbeddingResponse struct {
 }
 
 func EmbeddingText(text string) ([]float32, error) {
-
 	requestData := map[string]interface{}{
 		"text": text,
 	}
@@ -35,21 +34,21 @@ func EmbeddingText(text string) ([]float32, error) {
 		return nil, err
 	}
 
-    embeddingMap := es.Embedding
-    size := len(embeddingMap)
-    result := make([]float32, size)
+	embeddingMap := es.Embedding
+	size := len(embeddingMap)
+	result := make([]float32, size)
 
-    keys := make([]int, 0, size)
-    for k := range embeddingMap {
-        var i int
-        fmt.Sscanf(k, "%d", &i)
-        keys = append(keys, i)
-    }
-    sort.Ints(keys)
+	keys := make([]int, 0, size)
+	for k := range embeddingMap {
+		var i int
+		fmt.Sscanf(k, "%d", &i)
+		keys = append(keys, i)
+	}
+	sort.Ints(keys)
 
-    for i, k := range keys {
-        result[i] = embeddingMap[fmt.Sprintf("%d", k)]
-    }
+	for i, k := range keys {
+		result[i] = embeddingMap[fmt.Sprintf("%d", k)]
+	}
 
 	return result, nil
 }

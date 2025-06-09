@@ -112,7 +112,7 @@ func EmbeddingAddSymbolsToDB(workspace2Functions map[int][]string) (int, error) 
 	for workspaceId, functions := range workspace2Functions {
 		dbPath, err := getOrCreateEmbeddingDBPath(workspaceId)
 		if err != nil {
-			log.Printf("Failed to get embedding dbPath for workspace %d: %v", workspaceId, err)
+			log.Printf("[Symbols] Error: Failed to get embedding dbPath for workspace %d: %v", workspaceId, err)
 			return 0, err
 		}
 
@@ -124,21 +124,20 @@ func EmbeddingAddSymbolsToDB(workspace2Functions map[int][]string) (int, error) 
 
 		jsonData, err := json.Marshal(requestData)
 		if err != nil {
-			log.Printf("Failed to marshal functions for embedding: %v", err)
+			log.Printf("[Symbols] Error: Failed to marshal functions for embedding: %v", err)
 			return 0, err
 		}
 
 		// Send to the API endpoint
 		response, err := PostMessage("embeddingSymbolToDB", jsonData)
 		if err != nil {
-			log.Printf("Failed to send functions for embedding: %v", err)
+			log.Printf("[Symbols] Error: Failed to send functions for embedding: %v", err)
 			return 0, err
 		}
 
 		var result EmbeddingResponse
 		err = json.Unmarshal([]byte(response), &result)
 		if err != nil {
-			fmt.Println("Failed to parse JSON:", err)
 			return 0, err
 		}
 
@@ -155,7 +154,7 @@ func EmbeddingAddSymbolsToDB(workspace2Functions map[int][]string) (int, error) 
 func EmbeddingSearch(workspaceId int, query string, limit types.SearchLimit) (QueryResponse, error) {
 	dbPath, err := getOrCreateEmbeddingDBPath(workspaceId)
 	if err != nil {
-		log.Printf("Failed to get embedding dbPath for workspace %d: %v", workspaceId, err)
+		log.Printf("[Symbols] Error: Failed to get embedding dbPath for workspace %d: %v", workspaceId, err)
 		return QueryResponse{}, err
 	}
 
@@ -167,21 +166,21 @@ func EmbeddingSearch(workspaceId int, query string, limit types.SearchLimit) (Qu
 
 	jsonData, err := json.Marshal(requestData)
 	if err != nil {
-		log.Printf("Failed to marshal query for embedding: %v", err)
+		log.Printf("[Symbols] Error: Failed to marshal query for embedding: %v", err)
 		return QueryResponse{}, err
 	}
 
 	// Send to the API endpoint
 	response, err := PostMessage("query", jsonData)
 	if err != nil {
-		log.Printf("Failed to send query for embedding: %v", err)
+		log.Printf("[Symbols] Error: Failed to send query for embedding: %v", err)
 		return QueryResponse{}, err
 	}
 
 	var result QueryResponse
 	err = json.Unmarshal([]byte(response), &result)
 	if err != nil {
-		fmt.Println("Failed to parse JSON:", err)
+		log.Printf("[Symbols] Error: Failed to parse JSON:%v", err)
 		return QueryResponse{}, err
 	}
 
@@ -193,14 +192,14 @@ func EmbeddingBuildIndex() (EmbeddingResponse, error) {
 	response, err := PostMessage("buildIndexIfNeeded", nil)
 
 	if err != nil {
-		log.Printf("Failed to send query for embedding: %v", err)
+		log.Printf("[Symbols] Error: Failed to send query for embedding: %v", err)
 		return EmbeddingResponse{}, err
 	}
 
 	var result EmbeddingResponse
 	err = json.Unmarshal([]byte(response), &result)
 	if err != nil {
-		fmt.Println("Failed to parse JSON:", err)
+		log.Printf("[Symbols] Error: Failed to parse JSON: %v", err)
 		return EmbeddingResponse{}, err
 	}
 
@@ -210,7 +209,7 @@ func EmbeddingBuildIndex() (EmbeddingResponse, error) {
 func EmbeddingRemoveDB(workspaceId int) (EmbeddingResponse, error) {
 	dbPath := getEmbeddingDBPath(workspaceId)
 	if _, statErr := os.Stat(dbPath); os.IsNotExist(statErr) {
-		log.Printf("Embedding DB for workspace %d does not exist", workspaceId)
+		log.Printf("[Symbols] Error: Embedding DB for workspace %d does not exist", workspaceId)
 		return EmbeddingResponse{}, nil
 	}
 
@@ -220,21 +219,21 @@ func EmbeddingRemoveDB(workspaceId int) (EmbeddingResponse, error) {
 
 	jsonData, err := json.Marshal(requestData)
 	if err != nil {
-		log.Printf("Failed to marshal query for embedding: %v", err)
+		log.Printf("[Symbols] Error: Failed to marshal query for embedding: %v", err)
 		return EmbeddingResponse{}, err
 	}
 
 	// Send to the API endpoint
 	response, err := PostMessage("removeDB", jsonData)
 	if err != nil {
-		log.Printf("Failed to send query for embedding: %v", err)
+		log.Printf("[Symbols] Error: Failed to send query for embedding: %v", err)
 		return EmbeddingResponse{}, err
 	}
 
 	var result EmbeddingResponse
 	err = json.Unmarshal([]byte(response), &result)
 	if err != nil {
-		fmt.Println("Failed to parse JSON:", err)
+		log.Printf("[Symbols] Error: Failed to parse JSON: %v", err)
 		return EmbeddingResponse{}, err
 	}
 

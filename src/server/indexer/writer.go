@@ -2,7 +2,6 @@ package indexer
 
 import (
 	"log"
-	"strings"
 	"sync"
 	"time"
 
@@ -74,7 +73,6 @@ func (w *Writer) run(wg *sync.WaitGroup) {
 func (w *Writer) processDocs(docs []*WriteDoc) {
 	newDocs := make(map[int][]*documents.Document)
 	existingDocs := make(map[int][]*documents.Document)
-	promptsData := make(map[*workspace.Workspace][]string)
 
 	for _, doc := range docs {
 		if doc.Workspace.IsDeleted() {
@@ -88,11 +86,6 @@ func (w *Writer) processDocs(docs []*WriteDoc) {
 		} else {
 			existingDocs[doc.Workspace.Id] = append(existingDocs[doc.Workspace.Id], doc.Document)
 		}
-
-		// If the document is a prompt, add it to the prompts data
-		if doc.Workspace.EnablePromptSearch && strings.HasSuffix(doc.Document.RelPath, ".prompt.md") {
-			promptsData[doc.Workspace] = append(promptsData[doc.Workspace], doc.Document.RelPath)
-		}
 	}
 
 	for workspaceID, docs := range newDocs {
@@ -101,11 +94,6 @@ func (w *Writer) processDocs(docs []*WriteDoc) {
 
 	for workspaceID, docs := range existingDocs {
 		documents.UpdateDocuments(workspaceID, docs)
-	}
-
-	// Send prompt data to prompt scanner channel instead of processing directly
-	for workspace, _prompts := range promptsData {
-		promptScanner.Add(workspace, _prompts)
 	}
 }
 

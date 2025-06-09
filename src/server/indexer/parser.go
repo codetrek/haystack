@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,6 +94,11 @@ func (p *Parser) processFile(file ParseFile) error {
 
 	if !oversize {
 		symbolParser.Add(file.Workspace, file.RelFilePath)
+	}
+
+	// If the document is a prompt, add it to the prompts data
+	if file.Workspace.EnablePromptSearch && strings.HasSuffix(doc.RelPath, ".prompt.md") {
+		promptParser.Add(file.Workspace, []string{doc.RelPath})
 	}
 
 	file.Workspace.AddIndexingFiles(1)

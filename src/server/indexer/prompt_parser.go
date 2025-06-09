@@ -14,24 +14,24 @@ type PromptData struct {
 	PromptPaths []string
 }
 
-type PromptScanner struct {
+type PromptParser struct {
 	prompts     chan *PromptData
 	stop        chan struct{}
 	done        chan struct{}
 	initialized bool
 }
 
-func NewPromptScanner() *PromptScanner {
-	return &PromptScanner{
+func NewPromptParser() *PromptParser {
+	return &PromptParser{
 		prompts: make(chan *PromptData, 64),
 		stop:    make(chan struct{}),
 		done:    make(chan struct{}),
 	}
 }
 
-func (ps *PromptScanner) Start(wg *sync.WaitGroup) {
+func (ps *PromptParser) Start(wg *sync.WaitGroup) {
 	if !conf.Get().Symbols.EnvInstalled || !conf.Get().Symbols.EnablePromptSearch {
-		log.Println("[Indexer] PromptScanner did not start: Environment not installed or feature disabled")
+		log.Println("[Indexer] PromptParser did not start: Environment not installed or feature disabled")
 		return
 	}
 
@@ -40,25 +40,25 @@ func (ps *PromptScanner) Start(wg *sync.WaitGroup) {
 	go ps.run(wg)
 }
 
-func (ps *PromptScanner) Stop() {
+func (ps *PromptParser) Stop() {
 	if !ps.initialized {
-		log.Println("[Indexer] PromptScanner was not started, nothing to stop")
+		log.Println("[Indexer] PromptParser was not started, nothing to stop")
 		return
 	}
 
 	close(ps.stop)
 	<-ps.done
-	log.Println("[Indexer] PromptScanner stopped")
+	log.Println("[Indexer] PromptParser stopped")
 }
 
-func (ps *PromptScanner) run(wg *sync.WaitGroup) {
-	log.Println("[Indexer] PromptScanner started, waiting for EmbeddingEngine to initialize...")
+func (ps *PromptParser) run(wg *sync.WaitGroup) {
+	log.Println("[Indexer] PromptParser started, waiting for EmbeddingEngine to initialize...")
 	defer wg.Done()
 
 	// Wait for embedding engine to initialize
 	initResult := <-embeddingEngine.initialized
 	if initResult.Success {
-		log.Println("[Indexer] PromptScanner: EmbeddingEngine initialized successfully, starting prompt processing...")
+		log.Println("[Indexer] PromptParser: EmbeddingEngine initialized successfully, starting prompt processing...")
 		for {
 			select {
 			case promptData := <-ps.prompts:
@@ -77,10 +77,9 @@ func (ps *PromptScanner) run(wg *sync.WaitGroup) {
 			}
 		}
 	}
-
 }
 
-func (ps *PromptScanner) processPromptData(promptData *PromptData) {
+func (ps *PromptParser) processPromptData(promptData *PromptData) {
 	if promptData.Workspace.IsDeleted() || len(promptData.PromptPaths) == 0 {
 		return
 	}
@@ -88,7 +87,7 @@ func (ps *PromptScanner) processPromptData(promptData *PromptData) {
 	prompts.SavePrompts(promptData.Workspace, promptData.PromptPaths)
 }
 
-func (ps *PromptScanner) Add(workspace *workspace.Workspace, promptPaths []string) {
+func (ps *PromptParser) Add(workspace *workspace.Workspace, promptPaths []string) {
 	if workspace.IsDeleted() || len(promptPaths) == 0 {
 		return
 	}

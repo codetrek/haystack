@@ -24,6 +24,7 @@ func Init(database pebble.DB, q *queue.Mpsc) error {
 
 func CloseAndWait() {
 	mpsc.RunTask(&queue.NopeTask{})
+	log.Println("[Prompts] Closed")
 
 	db = nil
 	mpsc = nil
