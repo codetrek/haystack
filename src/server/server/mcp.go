@@ -17,8 +17,8 @@ import (
 type ToolName string
 
 const (
-	HaystackSearch ToolName = "HaystackSearch"
-	HaystackFiles  ToolName = "HaystackFiles"
+	HaystackSearch       ToolName = "HaystackSearch"
+	HaystackFiles        ToolName = "HaystackFiles"
 	HaystackPromptSearch ToolName = "HaystackPromptSearch"
 )
 
@@ -57,7 +57,6 @@ func mcpInit() {
 
 	http.HandleFunc("/mcp/", func(w http.ResponseWriter, r *http.Request) {
 		sse.ServeHTTP(w, r)
-		log.Printf("[MCP] Request: %s %s", r.Method, r.URL.Path)
 	})
 	log.Println("[MCP] Server initialized at /mcp endpoint")
 }

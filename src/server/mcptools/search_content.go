@@ -80,36 +80,38 @@ func SearchContent(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallT
 		return ""
 	}
 
-	var printLine = func(tr *mcp.CallToolResult, line string) {
-		tr.Content = append(tr.Content, mcp.TextContent{
-			Type: "text",
-			Text: line,
-		})
+	var builder strings.Builder
+	var printLine = func(line string) {
+		builder.WriteString(line)
+		builder.WriteString("\n")
 	}
 
-	tr := &mcp.CallToolResult{}
-	printLine(tr, fmt.Sprintf("Found %d results in %d files%s", resultCount, len(results), toTruncated(truncate)))
-
+	printLine(fmt.Sprintf("Found %d results in %d files%s", resultCount, len(results), toTruncated(truncate)))
 	if len(results) == 0 {
-		printLine(tr, "No results found.")
-		return tr, nil
-	}
-
-	for _, result := range results {
-		printLine(tr, "")
-		printLine(tr, strings.Repeat("=", 20))
-		printLine(tr, fmt.Sprintf("File: %s, %d result%s", result.File, len(result.Lines), toTruncated(result.Truncate)))
-		for _, line := range result.Lines {
-			printLine(tr, strings.Repeat("-", 20))
-			for _, before := range line.Before {
-				printLine(tr, fmt.Sprintf("Line %d: %s", before.LineNumber, before.Content))
-			}
-			printLine(tr, fmt.Sprintf("Line %d: %s", line.Line.LineNumber, line.Line.Content))
-			for _, after := range line.After {
-				printLine(tr, fmt.Sprintf("Line %d: %s", after.LineNumber, after.Content))
+		printLine("No results found.")
+	} else {
+		for _, result := range results {
+			printLine("")
+			printLine(strings.Repeat("=", 20))
+			printLine(fmt.Sprintf("File: %s, %d result%s", result.File, len(result.Lines), toTruncated(result.Truncate)))
+			for _, line := range result.Lines {
+				printLine(strings.Repeat("-", 20))
+				for _, before := range line.Before {
+					printLine(fmt.Sprintf("Line %d: %s", before.LineNumber, before.Content))
+				}
+				printLine(fmt.Sprintf("Line %d: %s", line.Line.LineNumber, line.Line.Content))
+				for _, after := range line.After {
+					printLine(fmt.Sprintf("Line %d: %s", after.LineNumber, after.Content))
+				}
 			}
 		}
 	}
+
+	tr := &mcp.CallToolResult{}
+	tr.Content = append(tr.Content, mcp.TextContent{
+		Type: "text",
+		Text: builder.String(),
+	})
 
 	return tr, nil
 }
