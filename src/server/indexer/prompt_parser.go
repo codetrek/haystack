@@ -2,6 +2,9 @@ package indexer
 
 import (
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/ai-microsoft/haystack/conf"
@@ -84,7 +87,52 @@ func (ps *PromptParser) processPromptData(promptData *PromptData) {
 		return
 	}
 
-	prompts.SavePrompts(promptData.Workspace, promptData.PromptPaths)
+	var promptsToSave []prompts.PromptEmbeddingData
+
+	for _, relPath := range promptData.PromptPaths {
+		if !strings.HasSuffix(relPath, ".prompt.md") {
+			continue
+		}
+
+		fullPath := filepath.Join(promptData.Workspace.Path, relPath)
+		fileContent, err := os.ReadFile(fullPath)
+		if err != nil {
+			log.Printf("[Prompts] Error: Failed to read file %s: %v", relPath, err)
+			continue
+		}
+
+		if conf.Get().Symbols.EnablePromptSearch && conf.Get().Symbols.EnvInstalled && promptData.Workspace.EnablePromptSearch {
+			embedding_value := string(fileContent)
+			description := prompts.ExtractDescriptionFromPrompt(string(fileContent))
+			if description != "" {
+				embedding_value = description
+			}
+
+			embedding, err := prompts.EmbeddingText(embedding_value)
+			if err != nil {
+				log.Printf("[Prompts] Error: Failed to get embedding for file %s: %v", relPath, err)
+				continue
+			}
+
+			value, err := prompts.EncodeFloat32Vector(embedding)
+			if err != nil {
+				log.Printf("[Prompts] Error: Failed to encode embedding for file %s: %v", relPath, err)
+				continue
+			}
+
+			promptsToSave = append(promptsToSave, prompts.PromptEmbeddingData{
+				Key:   prompts.EncodePromptPathKey(promptData.Workspace.Id, relPath),
+				Value: value,
+			})
+		}
+	}
+
+	// Only run database operations if we have prompts to save
+	if len(promptsToSave) == 0 {
+		return
+	}
+
+	prompts.SavePrompts(promptsToSave)
 }
 
 func (ps *PromptParser) Add(workspace *workspace.Workspace, promptPaths []string) {
