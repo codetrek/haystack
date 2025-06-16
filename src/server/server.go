@@ -83,7 +83,15 @@ func Run() {
 		indexer.SyncIfNeeded(conf.Get().ForTest.Path)
 	}
 
-	server.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", conf.Get().Global.Port))
+	tcpAddr := ""
+	if conf.Get().Global.Port > 0 {
+		tcpAddr = fmt.Sprintf("127.0.0.1:%d", conf.Get().Global.Port)
+	}
+	server.StartServer(
+		wg,
+		tcpAddr,
+		conf.Get().Global.SocketPath,
+	)
 
 	wg.Wait()
 	documents.CloseAndWait()

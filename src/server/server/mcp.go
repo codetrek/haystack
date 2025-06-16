@@ -32,7 +32,7 @@ var (
 )
 
 // mcpInit initializes and sets up the Model Context Protocol (MCP) server
-func mcpInit() {
+func mcpInit(addr string) {
 	hooks := &server.Hooks{}
 
 	// Create a new MCP server instance
@@ -49,7 +49,7 @@ func mcpInit() {
 	registerMCPTools(mcpServer)
 
 	sse := server.NewSSEServer(mcpServer,
-		server.WithBaseURL(fmt.Sprintf("http://localhost:%d", conf.Get().Global.Port)),
+		server.WithBaseURL("http://"+addr),
 		server.WithStaticBasePath("/mcp"),
 		server.WithKeepAlive(true),
 		server.WithKeepAliveInterval(20*time.Second),

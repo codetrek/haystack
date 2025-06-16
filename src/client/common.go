@@ -2,9 +2,11 @@ package client
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -23,7 +25,21 @@ func serverRequest(api string, postData []byte) (*result, error) {
 		Timeout: 30 * time.Second,
 	}
 
-	apiURL := fmt.Sprintf("http://127.0.0.1:%d/api/v1%s", conf.Get().Global.Port, api)
+	var urlPrefix string
+	if conf.Get().Global.SocketPath != "" {
+		// Use Unix socket if configured
+		client.Transport = &http.Transport{
+			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", conf.Get().Global.SocketPath)
+			},
+		}
+		urlPrefix = "http://unixsocket"
+	} else {
+		// Otherwise use TCP
+		urlPrefix = fmt.Sprintf("http://127.0.0.1:%d", conf.Get().Global.Port)
+	}
+
+	apiURL := fmt.Sprintf("%s/api/v1%s", urlPrefix, api)
 
 	// Send request
 	resp, err := client.Post(

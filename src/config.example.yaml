@@ -12,6 +12,8 @@
 
 global:
   data_path: # the path to store the database files, default is $HOME/.haystack/index
+  port: # the TCP port to listen on
+  socket_path: # the path to the Unix socket to listen on
 
 client:
   # client mode specific configuration

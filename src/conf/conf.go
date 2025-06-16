@@ -43,8 +43,9 @@ var (
 )
 
 type Global struct {
-	DataPath string `yaml:"data_path,omitempty"`
-	Port     int    `yaml:"port,omitempty"`
+	DataPath       string `yaml:"data_path,omitempty"`
+	Port           int    `yaml:"port,omitempty"`
+	SocketPath     string `yaml:"socket_path,omitempty"`
 }
 
 type Client struct {
@@ -209,7 +210,21 @@ func Load() error {
 	}
 
 	if conf.Global.Port <= 0 || conf.Global.Port > 65535 {
-		conf.Global.Port = DefaultPort
+		// If port is not set or invalid, check if socket filename is set
+		if conf.Global.SocketPath != "" {
+			// If domain socket is not enabled, disable TCP server
+			conf.Global.Port = 0 // 0 means no TCP server
+		} else {
+			// If domain socket is enabled, set default port to enable TCP server
+			conf.Global.Port = DefaultPort
+		}
+	}
+
+	if conf.Global.SocketPath != "" {
+		// If socket filename is not an absolute path, make it absolute
+		if !filepath.IsAbs(conf.Global.SocketPath) {
+			conf.Global.SocketPath = filepath.Join(os.TempDir(), conf.Global.SocketPath)
+		}
 	}
 
 	if conf.Server.Search.Limit.MaxResults <= 0 || conf.Server.Search.Limit.MaxResults > DefaultMaxResults {

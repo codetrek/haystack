@@ -181,7 +181,7 @@ func startTestServer(t *testing.T) func() {
 	indexer.Run(wg)
 	searcher.Run(wg)
 
-	go server.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", testPort))
+	go server.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", testPort), "")
 
 	// Wait for server to start
 	time.Sleep(100 * time.Millisecond)
