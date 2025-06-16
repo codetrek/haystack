@@ -113,6 +113,11 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ws.EnableSymbolParse = request.EnableSymbolParse
 	}
 
+	if conf.Get().Symbols.EnablePromptSearch {
+		forceRefresh = !ws.EnablePromptSearch && request.EnablePromptSearch
+		ws.EnablePromptSearch = request.EnablePromptSearch
+	}
+
 	err = ws.Save()
 	if err != nil {
 		log.Printf("[Server] Update workspace `%s`: failed to save: %v", request.Workspace, err)

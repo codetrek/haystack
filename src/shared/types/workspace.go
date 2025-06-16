@@ -36,10 +36,11 @@ type CreateWorkspaceResponse struct {
 }
 
 type UpdateWorkspaceRequest struct {
-	Workspace         string   `json:"workspace"`
-	UseGlobalFilters  bool     `json:"use_global_filters"`
-	Filters           *Filters `json:"filters,omitempty"`
-	EnableSymbolParse bool     `json:"symbol_parse"`
+	Workspace          string   `json:"workspace"`
+	UseGlobalFilters   bool     `json:"use_global_filters"`
+	Filters            *Filters `json:"filters,omitempty"`
+	EnableSymbolParse  bool     `json:"symbol_parse"`
+	EnablePromptSearch bool     `json:"prompt_search"`
 }
 
 type UpdateWorkspaceResponse struct {
