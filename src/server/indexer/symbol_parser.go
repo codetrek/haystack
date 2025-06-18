@@ -315,7 +315,7 @@ func (p *SymbolParser) run(id int, wg *sync.WaitGroup) {
 
 // Add queues a file for parsing
 func (p *SymbolParser) Add(workspace *workspace.Workspace, relPath string) {
-	if !conf.Get().Symbols.EnableFeature || !workspace.EnableSymbolParse || p.ctags == "" {
+	if !conf.Get().Symbols.EnableFeature || p.ctags == "" {
 		return
 	}
 	p.cacheMutex.Lock()
@@ -387,13 +387,12 @@ func (p *SymbolParser) processFileBatch(batch ParseBatch) error {
 		docsWithFunction, err := parseFunction(p.ctags, tmpFilePath, lang, batch.Workspace.Path)
 		if err != nil {
 			log.Printf("[SymbolParser] Error parsing symbols for language %s: %v", lang, err)
-			continue
-		}
-
-		// Add the parsed functions to the docs array
-		for _, docFunc := range docsWithFunction {
-			docsPaths[docFunc.RelPath] = true
-			docs = append(docs, docFunc)
+		} else {
+			// Add the parsed functions to the docs array
+			for _, docFunc := range docsWithFunction {
+				docsPaths[docFunc.RelPath] = true
+				docs = append(docs, docFunc)
+			}
 		}
 
 		// Clean up the temp file after processing

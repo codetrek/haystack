@@ -43,9 +43,9 @@ var (
 )
 
 type Global struct {
-	DataPath       string `yaml:"data_path,omitempty"`
-	Port           int    `yaml:"port,omitempty"`
-	SocketPath     string `yaml:"socket_path,omitempty"`
+	DataPath   string `yaml:"data_path,omitempty"`
+	Port       int    `yaml:"port,omitempty"`
+	SocketPath string `yaml:"socket_path,omitempty"`
 }
 
 type Client struct {
@@ -73,7 +73,6 @@ type Server struct {
 type Symbols struct {
 	EnableFeature                 bool `yaml:"enable_feature,omitempty"`
 	EnablePromptSearch            bool `yaml:"enable_prompt_search,omitempty"`
-	DefaultEnableSymbolParse      bool `yaml:"default_enable_symbol_parse,omitempty"`
 	EmbeddingPort                 int  `yaml:"embedding_port,omitempty"`
 	EnvInstalled                  bool `yaml:"env_installed,omitempty"`
 	DefaultEnableEmbeddingSymbols bool `yaml:"default_enable_embedding_symbols,omitempty"`
@@ -133,9 +132,8 @@ var conf = &Conf{
 		},
 	},
 	Symbols: Symbols{
-		EnableFeature:                 false,
+		EnableFeature:                 true,
 		EnablePromptSearch:            false,
-		DefaultEnableSymbolParse:      false,
 		EmbeddingPort:                 DefaultEmbeddingPort,
 		EnvInstalled:                  false,
 		DefaultEnableEmbeddingSymbols: false,

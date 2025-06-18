@@ -1,7 +1,11 @@
 # Changelog
 
-## [next]
+## [1.5.0]
+- Breaking change: Upgrade storage version to 1.3
 - Bugfix: Path filter with "\" seperate returns no result.
+- Optimize: Output search result in a single text block to improve GHC performance
+- Feat: Support Unix domain socket for Non-Windows platform
+- Feat: CTags based function parse and search
 
 ## [1.4.1]
 - Optimize wildcard search(e.g.: `microsoft*bookmark`), up to 5X+ speed up for cases.

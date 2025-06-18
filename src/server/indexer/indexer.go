@@ -98,7 +98,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 		}
 
 		// Add new file to the parser queue
-		parser.Add(workspace, relPath, false)
+		parser.Add(workspace, relPath)
 	} else {
 		stat, err := os.Stat(fullPath)
 		if err != nil || stat.IsDir() {
@@ -106,7 +106,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 			RemoveFile(workspace, relPath)
 		} else {
 			// Sync existing file to the parser queue
-			parser.Add(workspace, relPath, false)
+			parser.Add(workspace, relPath)
 		}
 	}
 
@@ -164,7 +164,7 @@ func RefreshFileIfNeeded(workspace *workspace.Workspace, doc *documents.Document
 
 	// If the file has been modified, add it to the parser queue
 	if stat.ModTime().UnixNano() != doc.ModifiedTime {
-		parser.Add(workspace, doc.RelPath, false)
+		parser.Add(workspace, doc.RelPath)
 	}
 
 	return false, nil

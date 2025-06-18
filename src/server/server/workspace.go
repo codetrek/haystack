@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/workspace"
 	"github.com/ai-microsoft/haystack/server/indexer"
 	"github.com/ai-microsoft/haystack/shared/types"
@@ -107,17 +106,6 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	ws.UseGlobalFilters = request.UseGlobalFilters
 	ws.Filters = request.Filters
 
-	forceRefresh := false
-	if conf.Get().Symbols.EnableFeature {
-		forceRefresh = !ws.EnableSymbolParse && request.EnableSymbolParse
-		ws.EnableSymbolParse = request.EnableSymbolParse
-	}
-
-	if conf.Get().Symbols.EnablePromptSearch {
-		forceRefresh = !ws.EnablePromptSearch && request.EnablePromptSearch
-		ws.EnablePromptSearch = request.EnablePromptSearch
-	}
-
 	err = ws.Save()
 	if err != nil {
 		log.Printf("[Server] Update workspace `%s`: failed to save: %v", request.Workspace, err)
@@ -136,10 +124,6 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 			Id: ws.Id,
 		},
 	})
-
-	if forceRefresh {
-		indexer.Sync(ws, true)
-	}
 }
 
 func handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {

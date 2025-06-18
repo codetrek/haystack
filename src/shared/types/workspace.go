@@ -10,7 +10,6 @@ type Workspace struct {
 	TotalFiles         int      `json:"total_files"`
 	UseGlobalFilters   bool     `json:"use_global_filters"`
 	Filters            *Filters `json:"filters,omitempty" optional:"true"`
-	EnableSymbolParse  bool     `json:"enable_symbol_parse"`
 	EnablePromptSearch bool     `json:"enable_prompt_search,omitempty"`
 
 	CreatedAt    time.Time `json:"created_time"`
@@ -39,7 +38,6 @@ type UpdateWorkspaceRequest struct {
 	Workspace          string   `json:"workspace"`
 	UseGlobalFilters   bool     `json:"use_global_filters"`
 	Filters            *Filters `json:"filters,omitempty"`
-	EnableSymbolParse  bool     `json:"symbol_parse"`
 	EnablePromptSearch bool     `json:"prompt_search"`
 }
 

@@ -12,12 +12,16 @@ type SearchResult struct {
 	WildDocIds map[string]struct{} `json:"wildDocIds,omitempty"`
 }
 
-func Search(tableId int, query string, limit int) SearchResult {
+func Search(tableId int, query string, limit int, filterKeyword func(string) bool) SearchResult {
 	results := SearchResult{
 		DocIds: make(map[string]struct{}),
 	}
 
 	err := db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
+		if filterKeyword != nil && !filterKeyword(string(key)) {
+			return true
+		}
+
 		docids := decodeInvertedValue(value)
 		if len(docids) > 0 {
 			for _, docid := range docids {

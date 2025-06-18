@@ -105,7 +105,7 @@ func (km *KeywordsMerger) run() {
 				humanize.Comma(int64(km.merging.MergedRowCount()-before.MergedRowCount())))
 		}
 
-		nextDelay = 1 * time.Second
+		nextDelay = 500 * time.Millisecond
 		if km.merging.WaitingForFlushCache {
 			nextDelay = 5 * time.Second
 		}
@@ -123,7 +123,7 @@ func (km *KeywordsMerger) run() {
 			// we've reached the end of the database
 			// reset the nextIter to the beginning
 			// and set a longer delay time
-			nextDelay = 3600 * time.Second
+			nextDelay = 8 * 3600 * time.Second
 		}
 	}
 }

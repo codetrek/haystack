@@ -154,7 +154,7 @@ func (s *Scanner) processWorkspace(w *workspace.Workspace, forceRefresh bool) er
 		}
 
 		if include.Match(fileInfo.Path, false) {
-			parser.Add(w, fileInfo.Path, forceRefresh)
+			parser.Add(w, fileInfo.Path)
 			fileCount++
 
 			w.AddIndexingTotalFiles(1)

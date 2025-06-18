@@ -98,9 +98,7 @@ func (p *EmbeddingEngine) processPendingEmbeddings() {
 		allWorkspace := workspace.GetAll()
 		workspaceIds := []int{}
 		for _, ws := range allWorkspace {
-			if ws.EnableSymbolParse {
-				workspaceIds = append(workspaceIds, ws.Id)
-			}
+			workspaceIds = append(workspaceIds, ws.Id)
 		}
 		if len(workspaceIds) == 0 {
 			break

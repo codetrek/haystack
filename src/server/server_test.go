@@ -665,7 +665,6 @@ func testSearchOperations(t *testing.T) {
 				var response types.SearchFilesResponse
 				err := json.NewDecoder(resp.Body).Decode(&response)
 				assert.NoError(t, err)
-
 				assert.Equal(t, 0, response.Code)
 
 				// Check if expected files are in results

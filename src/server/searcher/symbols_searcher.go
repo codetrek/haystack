@@ -118,24 +118,21 @@ func fuzzySearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbols
 		return result, err
 	}
 
-	countMap := make(map[string]int)
 	// Split query with space
 	// words := strings.Fields(req.Query)
 	words := wordsegmentation.Segment(englishCorpus, req.Query)
-	for _, word := range words {
-		r := invertedindex.Search(swt.InvertedId, strings.ToLower(word), -1)
-		log.Printf("word: %s, len docids(%d)", word, len(r.DocIds))
-		for docId := range r.DocIds {
-			countMap[docId]++
+	r := invertedindex.Search(swt.InvertedId, words[0], -1, func(k string) bool {
+		for _, word := range words {
+			if !strings.Contains(k, word) {
+				return false
+			}
 		}
-	}
+		return true
+	})
 
 	symbolFiles := make(map[string][]types.SymbolsFileMatch)
 	fileCount := 0
-	for docId, count := range countMap {
-		if count != len(words) {
-			continue
-		}
+	for docId := range r.DocIds {
 
 		fileCount++
 		if fileCount > req.Limit.MaxResultsPerFile {

@@ -24,7 +24,6 @@ type Workspace struct {
 	UseGlobalFilters   bool           `json:"use_global_filters"`
 	Filters            *types.Filters `json:"filters,omitempty" optional:"true"`
 	TotalFiles         int            `json:"total_files"`
-	EnableSymbolParse  bool           `json:"enable_symbol_parse"`
 	EnablePromptSearch bool           `json:"enable_prompt_search"`
 
 	CreatedAt    time.Time `json:"created_time"`

@@ -17,9 +17,8 @@ import (
 
 // ParseFile represents a file to be parsed
 type ParseFile struct {
-	Workspace    *workspace.Workspace
-	RelFilePath  string
-	ForceRefresh bool
+	Workspace   *workspace.Workspace
+	RelFilePath string
 }
 
 // Parser handles concurrent file parsing operations
@@ -84,9 +83,6 @@ func (p *Parser) processFile(file ParseFile) error {
 
 	// If the document is nil, it means the file has not changed
 	if doc == nil {
-		if file.ForceRefresh && !oversize {
-			symbolParser.Add(file.Workspace, file.RelFilePath)
-		}
 		return nil
 	}
 
@@ -107,11 +103,10 @@ func (p *Parser) processFile(file ParseFile) error {
 }
 
 // Add queues a file for parsing
-func (p *Parser) Add(workspace *workspace.Workspace, relPath string, forceRefresh bool) {
+func (p *Parser) Add(workspace *workspace.Workspace, relPath string) {
 	p.ch <- ParseFile{
-		Workspace:    workspace,
-		RelFilePath:  relPath,
-		ForceRefresh: forceRefresh,
+		Workspace:   workspace,
+		RelFilePath: relPath,
 	}
 }
 
