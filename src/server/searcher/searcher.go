@@ -180,7 +180,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	var pathFilter = ""
 	if req.Filters != nil {
 		pathFilter = strings.ToLower(
-			filepath.FromSlash(filepath.Clean(filepath.Join(workspace.Path, req.Filters.Path)) + "/"))
+			filepath.FromSlash(filepath.Clean(filepath.Join(workspace.Path, req.Filters.Path))))
 
 		if req.Filters.Include != "" {
 			includeFilter = utils.NewSimpleFilter(strings.Split(req.Filters.Include, ","))
