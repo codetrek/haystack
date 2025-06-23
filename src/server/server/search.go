@@ -104,7 +104,9 @@ func handleSearchContent(w http.ResponseWriter, r *http.Request) {
 		for _, result := range results {
 			totalHits += len(result.Lines)
 		}
-		req, _ := json.Marshal(request)
+		r := request
+		r.UnsavedFiles = nil
+		req, _ := json.Marshal(r)
 		log.Printf("[HTTP] Process /api/v1/search/content `%s`: took %s, found %d results in %d files, truncate: %t",
 			string(req), time.Since(start), totalHits, len(results), truncate)
 	}()

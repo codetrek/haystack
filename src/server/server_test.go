@@ -51,6 +51,7 @@ func TestServerEndToEnd(t *testing.T) {
 
 	time.Sleep(1000 * time.Millisecond)
 	t.Run("SearchBeforeUpdate", testSearchBeforeUpdate)
+	t.Run("SearchUnsavedFiles", testSearchUnsavedFiles)
 
 	t.Run("DocumentOperations", testDocumentOperations)
 
@@ -816,6 +817,78 @@ func testWorkspaceIndexing(t *testing.T) {
 		// Should return error code indicating workspace not found
 		assert.NotEqual(t, 0, response.Code)
 	})
+}
+
+func testSearchUnsavedFiles(t *testing.T) {
+	// 1. Modify main.go in memory without saving
+	unsavedContent := `package main
+
+import "fmt"
+
+func main() {
+	fmt.Println("This is the unsaved version of main.go")
+}
+`
+	// Use a path with a different separator to test normalization
+	unsavedFilePath := "main.go"
+	if os.PathSeparator == '\\' {
+		unsavedFilePath = strings.ReplaceAll(unsavedFilePath, "/", "\\")
+	}
+
+	searchReq := types.SearchContentRequest{
+		Workspace: testWorkspacePath,
+		Query:     "unsaved version",
+		UnsavedFiles: []types.UnsavedFile{
+			{
+				Path:    unsavedFilePath,
+				Content: unsavedContent,
+			},
+		},
+	}
+
+	searchResp := makeRequest(t, http.MethodPost, "/api/v1/search/content", searchReq)
+	assert.Equal(t, http.StatusOK, searchResp.StatusCode)
+
+	var searchResponse types.SearchContentResponse
+	err := json.NewDecoder(searchResp.Body).Decode(&searchResponse)
+	assert.NoError(t, err)
+
+	searchResults := searchResponse.Data.Results
+	// We should find a match in the unsaved content
+	assert.Len(t, searchResults, 1, "Should find one matching file")
+	foundUnsavedMatch := false
+	for _, result := range searchResults {
+		if filepath.ToSlash(result.File) == "main.go" {
+			foundUnsavedMatch = true
+			assert.Len(t, result.Lines, 1, "Should find one matching line in unsaved file")
+			if len(result.Lines) > 0 {
+				assert.Contains(t, result.Lines[0].Line.Content, "unsaved version", "The content should be from the unsaved version")
+			}
+		}
+	}
+	assert.True(t, foundUnsavedMatch, "Did not find match in unsaved main.go")
+
+	// 2. Now search for content that only exists in the original file on disk
+	searchReqDisk := types.SearchContentRequest{
+		Workspace: testWorkspacePath,
+		Query:     "original main.go",
+		UnsavedFiles: []types.UnsavedFile{
+			{
+				Path:    unsavedFilePath,
+				Content: unsavedContent,
+			},
+		},
+	}
+
+	searchRespDisk := makeRequest(t, http.MethodPost, "/api/v1/search/content", searchReqDisk)
+	assert.Equal(t, http.StatusOK, searchRespDisk.StatusCode)
+
+	var searchResponseDisk types.SearchContentResponse
+	err = json.NewDecoder(searchRespDisk.Body).Decode(&searchResponseDisk)
+	assert.NoError(t, err)
+
+	// We should NOT find a match, because the unsaved version should take precedence
+	assert.Len(t, searchResponseDisk.Data.Results, 0, "Should not find matches in the on-disk version of a file that is unsaved")
 }
 
 func testServerEdgeCases(t *testing.T) {

@@ -3,6 +3,8 @@ package searcher
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -230,6 +232,9 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	finalResults := []types.SearchContentResult{}
 	totalHits := 0
 
+	// Keep track of unsaved files to avoid searching them twice
+	unsavedFilePaths := make(map[string]bool)
+
 	beforeAfter := req.BeforeAfter
 	if beforeAfter < 0 {
 		beforeAfter = 0
@@ -237,86 +242,39 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 		beforeAfter = 5
 	}
 
-	// Match the content of the file line by line
-	var matchFileContent = func(doc *documents.Document) (types.SearchContentResult, error) {
-		fullPath := filepath.Join(workspace.Path, doc.RelPath)
-		fileMatch := types.SearchContentResult{
-			File:  filepath.Clean(doc.RelPath),
-			Lines: []types.LineMatch{},
-		}
-
-		// Read file and match line by line
-		file, err := os.Open(fullPath)
-		if err != nil {
-			log.Printf("[Searcher] Failed to open file:`%s`, error:%s", fullPath, err)
-			return fileMatch, err
-		}
-		defer file.Close()
-
-		scanner := bufio.NewScanner(file)
-
-		lines := []string{}
-		lineNumber := 1
-		fileHits := 0
-		for scanner.Scan() {
-			line := scanner.Text()
-			if beforeAfter > 0 {
-				lines = append(lines, line)
+	// Search in unsaved files
+	if len(req.UnsavedFiles) > 0 {
+		for _, unsavedFile := range req.UnsavedFiles {
+			if isTimeout() {
+				break
 			}
-			matches := engine.IsLineMatch(line)
-			if len(matches) > 0 {
-				for _, match := range matches {
-					fileMatch.Lines = append(fileMatch.Lines, types.LineMatch{
-						Line: types.SearchContentLine{
-							LineNumber: lineNumber,
-							Content:    line,
-							Match:      match,
-						},
-					})
 
-					totalHits++
-					fileHits++
-					if fileHits >= limit.MaxResultsPerFile {
-						fileMatch.Truncate = true
-						break
-					}
-				}
-				if fileHits >= limit.MaxResultsPerFile || totalHits >= limit.MaxResults {
-					break
-				}
+			// Check if the unsaved file should be included in the search
+			if !wantFile(unsavedFile.Path) {
+				continue
 			}
-			lineNumber++
-		}
 
-		// Populate before and after context lines
-		if beforeAfter > 0 {
-			for i := 0; i < len(fileMatch.Lines); i++ {
-				line := &fileMatch.Lines[i]
-				lineNum := line.Line.LineNumber
+			// Mark this file as processed
+			normalizedPath := filepath.ToSlash(unsavedFile.Path)
+			unsavedFilePaths[normalizedPath] = true
 
-				// Add before context lines
-				for j := lineNum - beforeAfter; j < lineNum; j++ {
-					if j > 0 && j <= len(lines) {
-						line.Before = append(line.Before, types.SearchContentLine{
-							LineNumber: j,
-							Content:    lines[j-1], // -1 because line numbers are 1-based, but array is 0-based
-						})
-					}
+			// Search in unsaved file content
+			unsavedResult, err := searchInContent(unsavedFile.Path, strings.NewReader(unsavedFile.Content), engine, beforeAfter, req.Limit, &totalHits)
+			if err != nil {
+				log.Printf("[Searcher] Failed to search in unsaved file %s: %v", unsavedFile.Path, err)
+				continue
+			}
+			if len(unsavedResult.Lines) > 0 {
+				if callback != nil {
+					callback(unsavedResult)
 				}
+				finalResults = append(finalResults, unsavedResult)
+			}
 
-				// Add after context lines
-				for j := lineNum + 1; j <= lineNum+beforeAfter; j++ {
-					if j <= len(lines) {
-						line.After = append(line.After, types.SearchContentLine{
-							LineNumber: j,
-							Content:    lines[j-1], // -1 because line numbers are 1-based, but array is 0-based
-						})
-					}
-				}
+			if totalHits >= limit.MaxResults {
+				return finalResults, true
 			}
 		}
-
-		return fileMatch, nil
 	}
 
 	// Collect the all related documents
@@ -324,7 +282,6 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	if err != nil {
 		return []types.SearchContentResult{}, false
 	}
-
 	log.Printf("[Searcher] CollectDocuments took %s", time.Since(startTime))
 
 	// Sort documents based on prioritization logic:
@@ -341,14 +298,29 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			continue
 		}
 
+		// If the file was already searched from the unsaved list, skip it.
+		normalizedPath := filepath.ToSlash(doc.RelPath)
+		if _, ok := unsavedFilePaths[normalizedPath]; ok {
+			continue
+		}
+
 		// File has been removed, skip it
 		removed, err := indexer.RefreshFileIfNeeded(workspace, doc)
 		if err != nil || removed {
 			continue
 		}
 
-		fileMatch, err := matchFileContent(doc)
+		fullPath := filepath.Join(workspace.Path, doc.RelPath)
+		file, err := os.Open(fullPath)
 		if err != nil {
+			log.Printf("[Searcher] Failed to open file:`%s`, error:%s", fullPath, err)
+			continue
+		}
+		defer file.Close()
+
+		fileMatch, err := searchInContent(doc.RelPath, file, engine, beforeAfter, req.Limit, &totalHits)
+		if err != nil {
+			log.Printf("[Searcher] Failed to search in file %s: %v", doc.RelPath, err)
 			continue
 		}
 
@@ -365,6 +337,93 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	}
 
 	return finalResults, totalHits >= limit.MaxResults
+}
+
+func searchInContent(relPath string, reader io.Reader, engine *SimpleContentSearchEngine, beforeAfter int, limit *types.SearchLimit, totalHits *int) (types.SearchContentResult, error) {
+	fileMatch := types.SearchContentResult{
+		File:  filepath.Clean(relPath),
+		Lines: []types.LineMatch{},
+	}
+
+	scanner := bufio.NewScanner(reader)
+
+	lines := []string{}
+	lineNumber := 1
+	fileHits := 0
+
+	maxResultsPerFile := conf.Get().Server.Search.Limit.MaxResultsPerFile
+	if limit != nil && limit.MaxResultsPerFile > 0 {
+		maxResultsPerFile = limit.MaxResultsPerFile
+	}
+
+	maxResults := conf.Get().Server.Search.Limit.MaxResults
+	if limit != nil && limit.MaxResults > 0 {
+		maxResults = limit.MaxResults
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if beforeAfter > 0 {
+			lines = append(lines, line)
+		}
+		matches := engine.IsLineMatch(line)
+		if len(matches) > 0 {
+			for _, match := range matches {
+				fileMatch.Lines = append(fileMatch.Lines, types.LineMatch{
+					Line: types.SearchContentLine{
+						LineNumber: lineNumber,
+						Content:    line,
+						Match:      match,
+					},
+				})
+
+				(*totalHits)++
+				fileHits++
+				if fileHits >= maxResultsPerFile {
+					fileMatch.Truncate = true
+					break
+				}
+			}
+			if fileHits >= maxResultsPerFile || *totalHits >= maxResults {
+				break
+			}
+		}
+		lineNumber++
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fileMatch, fmt.Errorf("error scanning content for %s: %w", relPath, err)
+	}
+
+	// Populate before and after context lines
+	if beforeAfter > 0 {
+		for i := 0; i < len(fileMatch.Lines); i++ {
+			line := &fileMatch.Lines[i]
+			lineNum := line.Line.LineNumber
+
+			// Add before context lines
+			for j := lineNum - beforeAfter; j < lineNum; j++ {
+				if j > 0 && j <= len(lines) {
+					line.Before = append(line.Before, types.SearchContentLine{
+						LineNumber: j,
+						Content:    lines[j-1], // -1 because line numbers are 1-based, but array is 0-based
+					})
+				}
+			}
+
+			// Add after context lines
+			for j := lineNum + 1; j <= lineNum+beforeAfter; j++ {
+				if j <= len(lines) {
+					line.After = append(line.After, types.SearchContentLine{
+						LineNumber: j,
+						Content:    lines[j-1], // -1 because line numbers are 1-based, but array is 0-based
+					})
+				}
+			}
+		}
+	}
+
+	return fileMatch, nil
 }
 
 // fuzzyMatchWithScore checks if pattern matches text and returns a score (0-100)

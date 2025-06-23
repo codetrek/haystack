@@ -1,6 +1,10 @@
 # Changelog
 
-## [1.5.0]
+## [next]
+
+- Search results now include changes from unsaved files.
+
+## [1.5.1]
 - Breaking change: Upgrade storage version to 1.3
 - Bugfix: Path filter with "\" seperate returns no result.
 - Optimize: Output search result in a single text block to improve GHC performance

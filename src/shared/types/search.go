@@ -19,6 +19,12 @@ type Editor struct {
 	ActiveFile string   `json:"active_file,omitempty"`
 }
 
+// UnsavedFile represents a file that has been modified but not saved
+type UnsavedFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
 // SearchContentRequest is the request for searching the content of a workspace
 // @param Workspace: is the path to the workspace
 // @param Query: is the query to search for, refer to the search query syntax in the server/server/search.md
@@ -30,6 +36,7 @@ type Editor struct {
 // @param Limit.MaxLines: is the max lines to apply to the search
 // @param Limit.MaxFiles: is the max files to apply to the search
 // @param Limit.MaxLinesPerFile: is the max lines per file to apply to the search
+// @param UnsavedFiles: is the list of files that have been modified but not saved
 type SearchContentRequest struct {
 	Workspace     string         `json:"workspace,omitempty"`
 	Query         string         `json:"query,omitempty"`
@@ -38,6 +45,7 @@ type SearchContentRequest struct {
 	Filters       *SearchFilters `json:"filters,omitempty"`
 	Limit         *SearchLimit   `json:"limit,omitempty"`
 	BeforeAfter   int            `json:"before_after,omitempty"`
+	UnsavedFiles  []UnsavedFile  `json:"unsaved_files,omitempty"`
 }
 
 // SearchPromptRequest is the request for searching prompts in a workspace.
