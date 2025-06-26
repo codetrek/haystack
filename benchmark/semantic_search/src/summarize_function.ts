@@ -1,12 +1,6 @@
 
 import { getConfig } from "./conf.js";
 
-const AZURE_CONFIG = {
-  apiKey: getConfig().azureApiKey,
-  endpoint: getConfig().azureEndpoint,
-  deploymentName: getConfig().azureDeploymentName
-};
-
 /**
  * Generates a concise summary for a function body
  * 
@@ -18,11 +12,11 @@ export async function summarizeFunctionBody(functionBody: string): Promise<strin
     const prompt = createSummaryPrompt();
     const fullPrompt = `${prompt}\n\nFunction Body:\n\`\`\`\n${functionBody}\n\`\`\``;
     
-    const response = await fetch(`${AZURE_CONFIG.endpoint}/openai/deployments/${AZURE_CONFIG.deploymentName}/chat/completions?api-version=2023-05-15`, {
+    const response = await fetch(`${getConfig().azureEndpoint}/openai/deployments/${getConfig().azureDeploymentName}/chat/completions?api-version=2023-05-15`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'api-key': AZURE_CONFIG.apiKey
+        'api-key': getConfig().azureApiKey
       },
       body: JSON.stringify({
         messages: [
@@ -61,15 +55,12 @@ export async function summarizeFunctionBody(functionBody: string): Promise<strin
 function createSummaryPrompt(): string {
   return `You are an expert code analyzer specialized in generating concise function summaries.
 
-Task: Create a brief, informative summary for the provided function body.
+Task: Read the provided function body and summarize its purpose in one short sentence
 
 Guidelines:
-1. Keep your summary extremely concise - either:
-   - A single short sentence (2-8 words)
-   - A few descriptive keywords
-   - A proposed function name that accurately describes what the function does
+1. Focus only on what the function does, not how it works
 
-2. Focus exclusively on the function's purpose and behavior
+2. Your summary must be concise and informative
 
 3. Do not include:
    - Implementation details
@@ -83,10 +74,9 @@ Guidelines:
 
 Examples of good summaries:
 - Calculates total price with tax
-- User authentication validator
+- Sends a welcome email to new users
 - Processes and filters image data
-- fetchUserPreferences
-- sanitize input, validate format
+- Removes whitespace and HTML tags
 
 Analyze the following function body and provide your concise summary:`;
 }

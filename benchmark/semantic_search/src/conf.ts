@@ -10,7 +10,12 @@ export interface Config {
   azureDeploymentName: string;
 
   workspace: string;
+  subdirectories: string[];
   haystackSymbolUrl: string;
+
+  // benchmark
+  vscode_log: string;
+  a11y_exe: string;
 }
 
 /**
@@ -22,7 +27,12 @@ const defaultConfig: Config = {
   azureDeploymentName: '',
 
   workspace: '',
+  subdirectories: [],
   haystackSymbolUrl: '',
+
+  // benchmark
+  vscode_log: '',
+  a11y_exe: '',
 };
 
 /**

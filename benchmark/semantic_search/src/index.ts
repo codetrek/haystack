@@ -10,15 +10,22 @@ import { getConfig, loadConfigFromFile, updateConfig, saveConfigToFile } from '.
 /**
  * Interface representing a dataset item with function information
  */
-interface DatasetItem {
+export interface DatasetItem {
   filePath: string;
   function: string;
   codesnippet: string;
   filepos: number;
   pos: number;
-  query?: string;
+  summary?: string;
   timecost: number;
   filemrr: number;
+  ghc_query: string;
+}
+
+interface SSResult {
+  summary: string;
+  query: string;
+  files: Array<{file: string, line: number}>;
 }
 
 const __filename = fileURLToPath(import.meta.url);
@@ -40,18 +47,19 @@ async function generateChartHtml(database: any) {
 
 function generateDataset(count: number = 50) : DatasetItem[] {
   // Define the directories to search for C++ files
-  const directories = [ getConfig().workspace ];
-  const randomFiles = getRandomCcFiles(directories, 9999);
+  // const directories = [ getConfig().workspace ];
+  const randomFiles = getRandomCcFiles(getConfig().subdirectories, 9999);
   
   const longFunctions = [];
   console.log(`Found ${randomFiles.length} C++ files`);
   
-  const minLineCount = 30;
+  const minLineCount = 20;
   for (const file of randomFiles) {
     try {
       const functions = parseCppFunctions(file);
       const longFunctionsInFile = functions.filter((func: any) => {
-        const lineCount = func.endLine - func.startLine + 1;
+        // const lineCount = func.endLine - func.startLine + 1;
+        const lineCount = func.body.split('\n').filter((line: string) => line.trim() !== '').length;
         return lineCount > minLineCount;
       });
       
@@ -71,7 +79,8 @@ function generateDataset(count: number = 50) : DatasetItem[] {
       filepos: -1,
       pos: 1,
       timecost: 0,
-      filemrr: 1
+      filemrr: 1,
+      ghc_query: ''
     }));
   }
   
@@ -92,7 +101,8 @@ function generateDataset(count: number = 50) : DatasetItem[] {
     filepos: -1,
     pos: -1,
     timecost: 0,
-    filemrr: 1
+    filemrr: 1,
+    ghc_query: ''
   }));
 }
 
@@ -101,11 +111,11 @@ async function summaryFunction(dataset: DatasetItem[]){
   for (const item of dataset) {
     try {
       const summary = await summarizeFunctionBody(item.codesnippet);
-      item.query = summary;
+      item.summary = summary;
       console.log(`Generated summary for "${item.function}": ${summary}`);    
     } catch (error) {
       console.error(`Error generating summary for "${item.function}":`, error);
-      item.query = item.function;
+      item.summary = item.function;
     }
   }
   
@@ -131,17 +141,16 @@ async function saveDatasetToFile(dataset: DatasetItem[], filePath: string = 'dat
   }
 }
 
-async function loadDatasetFromFile(filePath: string = 'dataset.json'): Promise<DatasetItem[]>{
+export async function loadDatasetFromFile(filePath: string = 'dataset.json'): Promise<DatasetItem[]>{
   try {
     if (!path.isAbsolute(filePath)) {
       filePath = path.join(__dirname, filePath);
     }
-    
     const jsonData = await fsPromises.readFile(filePath, 'utf8');
-    
-    const dataset = JSON.parse(jsonData);
-    console.log(`Dataset successfully loaded from ${filePath}`);
-    
+    let dataset = JSON.parse(jsonData);
+    for (let item of dataset) {
+      item.summary = item.summary.replace(/\.$/, '');
+    }
     return dataset;  
   } catch (error) {
     console.error('Error loading dataset from file:', error);
@@ -152,29 +161,65 @@ async function loadDatasetFromFile(filePath: string = 'dataset.json'): Promise<D
 async function matchFromHaystackForDataset(dataset: DatasetItem[]): Promise<DatasetItem[]> {
   for (const item of dataset) {
     try {
-      if (!item.query) {
+      if (!item.summary) {
         continue;
       }
       const f = parseFileRange(item.filePath);
       const start = performance.now();
-      const match = await matchFromHaystack(item.query, 300, 500, getConfig().workspace, f.path, f.startLine);
+      const match = await matchFromHaystack(item.summary, 200, 500, getConfig().workspace, f.path, f.startLine);
       const end = performance.now();
       item.filepos = match[0];
       item.pos = match[1];
       item.timecost = end - start;
       if (match[0] > 0 && match[2] > 0) {
-        item.filemrr = Math.round(match[0] / match[2] * 10) / 10;
+        // item.filemrr = Math.round(match[0] / match[2] * 10) / 10;
+        item.filemrr = 1 / match[0];
       } else {
-        item.filemrr = 1;
+        item.filemrr = 0;
       }
       console.log(`Matched function "${item.function}" to Haystack index ${match}`, item.filemrr);
     } catch (error) {
-      console.error(`Error matching function "${item.query}" to Haystack:`, error);
+      console.error(`Error matching function "${item.summary}" to Haystack:`, error);
       process.exit(1);
     }
   }
 
   return dataset;
+}
+
+async function loadGHCResult() : Promise<Array<SSResult>> {
+  const filePath = path.join(process.cwd(), '../search_results.json')
+  
+  const jsonData = await fsPromises.readFile(filePath, 'utf8');
+  const res = JSON.parse(jsonData);
+  
+  const parsedRes: Array<SSResult> = [];
+  for (const item of res) {
+    if (!item.summary) {
+      continue;
+    }
+
+    const files = JSON.parse(item.result.replace(/\\n/g, '\n').replace(/\\"/g, '"'));
+    const r: SSResult = {
+      summary: item.summary,
+      query: item.words,
+      files: []
+    }
+
+    // 
+    for (let file of files) {
+      if (file.startsWith("/")) {
+        file = file.slice(1);
+      }
+      const [path, lineStr] = file.split(":");
+      r.files.push({
+        file: path,
+        line: parseInt(lineStr)
+      });
+    }
+    parsedRes.push(r);
+  }
+  return parsedRes
 }
 
 async function main() {
@@ -196,18 +241,66 @@ async function main() {
   if (args.length > 0 && args[0] === '--load') {
     const filePath = args[1] || path.join(process.cwd(), 'dataset.json');
     dataset = await loadDatasetFromFile(filePath);
+    const rr = await loadGHCResult();
+    for (let i = 0; i < dataset.length; i++) {
+      // search for the summary
+      for (let j = 0; j < rr.length; j++) {
+        if (dataset[i].summary === rr[j].summary) {
+          dataset[i].ghc_query = rr[j].query;
+          break;
+        }
+      }
+    }
+    
+    for (let i = 0; i < dataset.length; i++) {
+      dataset[i].filemrr = 0;
+      if (dataset[i].ghc_query === '') {
+        continue;
+      }
+
+      const ghcMatchedFiles = rr.find((item) => item.query === dataset[i].ghc_query);
+      if (ghcMatchedFiles) {
+        let idx = 1;
+        for (const file of ghcMatchedFiles.files) {
+          const searchedFile = (getConfig().workspace + '/' + file.file).replace(/\\/g, '/');
+          const f = parseFileRange(dataset[i].filePath);
+          const dstFile = f.path.replace(/\\/g, '/');
+
+          if (searchedFile === dstFile) {
+            console.log(`searchedFile: ${searchedFile}, dstFile: ${dstFile}`);  
+            dataset[i].filemrr = 1 / idx;
+            break;
+          }
+          idx++;
+        }
+      }
+      console.log(`Matched function "${dataset[i].function}"`, dataset[i].filemrr);
+    }
+
+
+
   } else {
-    dataset = generateDataset(200);
+    dataset = generateDataset(300);
     dataset = await summaryFunction(dataset);
     await saveDatasetToFile(dataset, path.join(process.cwd(), 'dataset.json'));
   }
 
-  dataset = await matchFromHaystackForDataset(dataset);
+  // dataset = await matchFromHaystackForDataset(dataset);
   await generateChartHtml(dataset);
+
+  // let sumRank = 0.0
+  // for (const item of dataset) {
+  //   sumRank += item.filemrr;
+  // }
+  // console.log(`Average MRR: ${sumRank / dataset.length}`);
+
   console.log('Done!');
 }
 
-main().catch((error: unknown) => {
-  console.error('Error in main execution:', error);
-  process.exit(1);
-});
+
+if (path.resolve(__filename) === path.resolve(process.argv[1])) {
+  main().catch((error: unknown) => {
+    console.error('Error in main execution:', error);
+    process.exit(1);
+  });
+}

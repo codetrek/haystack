@@ -1,5 +1,8 @@
 import Parser from 'tree-sitter';
 import CPP from 'tree-sitter-cpp';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
 
 interface FunctionInfo {
   name: string;
@@ -27,6 +30,7 @@ import * as path from 'path';
 
 /**
  * Randomly selects N files with .cc extension from the provided directories
+ * using reservoir sampling with balanced selection from all directories
  * @param directories Array of directory paths to search in
  * @param count Number of files to select
  * @returns Array of selected file paths
@@ -41,10 +45,22 @@ export function getRandomCcFiles(directories: string[], count: number): string[]
     throw new Error('Count must be a positive number');
   }
   
-  // Collect all .cc files from the specified directories
-  const allCcFiles: string[] = [];
+  // Initialize reservoir for sampling
+  const reservoir: string[] = [];
+  let filesProcessed = 0;
   
-  for (const dir of directories) {
+  // Process directories in random order to ensure fair sampling
+  const shuffledDirs = [...directories].sort(() => Math.random() - 0.5);
+  
+  // Set a per-directory limit on files to check to ensure we don't spend too much time in any one directory
+  const MAX_FILES_PER_DIR = Math.max(50, Math.ceil(count * 50 / directories.length));
+  // Total file limit as a safety measure
+  const TOTAL_MAX_FILES = count * 500;
+  
+  // First pass: collect a sample from each directory to ensure representation
+  for (const dir of shuffledDirs) {
+    if (filesProcessed >= TOTAL_MAX_FILES) break;
+    
     try {
       // Ensure the directory exists
       if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
@@ -52,51 +68,74 @@ export function getRandomCcFiles(directories: string[], count: number): string[]
         continue;
       }
       
-      // Get all files in the directory and its subdirectories
-      const getFilesRecursively = (directory: string): string[] => {
-        const files: string[] = [];
-        const entries = fs.readdirSync(directory, { withFileTypes: true });
-        
-        for (const entry of entries) {
-          const fullPath = path.join(directory, entry.name);
-          
-          if (entry.isDirectory()) {
-            files.push(...getFilesRecursively(fullPath));          
-          } else if (entry.isFile() &&  path.extname(entry.name) === '.cc' && !entry.name.toLowerCase().includes('test')) {
-            files.push(fullPath);
-          }
-        }
-        
-        return files;
-      };
+      let filesInDir = 0;
+      // Queue for directory traversal
+      const dirQueue: string[] = [dir];
+      const ccFilesInDir: string[] = [];
       
-      allCcFiles.push(...getFilesRecursively(dir));
+      // First collect a batch of files from this directory (up to our per-directory limit)
+      while (dirQueue.length > 0 && filesInDir < MAX_FILES_PER_DIR) {
+        const currentDir = dirQueue.shift()!;
+        
+        try {
+          const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+          // Randomize entries to ensure variety in sampling
+          entries.sort(() => Math.random() - 0.5);
+          
+          for (const entry of entries) {
+            if (filesInDir >= MAX_FILES_PER_DIR) break;
+            
+            const fullPath = path.join(currentDir, entry.name);
+            
+            if (entry.isDirectory()) {
+              // Add directories to the queue, but with lower priority (push to end)
+              dirQueue.push(fullPath);
+            } else if (
+              entry.isFile() && 
+              path.extname(entry.name) === '.cc' && 
+              !entry.name.toLowerCase().includes('test')
+            ) {
+              // Collect CC files from this directory
+              ccFilesInDir.push(fullPath);
+              filesInDir++;
+            }
+          }
+        } catch (error) {
+          console.error(`Error reading directory ${currentDir}:`, error);
+        }
+      }
+      
+      // Randomly select some files from this directory and add to the reservoir
+      // The number to select is proportional to the directory size relative to others
+      if (ccFilesInDir.length > 0) {
+        // Shuffle the files found in this directory
+        ccFilesInDir.sort(() => Math.random() - 0.5);
+        
+        // Add sampled files to the reservoir using reservoir sampling
+        for (const file of ccFilesInDir) {
+          filesProcessed++;
+          
+          if (reservoir.length < count) {
+            reservoir.push(file);
+          } else {
+            // Reservoir sampling algorithm
+            const j = Math.floor(Math.random() * filesProcessed);
+            if (j < count) {
+              reservoir[j] = file;
+            }
+          }
+          
+          // Safety check for total files processed
+          if (filesProcessed >= TOTAL_MAX_FILES) break;
+        }
+      }
     } catch (error) {
       console.error(`Error processing directory ${dir}:`, error);
     }
   }
   
-  // Check if we found any .cc files
-  if (allCcFiles.length === 0) {
-    return [];
-  }
-  
-  // If we don't have enough files, return all of them
-  if (allCcFiles.length <= count) {
-    return allCcFiles;
-  }
-  
-  // Randomly select N files
-  const selectedFiles: string[] = [];
-  const availableFiles = [...allCcFiles];
-  
-  for (let i = 0; i < count && availableFiles.length > 0; i++) {
-    const randomIndex = Math.floor(Math.random() * availableFiles.length);
-    selectedFiles.push(availableFiles[randomIndex]);
-    availableFiles.splice(randomIndex, 1); // Remove the selected file to avoid duplicates
-  }
-  
-  return selectedFiles;
+  // If we couldn't find enough files, return what we have
+  return reservoir;
 }
 
 /**
@@ -222,9 +261,10 @@ function main() {
   });
 }
 
-// main();
-
-// Example usage:
-// const directories = ['D:\\Edge\\src\\chrome\\browser\\ui\\tabs'];
-// const randomFiles = getRandomCcFiles(directories, 100);
-// console.log(randomFiles);
+if (path.resolve(__filename) === path.resolve(process.argv[1])) {
+  const directories = ['D:\\project\\chromium-src-snapshot\\components', 'D:\\project\\chromium-src-snapshot\\chrome'];
+  const randomFiles = getRandomCcFiles(directories, 20000);
+  for (const file of randomFiles) {
+    console.log(`${file}`);
+  }
+}
