@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	DefaultMaxFileSize         = 2 * 1024 * 1024
+	DefaultMaxFileSize         = 5 * 1024 * 1024
 	DefaultIndexWorkers        = 4
 	DefaultSymbolParserWorkers = 2
 	DefaultPort                = 13134
