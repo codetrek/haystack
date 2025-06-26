@@ -1,8 +1,10 @@
 # Changelog
 
-## [next]
+## [1.5.2]
 
 - Search results now include changes from unsaved files.
+- Increase max indexable file size to 5MiB.
+- Bugfix: There will be no result if a file is passed in 'path' filter
 
 ## [1.5.1]
 - Breaking change: Upgrade storage version to 1.3
