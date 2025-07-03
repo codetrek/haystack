@@ -37,15 +37,17 @@ type UnsavedFile struct {
 // @param Limit.MaxFiles: is the max files to apply to the search
 // @param Limit.MaxLinesPerFile: is the max lines per file to apply to the search
 // @param UnsavedFiles: is the list of files that have been modified but not saved
+// @param UnsavedFilesOnly: if true, only search in unsaved files and skip index search for better performance
 type SearchContentRequest struct {
-	Workspace     string         `json:"workspace,omitempty"`
-	Query         string         `json:"query,omitempty"`
-	Editor        *Editor        `json:"editor,omitempty"`
-	CaseSensitive bool           `json:"case_sensitive,omitempty"`
-	Filters       *SearchFilters `json:"filters,omitempty"`
-	Limit         *SearchLimit   `json:"limit,omitempty"`
-	BeforeAfter   int            `json:"before_after,omitempty"`
-	UnsavedFiles  []UnsavedFile  `json:"unsaved_files,omitempty"`
+	Workspace        string         `json:"workspace,omitempty"`
+	Query            string         `json:"query,omitempty"`
+	Editor           *Editor        `json:"editor,omitempty"`
+	CaseSensitive    bool           `json:"case_sensitive,omitempty"`
+	Filters          *SearchFilters `json:"filters,omitempty"`
+	Limit            *SearchLimit   `json:"limit,omitempty"`
+	BeforeAfter      int            `json:"before_after,omitempty"`
+	UnsavedFiles     []UnsavedFile  `json:"unsaved_files,omitempty"`
+	UnsavedFilesOnly bool           `json:"unsaved_files_only,omitempty"`
 }
 
 // SearchPromptRequest is the request for searching prompts in a workspace.

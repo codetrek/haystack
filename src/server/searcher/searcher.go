@@ -277,6 +277,12 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 		}
 	}
 
+	// If UnsavedFilesOnly is true, skip index search and return early for better performance
+	if req.UnsavedFilesOnly {
+		log.Printf("[Searcher] UnsavedFilesOnly mode: skipping index search, returning %d results", len(finalResults))
+		return finalResults, totalHits >= limit.MaxResults
+	}
+
 	// Collect the all related documents
 	results, err := engine.CollectDocuments()
 	if err != nil {
