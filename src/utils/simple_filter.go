@@ -57,8 +57,8 @@ func NewSimpleFilter(patterns []string) *SimpleFilter {
 func toSlash(patterns []string) []string {
 	normalized := make([]string, 0, len(patterns))
 	for _, pattern := range patterns {
-		// Convert to slash-separated format
-		normalized = append(normalized, filepath.ToSlash(pattern))
+		// Convert to slash-separated format and lowercase for case-insensitive matching
+		normalized = append(normalized, strings.ToLower(filepath.ToSlash(pattern)))
 	}
 	return normalized
 }
