@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.6.0]
+- feat: implement unsaved-files-only search optimization for better search performance
+- fix: Make file include/exclude patterns case-insensitive
+- Support streamable-http at endpoint `http://localhost:<port>/mcp`
+
 ## [1.5.2]
 
 - Search results now include changes from unsaved files.
