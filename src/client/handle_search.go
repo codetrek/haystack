@@ -23,6 +23,7 @@ func handleSearch(args []string) {
 	exclude := searchCmd.String("exclude", "", "File patterns to exclude")
 	workspace := searchCmd.String("workspace", conf.Get().Client.DefaultWorkspace, "Workspace path to search in")
 	caseSensitive := searchCmd.Bool("case-sensitive", false, "Enable case-sensitive search")
+	wholeWord := searchCmd.Bool("whole-word", false, "Match whole words only")
 
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
 		fmt.Println("Usage: " + running.ExecutableName() + " search [options] <query>")
@@ -50,6 +51,7 @@ func handleSearch(args []string) {
 		Workspace:     *workspace,
 		Query:         query,
 		CaseSensitive: *caseSensitive,
+		WholeWord:     *wholeWord,
 		Limit: &types.SearchLimit{
 			MaxResults:        *maxResults,
 			MaxResultsPerFile: *maxResultsPerFile,
