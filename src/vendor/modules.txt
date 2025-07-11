@@ -154,10 +154,11 @@ github.com/kr/text
 # github.com/lithammer/fuzzysearch v1.1.8
 ## explicit; go 1.15
 github.com/lithammer/fuzzysearch/fuzzy
-# github.com/mark3labs/mcp-go v0.29.0
+# github.com/mark3labs/mcp-go v0.32.0
 ## explicit; go 1.23
 github.com/mark3labs/mcp-go/mcp
 github.com/mark3labs/mcp-go/server
+github.com/mark3labs/mcp-go/util
 # github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 ## explicit
 github.com/munnerz/goautoneg

@@ -51,12 +51,19 @@ func mcpInit(addr string) {
 	sse := server.NewSSEServer(mcpServer,
 		server.WithBaseURL("http://"+addr),
 		server.WithStaticBasePath("/mcp"),
-		server.WithKeepAlive(true),
 		server.WithKeepAliveInterval(20*time.Second),
 	)
 
-	http.HandleFunc("/mcp/", func(w http.ResponseWriter, r *http.Request) {
-		sse.ServeHTTP(w, r)
+	httpStreamable := server.NewStreamableHTTPServer(mcpServer,
+		server.WithHeartbeatInterval(20*time.Second),
+	)
+
+	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/mcp/sse" || r.URL.Path == "/mcp/message" {
+			sse.ServeHTTP(w, r)
+		} else {
+			httpStreamable.ServeHTTP(w, r)
+		}
 	})
 	log.Println("[MCP] Server initialized at /mcp endpoint")
 }
