@@ -284,7 +284,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	}
 
 	// Collect the all related documents
-	results, err := engine.CollectDocuments(req.WholeWord)
+	results, err := engine.CollectDocuments()
 	if err != nil {
 		return []types.SearchContentResult{}, false
 	}

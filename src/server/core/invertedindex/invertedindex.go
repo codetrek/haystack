@@ -12,31 +12,14 @@ type SearchResult struct {
 	WildDocIds map[string]struct{} `json:"wildDocIds,omitempty"`
 }
 
-func Search(tableId int, query string, limit int, filterKeyword func(string) bool, exactMatch bool) SearchResult {
+func Search(tableId int, query string, limit int, filterKeyword func(string) bool) SearchResult {
 	results := SearchResult{
 		DocIds: make(map[string]struct{}),
 	}
 
-	var scanPrefix []byte
-	if exactMatch {
-		// Use keyword prefix with trailing separator for exact matching
-		scanPrefix = encodeInvertedKeyPrefix(tableId, strings.ToLower(query))
-	} else {
-		// Use original prefix matching
-		scanPrefix = encodeInvertedSearchKey(tableId, strings.ToLower(query))
-	}
-
-	err := db.Scan(scanPrefix, func(key, value []byte) bool {
+	err := db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
 		if filterKeyword != nil && !filterKeyword(string(key)) {
 			return true
-		}
-
-		// For exact match, double-check the keyword to ensure precision
-		if exactMatch {
-			_, keyword, _, _ := decodeInvertedKey(string(key))
-			if keyword != strings.ToLower(query) {
-				return true // Continue scanning but skip this key
-			}
 		}
 
 		docids := decodeInvertedValue(value)
@@ -54,7 +37,7 @@ func Search(tableId int, query string, limit int, filterKeyword func(string) boo
 	})
 
 	if err != nil {
-		log.Printf("[Inverted] Error searching for %s (exact=%v): %v", query, exactMatch, err)
+		log.Printf("[Inverted] Error searching for %s: %v", query, err)
 	}
 	return results
 }

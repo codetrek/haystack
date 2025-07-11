@@ -34,11 +34,11 @@ type SimpleContentSearchEngineTerm struct {
 	Wildcards  []string // Wildcard patterns, if any
 }
 
-func (q *SimpleContentSearchEngine) CollectDocuments(exactMatch bool) (*invertedindex.SearchResult, error) {
+func (q *SimpleContentSearchEngine) CollectDocuments() (*invertedindex.SearchResult, error) {
 	rs := []*invertedindex.SearchResult{}
 	// Collect the documents for each or clause
 	for _, orClause := range q.OrClauses {
-		r, err := orClause.CollectDocuments(q.Workspace.Id, exactMatch)
+		r, err := orClause.CollectDocuments(q.Workspace.Id)
 		if err != nil {
 			continue
 		}
@@ -68,12 +68,12 @@ func (q *SimpleContentSearchEngine) CollectDocuments(exactMatch bool) (*inverted
 	return result, nil
 }
 
-func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int, exactMatch bool) (*invertedindex.SearchResult, error) {
+func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (*invertedindex.SearchResult, error) {
 	// Collect the documents for each term
 	rs := []*invertedindex.SearchResult{}
 	for _, term := range q.AndTerms {
 		if len(term.Keywords) > 0 {
-			r := term.CollectDocuments(workspaceId, exactMatch)
+			r := term.CollectDocuments(workspaceId)
 			rs = append(rs, &r)
 		}
 	}
@@ -107,7 +107,7 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int, e
 	return result, nil
 }
 
-func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int, exactMatch bool) invertedindex.SearchResult {
+func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invertedindex.SearchResult {
 	ft, err := documents.GetWorkspace(workspaceId)
 	if err != nil {
 		log.Printf("[Searcher] CollectDocuments: failed to get fulltext index: %v", err)
@@ -119,8 +119,8 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int, exactM
 	}
 
 	result := invertedindex.SearchResult{
-		DocIds:     q.collectWithKeywords(ft.InvertedId, q.Keywords, exactMatch),
-		WildDocIds: q.collectWithKeywords(ft.InvertedId, q.Wildcards, false), // Wildcards always use prefix matching
+		DocIds:     q.collectWithKeywords(ft.InvertedId, q.Keywords),
+		WildDocIds: q.collectWithKeywords(ft.InvertedId, q.Wildcards),
 	}
 
 	for docId := range result.WildDocIds {
@@ -133,14 +133,14 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int, exactM
 	return result
 }
 
-func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws []string, exactMatch bool) map[string]struct{} {
+func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws []string) map[string]struct{} {
 	// If no prefixes, return empty result
 	if len(kws) == 0 {
 		return map[string]struct{}{}
 	}
 
 	// Get results for first prefix
-	rs := invertedindex.Search(invertedId, kws[0], -1, nil, exactMatch)
+	rs := invertedindex.Search(invertedId, kws[0], -1, nil)
 	if len(kws) == 1 {
 		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using keyword `%s`", q.String(), len(rs.DocIds), kws[0])
 		return rs.DocIds
@@ -150,7 +150,7 @@ func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws 
 	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", kws[0], q.String(), len(result))
 	// Intersect with results from other prefixes
 	for _, prefix := range kws[1:] {
-		r := invertedindex.Search(invertedId, prefix, -1, nil, exactMatch)
+		r := invertedindex.Search(invertedId, prefix, -1, nil)
 		log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", prefix, q.String(), len(r.DocIds))
 
 		if len(r.DocIds) < len(result) {

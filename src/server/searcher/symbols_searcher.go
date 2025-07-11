@@ -128,7 +128,7 @@ func fuzzySearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbols
 			}
 		}
 		return true
-	}, false) // Use prefix matching for symbols
+	})
 
 	symbolFiles := make(map[string][]types.SymbolsFileMatch)
 	fileCount := 0
