@@ -20,14 +20,17 @@ type SimpleContentSearchEngine struct {
 	MaxKeywordDistance int
 	Workspace          *workspace.Workspace
 	OrClauses          []*SimpleContentSearchEngineAndClause
+	WholeWord          bool
 }
 
 type SimpleContentSearchEngineAndClause struct {
+	Engine   *SimpleContentSearchEngine // Reference to parent engine
 	Regex    *regexp.Regexp
 	AndTerms []*SimpleContentSearchEngineTerm
 }
 
 type SimpleContentSearchEngineTerm struct {
+	Engine     *SimpleContentSearchEngine // Reference to parent engine
 	Pattern    string
 	RegPattern string
 	Keywords   []string // First element serves as main prefix
@@ -175,11 +178,12 @@ func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws 
 	return result
 }
 
-func NewSimpleContentSearchEngine(workspace *workspace.Workspace, maxWildLen, maxKwDist int) *SimpleContentSearchEngine {
+func NewSimpleContentSearchEngine(workspace *workspace.Workspace, maxWildLen, maxKwDist int, wholeWord bool) *SimpleContentSearchEngine {
 	return &SimpleContentSearchEngine{
 		MaxWildcardLength:  maxWildLen,
 		MaxKeywordDistance: maxKwDist,
 		Workspace:          workspace,
+		WholeWord:          wholeWord,
 	}
 }
 
@@ -198,8 +202,12 @@ func (q *SimpleContentSearchEngineAndClause) IsLineMatch(line string) [][]int {
 	if len(q.AndTerms) == 0 {
 		return [][]int{}
 	}
-	results := [][]int{}
 
+	if q.Regex == nil {
+		return [][]int{}
+	}
+
+	results := [][]int{}
 	matches := q.Regex.FindAllSubmatchIndex([]byte(line), -1)
 	for _, match := range matches {
 		if len(match) == 0 {
@@ -366,6 +374,7 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 
 		escapedPhrase := regexp.QuoteMeta(unwrappedPhrase)
 		return &SimpleContentSearchEngineTerm{
+			Engine:     q,
 			Pattern:    token,
 			RegPattern: escapedPhrase,
 			Keywords:   keywords,
@@ -392,6 +401,7 @@ func (q *SimpleContentSearchEngine) processToken(token string, maxWildcardLength
 	keywords, wildcards := tokenizer.TokenizeForSearch(token, false)
 	// Handle regular patterns (non-quoted)
 	return &SimpleContentSearchEngineTerm{
+		Engine:     q,
 		Pattern:    token,
 		RegPattern: regPattern,
 		Keywords:   keywords,
@@ -415,13 +425,27 @@ func (q *SimpleContentSearchEngine) finalizeOrClause(
 		casePattern = "(?i)"
 	}
 
-	reg, err := regexp.Compile(casePattern + "(" + strings.Join(regPatterns, ".{0,"+maxKeywordDistance+"}") + ")")
+	// Choose patterns based on WholeWord flag
+	var finalPatterns []string
+	if q.WholeWord {
+		// Add word boundaries for whole word matching
+		finalPatterns = make([]string, len(regPatterns))
+		for i, pattern := range regPatterns {
+			finalPatterns[i] = "\\b" + pattern + "\\b"
+		}
+	} else {
+		finalPatterns = regPatterns
+	}
 
+	// Compile the appropriate regex
+	regexPattern := casePattern + "(" + strings.Join(finalPatterns, ".{0,"+maxKeywordDistance+"}") + ")"
+	reg, err := regexp.Compile(regexPattern)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SimpleContentSearchEngineAndClause{
+		Engine:   q,
 		Regex:    reg,
 		AndTerms: andPatterns,
 	}, nil

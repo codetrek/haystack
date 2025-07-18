@@ -43,6 +43,7 @@ type SearchContentRequest struct {
 	Query            string         `json:"query,omitempty"`
 	Editor           *Editor        `json:"editor,omitempty"`
 	CaseSensitive    bool           `json:"case_sensitive,omitempty"`
+	WholeWord        bool           `json:"whole_word,omitempty"`
 	Filters          *SearchFilters `json:"filters,omitempty"`
 	Limit            *SearchLimit   `json:"limit,omitempty"`
 	BeforeAfter      int            `json:"before_after,omitempty"`

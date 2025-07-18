@@ -204,7 +204,7 @@ Results are ranked based on:
 
 ```go
 // 1. Query compilation
-engine.Compile("hello world", false)
+engine.Compile("hello world", false, false)
 
 // 2. Document collection
 docs := engine.CollectDocuments()
@@ -308,7 +308,7 @@ Key configuration options:
 engine := NewSimpleContentSearchEngine(workspace)
 
 // Compile query
-err := engine.Compile("hello world", false)
+err := engine.Compile("hello world", false, false)
 
 // Search content
 results, truncated := SearchContent(workspace, &types.SearchContentRequest{

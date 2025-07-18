@@ -221,7 +221,8 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	// Compile the query
 	engine := NewSimpleContentSearchEngine(workspace,
 		conf.Get().Server.Search.MaxWildcardLength,
-		conf.Get().Server.Search.MaxKeywordDistance)
+		conf.Get().Server.Search.MaxKeywordDistance,
+		req.WholeWord)
 
 	err := engine.Compile(req.Query, req.CaseSensitive)
 	if err != nil {
