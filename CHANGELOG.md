@@ -1,12 +1,14 @@
 # Changelog
 
+## [1.7.0]
+- feat: implement whole word matching feature
+
 ## [1.6.0]
 - feat: implement unsaved-files-only search optimization for better search performance
 - fix: Make file include/exclude patterns case-insensitive
 - Support streamable-http at endpoint `http://localhost:<port>/mcp`
 
 ## [1.5.2]
-
 - Search results now include changes from unsaved files.
 - Increase max indexable file size to 5MiB.
 - Bugfix: There will be no result if a file is passed in 'path' filter
