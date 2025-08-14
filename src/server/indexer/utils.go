@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ai-microsoft/haystack/server/core/idtable"
 	"github.com/ai-microsoft/haystack/utils"
 
 	"github.com/gabriel-vasile/mimetype"
@@ -64,10 +65,10 @@ var NotIndexiableFileExts = map[string]struct{}{
 	".xz":  {},
 }
 
-func GetDocumentId(fullPath string) string {
-	fullPath = filepath.ToSlash(fullPath)
-	v := md5.Sum([]byte(fullPath))
-	return string(v[:])
+func GetDocumentId(relPath string) (string, error) {
+	relPath = filepath.ToSlash(relPath)
+	v := md5.Sum([]byte(relPath))
+	return idtable.GetId(v[:])
 }
 
 func GetContentHash(content []byte) string {

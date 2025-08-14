@@ -8,7 +8,7 @@ import (
 	"github.com/ai-microsoft/haystack/server/core/pebble"
 )
 
-const StorageVersion = "1.3"
+const StorageVersion = "1.4"
 
 func cleanup(storagePath string) {
 	// Perform cleanup tasks here, such as removing old files or directories
@@ -18,6 +18,7 @@ func cleanup(storagePath string) {
 		"1.0",
 		"1.1",
 		"1.2",
+		"1.3",
 	}
 
 	for _, item := range cleanupList {
@@ -29,10 +30,8 @@ func cleanup(storagePath string) {
 	}
 }
 
-func Open(dataPath string, cacheSize int64) (pebble.DB, error) {
-	storagePath := filepath.Join(dataPath, "data")
-
-	log.Printf("[Storage] Init storage path: %s", storagePath)
+func Open(storagePath string, cacheSize int64) (pebble.DB, error) {
+	log.Printf("[Storage] Init data storage path: %s", storagePath)
 
 	dbPath := filepath.Join(storagePath, StorageVersion)
 	versionPath := filepath.Join(storagePath, "version")

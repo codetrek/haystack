@@ -160,11 +160,13 @@ func parseFunction(ctagsPath string, inputFile string, language string, workspac
 				relPath = strings.TrimPrefix(relPath, "/")
 			}
 
+			id, _ := GetDocumentId(relPath)
+
 			// Create or get the DocFunction for this file
 			docFunc, exists := fileMap[path]
 			if !exists {
 				docFunc = &symbols.DocFunction{
-					ID:        GetDocumentId(path),
+					ID:        id,
 					RelPath:   relPath,
 					Functions: []symbols.Function{},
 				}
@@ -412,9 +414,11 @@ func (p *SymbolParser) processFileBatch(batch ParseBatch) error {
 			continue
 		}
 
+		id, _ := GetDocumentId(relPath)
+
 		// Add with empty functions array
 		docFunc := symbols.DocFunction{
-			ID:        GetDocumentId(filepath.Join(batch.Workspace.Path, relPath)),
+			ID:        id,
 			RelPath:   relPath,
 			Functions: []symbols.Function{},
 		}

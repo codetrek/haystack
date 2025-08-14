@@ -85,7 +85,11 @@ func Sync(workspace *workspace.Workspace, forceRefresh bool) error {
 
 func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 	fullPath := filepath.Join(workspace.Path, relPath)
-	docid := GetDocumentId(fullPath)
+	docid, err := GetDocumentId(relPath)
+	if err != nil {
+		return err
+	}
+
 	doc, err := documents.GetDocument(workspace.Id, docid, false)
 	if err != nil {
 		return err
@@ -114,9 +118,11 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 }
 
 func RemoveFile(workspace *workspace.Workspace, relPath string) error {
-	fullPath := filepath.Join(workspace.Path, relPath)
+	docid, err := GetDocumentId(relPath)
+	if err != nil {
+		return err
+	}
 
-	docid := GetDocumentId(fullPath)
 	if err := documents.DeleteDocument(workspace.Id, docid); err != nil {
 		return err
 	}

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.8.0]
+- Breaking change: Upgrade storage version to 1.4
+- Optimize: disk usage dropped ~40%, index time reduce ~20%
+
 ## [1.7.0]
 - feat: implement whole word matching feature
 

@@ -113,7 +113,10 @@ func (p *Parser) Add(workspace *workspace.Workspace, relPath string) {
 // parse reads and processes a file, returning a Document
 func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool, err error) {
 	fullPath := filepath.Join(file.Workspace.Path, file.RelFilePath)
-	id := GetDocumentId(fullPath)
+	id, err := GetDocumentId(file.RelFilePath)
+	if err != nil {
+		return nil, false, false, fmt.Errorf("failed to get docid: %w", err)
+	}
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -143,7 +146,7 @@ func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool
 			return nil, false, false, fmt.Errorf("failed to read file: %w", err)
 		}
 		if !IsLikelyText(content) {
-			log.Printf("[Indexer] File `%s` is not a text file, skipping", file.RelFilePath)
+			//			log.Printf("[Indexer] File `%s` is not a text file, skipping", file.RelFilePath)
 			return nil, false, fileSizeExceedLimit, nil
 		}
 

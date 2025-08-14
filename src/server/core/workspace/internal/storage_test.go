@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -22,7 +23,7 @@ func TestWorkspaceStorage(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
 	err = Init(db)
@@ -93,7 +94,7 @@ func TestGetIncreasedWorkspaceID(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
 	err = Init(db)

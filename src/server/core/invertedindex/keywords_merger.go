@@ -100,9 +100,10 @@ func (km *KeywordsMerger) run() {
 
 		if !km.merging.WaitingForFlushCache && before.MergedRowCount() != km.merging.MergedRowCount() {
 			// we've reached the end of the database
-			log.Printf("[Inverted] Keywords merger: merged %s keywords, row count reduced: %s\n",
+			log.Printf("[Inverted] Keywords merger: merged %s keywords, row reduced: %s, total row reduced: %s\n",
 				humanize.Comma(int64(km.merging.TotalKeywords)),
-				humanize.Comma(int64(km.merging.MergedRowCount()-before.MergedRowCount())))
+				humanize.Comma(int64(km.merging.MergedRowCount()-before.MergedRowCount())),
+				humanize.Comma(int64(km.merging.MergedRowCount())))
 		}
 
 		nextDelay = 500 * time.Millisecond

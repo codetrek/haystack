@@ -78,17 +78,17 @@ func encodeTableValue(info TableInfo) []byte {
 }
 
 func encodeInvertedValue(docids []string) []byte {
-	// Each docid is a 16-byte string
+	// Each docid is a 8-byte string
 	return []byte(strings.Join(docids, ""))
 }
 
 func decodeInvertedValue(data []byte) []string {
-	// Each docid is a 16-byte string
-	if len(data)%16 != 0 || len(data) == 0 {
+	// Each docid is a 8-byte string
+	if len(data)%8 != 0 || len(data) == 0 {
 		return []string{}
 	}
 
-	const size = 16
+	const size = 8
 	var chunks []string
 	for i := 0; i < len(data); i += size {
 		end := i + size
@@ -101,12 +101,12 @@ func decodeInvertedValue(data []byte) []string {
 }
 
 func decodeInvertedValueStr(data string) []string {
-	// Each docid is a 16-byte string
-	if len(data)%16 != 0 || len(data) == 0 {
+	// Each docid is a 8-byte string
+	if len(data)%8 != 0 || len(data) == 0 {
 		return []string{}
 	}
 
-	const size = 16
+	const size = 8
 	var chunks []string
 	for i := 0; i < len(data); i += size {
 		end := i + size

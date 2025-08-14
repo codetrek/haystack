@@ -43,8 +43,6 @@ func (w *Writer) Stop() {
 func (w *Writer) run(wg *sync.WaitGroup) {
 	log.Println("[Indexer] Writer started")
 	defer wg.Done()
-	timer := time.NewTicker(1000 * time.Millisecond)
-	defer timer.Stop()
 
 	for {
 		select {

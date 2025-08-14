@@ -60,15 +60,18 @@ func OpenDB(path string, cacheSize int64) (DB, error) {
 		// The count of L0 files necessary to trigger an L0 compaction.
 		L0CompactionFileThreshold: 1024,
 		// Set L0 compaction threshold to 8
-		L0CompactionThreshold: 8,
+		L0CompactionThreshold: 12,
 		// Set L0 stop writes threshold to 12
-		L0StopWritesThreshold: 12,
+		L0StopWritesThreshold: 18,
 		// Enable bloom filter
 		Levels: []pebble.LevelOptions{
 			{
 				BlockSize:    32 * 1024,
 				FilterPolicy: bloom.FilterPolicy(10),
 			},
+		},
+		MaxConcurrentCompactions: func() int {
+			return 2
 		},
 	}
 

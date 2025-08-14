@@ -23,7 +23,7 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Test initialization
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()
@@ -72,7 +72,7 @@ func TestCloseAndWait(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()

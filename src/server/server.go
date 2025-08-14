@@ -3,11 +3,13 @@ package server
 import (
 	"fmt"
 	"log"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/documents"
+	"github.com/ai-microsoft/haystack/server/core/idtable"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/prompts"
 	"github.com/ai-microsoft/haystack/server/core/storage"
@@ -36,9 +38,16 @@ func Run() {
 	wg := &sync.WaitGroup{}
 	running.InitShutdown(wg)
 
-	db, err := storage.Open(conf.Get().Global.DataPath, conf.Get().Server.CacheSize)
+	db, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "data"), conf.Get().Server.CacheSize)
 	if err != nil {
-		log.Fatal("[Server] Error initializing storage:", err)
+		log.Fatal("[Server] Error initializing data storage:", err)
+		running.Shutdown()
+		return
+	}
+
+	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
+	if err != nil {
+		log.Fatal("[Server] Error initializing index storage:", err)
 		running.Shutdown()
 		return
 	}
@@ -46,7 +55,13 @@ func Run() {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	if err := invertedindex.Init(db, mpsc); err != nil {
+	if err := idtable.Init(db); err != nil {
+		log.Fatal("[Server] Error initializing id table:", err)
+		running.Shutdown()
+		return
+	}
+
+	if err := invertedindex.Init(indexdb, mpsc); err != nil {
 		log.Fatal("[Server] Error initializing inverted index:", err)
 		running.Shutdown()
 		return
@@ -99,9 +114,12 @@ func Run() {
 	symbols.CloseAndWait()
 	mpsc.Stop()
 
+	idtable.Close()
+
 	// DB could be closed safely now!
 	log.Println("[Server] Closing storage...")
 	db.Close()
+	indexdb.Close()
 	log.Println("[Server] Storage closed")
 
 	log.Println("[Server] Haystack server stopped")

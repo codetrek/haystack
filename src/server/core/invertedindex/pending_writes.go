@@ -15,8 +15,8 @@ var (
 
 var (
 	FlushTicker        = 1 * time.Second
-	FlushWaitTimeout   = 2 * time.Second
-	FlushWaitBatchSize = 50
+	FlushWaitTimeout   = 3 * time.Second
+	FlushWaitBatchSize = 200
 )
 
 type BufferedWrites struct {

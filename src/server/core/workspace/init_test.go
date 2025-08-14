@@ -29,7 +29,7 @@ func TestInit(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
 	mpsc := queue.NewMpsc("TestQueue")
@@ -84,7 +84,7 @@ func TestWorkspaceManagement(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
 	mpsc := queue.NewMpsc("TestQueue")
@@ -186,7 +186,7 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	// Initialize storage
-	db, _ := storage.Open(tempDir, 0)
+	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
 	mpsc := queue.NewMpsc("TestQueue")

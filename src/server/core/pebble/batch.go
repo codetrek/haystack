@@ -16,6 +16,7 @@ type Batch interface {
 	Commit() error
 	Reset()
 	Close() error
+	Count() int32
 }
 
 type PebbleBatch struct {
@@ -79,6 +80,10 @@ func (b *PebbleBatch) Reset() {
 // Close closes the batch
 func (b *PebbleBatch) Close() error {
 	return b.batch.Close()
+}
+
+func (b *PebbleBatch) Count() int32 {
+	return b.count.Load()
 }
 
 func (b *PebbleBatch) increaseAndTryCommit() error {

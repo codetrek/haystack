@@ -152,6 +152,10 @@ func (m *MockBatch) Close() error {
 	return nil
 }
 
+func (m *MockBatch) Count() int32 {
+	return 0
+}
+
 func TestInit(t *testing.T) {
 	mockDB := &MockDB{}
 	mockMpsc := &queue.Mpsc{}

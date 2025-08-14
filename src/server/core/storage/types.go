@@ -16,6 +16,10 @@ const (
 	KeyTypeInvertedTable       = byte(21)
 	KeyTypeInvertedNextTableId = byte(22)
 
+	// Id table key types
+	KeyTypeIdTableNextId = byte(28) // The next available ID for the table
+	KeyTypeIdTableKey    = byte(29) // Keyword => int64
+
 	// Symbol types
 	KeyTypeSymbol             = byte(30) // symbol inverted id
 	KeyTypeSymbolDocFunctions = byte(31) // "df:"
@@ -23,7 +27,7 @@ const (
 	KeyTypeSymbolWords        = byte(33) // symbol words inverted id
 
 	// Prompt key types
-	KeyTypePromptPath 		  = byte(40) // "pp:"
+	KeyTypePromptPath = byte(40) // "pp:"
 )
 
 func IsKeyType(key string, keyType byte) bool {

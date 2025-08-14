@@ -17,6 +17,7 @@ import (
 
 	"github.com/ai-microsoft/haystack/conf"
 	"github.com/ai-microsoft/haystack/server/core/documents"
+	"github.com/ai-microsoft/haystack/server/core/idtable"
 	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/ai-microsoft/haystack/server/core/storage"
 	"github.com/ai-microsoft/haystack/server/core/symbols"
@@ -161,13 +162,19 @@ func startTestServer(t *testing.T) func() {
 	wg := &sync.WaitGroup{}
 	running.InitShutdown(wg)
 
-	db, err := storage.Open(conf.Get().Global.DataPath, conf.Get().Server.CacheSize)
+	db, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "data"), conf.Get().Server.CacheSize)
+	assert.NoError(t, err)
+
+	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
 	assert.NoError(t, err)
 
 	mpsc := queue.NewMpsc("TestDBQueue")
 	mpsc.Start()
 
-	err = invertedindex.Init(db, mpsc)
+	err = idtable.Init(db)
+	assert.NoError(t, err)
+
+	err = invertedindex.Init(indexdb, mpsc)
 	assert.NoError(t, err)
 
 	err = documents.Init(db, mpsc)
@@ -194,7 +201,9 @@ func startTestServer(t *testing.T) func() {
 		documents.CloseAndWait()
 		invertedindex.CloseAndWait()
 		mpsc.Stop()
+		idtable.Close()
 		db.Close()
+		indexdb.Close()
 	}
 }
 

@@ -36,6 +36,7 @@ func (m *mockBatchWrite) Put(key, value []byte) error {
 func (m *mockBatchWrite) Commit() error { return nil }
 func (m *mockBatchWrite) Reset()        {}
 func (m *mockBatchWrite) Close() error  { return nil }
+func (m *mockBatchWrite) Count() int32  { return 0 }
 func (m *mockBatchWrite) DeleteRange(start, end []byte) error {
 	return nil
 }
@@ -148,9 +149,9 @@ func TestRewriteIndexMultipleRows(t *testing.T) {
 		TableId: testTable1,
 		Keyword: "keyword1",
 		Rows: []RecordRow{
-			{Key: "key1", Value: "docdocdocdocdoc1docdocdocdocdoc2", DocCount: 2},
-			{Key: "key2", Value: "docdocdocdocdoc3docdocdocdocdoc4", DocCount: 2},
-			{Key: "key3", Value: "docdocdocdocdoc5docdocdocdocdoc6", DocCount: 2},
+			{Key: "key1", Value: "cdocdoc1cdocdoc2", DocCount: 2},
+			{Key: "key2", Value: "cdocdoc3cdocdoc4", DocCount: 2},
+			{Key: "key3", Value: "cdocdoc5cdocdoc6", DocCount: 2},
 		},
 		DocCount: 6,
 	}
@@ -210,11 +211,11 @@ func TestRewriteIndexWellBatched(t *testing.T) {
 
 func Doc2ID(doc string) string {
 	// docid MUST be a 16 character string
-	if len(doc) > 16 {
-		return doc[0:16]
+	if len(doc) > 8 {
+		return doc[0:8]
 	}
 
-	return fmt.Sprintf("%s%s", strings.Repeat("0", 16-len(doc)), doc)
+	return fmt.Sprintf("%s%s", strings.Repeat("0", 8-len(doc)), doc)
 }
 
 func MakeDocsForKeyword(docs ...string) string {
@@ -668,6 +669,7 @@ func (m *mockBatchWriteWithFuncs) Reset() {}
 func (m *mockBatchWriteWithFuncs) Close() error {
 	return nil
 }
+func (m *mockBatchWriteWithFuncs) Count() int32 { return 0 }
 
 func (m *mockBatchWriteWithFuncs) DeleteRange(start, end []byte) error {
 	return nil
