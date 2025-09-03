@@ -172,3 +172,48 @@ func Delete(workspaceId int) error {
 
 	return nil
 }
+
+func Move(id int, newPath string) (*Workspace, error) {
+	newPath = utils.NormalizePath(newPath)
+
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	workspace, ok := workspaces[id]
+	if !ok || workspace.deleted {
+		return nil, fmt.Errorf("workspace id not found")
+	}
+
+	if _, ok := workspacePaths[newPath]; ok {
+		return nil, fmt.Errorf("workspace for this path already exists")
+	}
+
+	// Validate the workspace path
+	// 1. It must be absolute
+	// 2. It must be a directory
+	if !filepath.IsAbs(newPath) {
+		return nil, fmt.Errorf("workspace path must be absolute")
+	}
+
+	info, err := os.Stat(newPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat workspace: %v", err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("workspace path must be a directory")
+	}
+
+	log.Printf("[Workspace] Moving workspace %v from %v to %v", id, workspaces[id].Path, newPath)
+
+	oldPath := workspace.Path
+	workspace.Path = newPath
+	workspace.Save()
+
+	workspacePaths[newPath] = workspace
+	delete(workspacePaths, oldPath)
+
+	log.Printf("[Workspace] Workspace %v moved from %v to %v", id, oldPath, newPath)
+
+	return workspace, nil
+}

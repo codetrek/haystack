@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strconv"
 
 	"github.com/ai-microsoft/haystack/shared/running"
 	"github.com/ai-microsoft/haystack/shared/types"
@@ -36,9 +37,11 @@ func handleWorkspace(args []string) {
 		handleWorkspaceSync(args[1])
 	case "get":
 		handleWorkspaceGet(args[1])
+	case "move":
+		handleWorkspaceMove(args[1], args[2])
 	default:
 		fmt.Printf("Unknown workspace command: %s\n", command)
-		fmt.Println("Available commands: get, list, create, delete, sync, sync-all")
+		fmt.Println("Available commands: get, list, create, delete, sync, sync-all, move")
 	}
 }
 
@@ -141,7 +144,7 @@ func printWorkspace(prefix string, ws types.Workspace) {
 
 func handleWorkspaceCreate(workspacePath string) {
 	if workspacePath == "" {
-		fmt.Println("Usage: " + running.ExecutableName() + " workspace delete <workspace path>")
+		fmt.Println("Usage: " + running.ExecutableName() + " workspace create <workspace path>")
 		return
 	}
 	if !filepath.IsAbs(workspacePath) {
@@ -203,3 +206,41 @@ func handleWorkspaceDelete(workspacePath string) {
 
 	printWorkspace("Deleted", response)
 }
+
+func handleWorkspaceMove(idStr string, newWorkspacePath string) {
+	if idStr == "" || newWorkspacePath == "" {
+		fmt.Println("Usage: " + running.ExecutableName() + " workspace move <workspace id> <new workspace path>")
+		return
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		fmt.Printf("Invalid workspace ID: %v\n", err)
+		return
+	}
+
+	request := types.MoveWorkspaceRequest{
+		Id: id,
+		NewPath: newWorkspacePath,
+	}
+	requestJson, err := json.Marshal(request)
+	if err != nil {
+		fmt.Printf("Error marshaling JSON:  %v\n", err)
+		return
+	}
+
+	result, err := serverRequest("/workspace/move", requestJson)
+	if err != nil {
+		fmt.Printf("Error encountered with server request: %v\n", err)
+		return
+	}
+
+	var workspace types.Workspace
+	if err := json.Unmarshal(*result.Body.Data, &workspace); err != nil {
+		fmt.Printf("Error unmarshaling server response: %v\n", err)
+		return
+	}
+
+	printWorkspace("Moved", workspace)
+}
+

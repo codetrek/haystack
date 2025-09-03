@@ -85,7 +85,6 @@ func handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("[Server] Recovered from panic: %v", r)
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 	}()
@@ -298,3 +297,50 @@ func handleSyncWorkspace(w http.ResponseWriter, r *http.Request) {
 		Message: "Sync in progress...",
 	})
 }
+
+func handleMoveWorkspace(w http.ResponseWriter, r *http.Request) {
+	var request types.MoveWorkspaceRequest
+	err := json.NewDecoder(r.Body).Decode(&request)
+	if err != nil {
+		log.Printf("[Server] Move workspace: failed to decode request: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Server] Recovered from panic: %v", r)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+	}()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	log.Printf("[Server] Move workspace request: %v", request)
+	ws, err := workspace.Move(request.Id, request.NewPath)
+	if err != nil {
+		log.Printf("[Server] Move workspace `%v`: failed to save: %v", request.NewPath, err)
+		json.NewEncoder(w).Encode(types.CommonResponse{
+			Code:    1,
+			Message: fmt.Sprintf("Failed to update workspace: %v", err),
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(types.MoveWorkspaceResponse{
+		Code:    0,
+		Message: "Ok",
+		Data: types.Workspace{
+			Id:           ws.Id,
+			Path:         ws.Path,
+			TotalFiles:   ws.GetTotalFiles(),
+			CreatedAt:    ws.CreatedAt,
+			LastAccessed: ws.LastAccessed,
+			LastFullSync: ws.LastFullSync,
+			Indexing:     false,
+		},
+	})
+}
+

@@ -76,3 +76,14 @@ type GetWorkspaceResponse struct {
 type SyncWorkspaceRequest struct {
 	Workspace string `json:"workspace"`
 }
+
+type MoveWorkspaceRequest struct {
+	Id      int    `json:"id"`
+	NewPath string `json:"new_path"`
+}
+
+type MoveWorkspaceResponse struct {
+	Code    int       `json:"code"`
+	Message string    `json:"message"`
+	Data    Workspace `json:"data"`
+}

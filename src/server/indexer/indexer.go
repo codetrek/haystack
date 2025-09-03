@@ -96,6 +96,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 	}
 
 	if doc == nil {
+		// log.Printf("[Indexer] Adding new file `%s` to workspace `%s`", relPath, workspace.Path)
 		stat, err := os.Stat(fullPath)
 		if err != nil || stat.IsDir() {
 			return err
@@ -104,6 +105,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 		// Add new file to the parser queue
 		parser.Add(workspace, relPath)
 	} else {
+		// log.Printf("[Indexer] Syncing existing file `%s` in workspace `%s`", relPath, workspace.Path)
 		stat, err := os.Stat(fullPath)
 		if err != nil || stat.IsDir() {
 			// Remove the file from the index

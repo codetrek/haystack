@@ -132,6 +132,7 @@ func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool
 	// If the document exists and the modified time is the same, return nil
 	if existing != nil &&
 		existing.ModifiedTime == info.ModTime().UnixNano() {
+			// log.Printf("[Indexer] File `%s` has not been touched, skipping", file.RelFilePath)
 		return nil, false, fileSizeExceedLimit, nil
 	}
 
@@ -153,6 +154,7 @@ func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool
 		hash = GetContentHash(content)
 		// If the document exists and the hash is the same, return nil
 		if existing != nil && existing.Hash == hash {
+			// log.Printf("[Indexer] File hash for `%s` has not changed, skipping", file.RelFilePath)
 			return nil, false, fileSizeExceedLimit, nil
 		}
 

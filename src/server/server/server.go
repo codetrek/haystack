@@ -36,6 +36,7 @@ func StartServer(wg *sync.WaitGroup, addr string, socketPath string) {
 	http.HandleFunc("/api/v1/workspace/sync-all", handleSyncAllWorkspaces)
 	http.HandleFunc("/api/v1/workspace/sync", handleSyncWorkspace)
 	http.HandleFunc("/api/v1/workspace/update", handleUpdateWorkspace)
+	http.HandleFunc("/api/v1/workspace/move", handleMoveWorkspace)
 
 	http.HandleFunc("/api/v1/search/content", handleSearchContent)
 	http.HandleFunc("/api/v1/search/files", handleSearchFiles)
