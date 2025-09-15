@@ -11,7 +11,7 @@ import (
 )
 
 func handleWorkspace(args []string) {
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+	if wantsHelp(args) {
 		fmt.Println("Usage: " + running.ExecutableName() + " workspace <command>")
 		fmt.Println("Commands:")
 		fmt.Println("  list                  List workspaces")
@@ -20,6 +20,7 @@ func handleWorkspace(args []string) {
 		fmt.Println("  delete <path>         Delete a workspace")
 		fmt.Println("  sync-all              Sync all workspaces")
 		fmt.Println("  sync <path>           Sync a workspace")
+		fmt.Println("  move <old> <new>      Move a workspace to new path")
 		return
 	}
 
@@ -220,7 +221,7 @@ func handleWorkspaceMove(idStr string, newWorkspacePath string) {
 	}
 
 	request := types.MoveWorkspaceRequest{
-		Id: id,
+		Id:      id,
 		NewPath: newWorkspacePath,
 	}
 	requestJson, err := json.Marshal(request)
@@ -243,4 +244,3 @@ func handleWorkspaceMove(idStr string, newWorkspacePath string) {
 
 	printWorkspace("Moved", workspace)
 }
-

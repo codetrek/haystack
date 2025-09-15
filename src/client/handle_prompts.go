@@ -25,7 +25,7 @@ func handlePrompts(args []string) {
 	workspace := promptsCmd.String("workspace", conf.Get().Client.DefaultWorkspace, "Workspace path to search in")
 	caseSensitive := promptsCmd.Bool("case-sensitive", false, "Enable case-sensitive search")
 
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+	if wantsHelp(args) {
 		fmt.Println("Usage: " + running.ExecutableName() + " prompts [options] <query>")
 		fmt.Println("Options:")
 		promptsCmd.PrintDefaults()

@@ -12,7 +12,7 @@ import (
 )
 
 func handleServer(args []string) {
-	if len(args) < 1 || args[0] == "-h" || args[0] == "--help" {
+	if wantsHelp(args) || len(args) < 1 {
 		fmt.Println("Usage: " + running.ExecutableName() + " server <command>")
 		fmt.Println("Commands:")
 		fmt.Println("  status         Show server status")

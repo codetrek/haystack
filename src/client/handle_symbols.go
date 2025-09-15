@@ -42,7 +42,7 @@ func handleSymbols(args []string) {
 	workspace := searchCmd.String("workspace", conf.Get().Client.DefaultWorkspace, "Workspace path to search in")
 	fuzzy := searchCmd.Bool("fuzzy", false, "Use fuzzy search")
 
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+	if wantsHelp(args) {
 		fmt.Println("Usage: " + running.ExecutableName() + " symbols [options] <query>")
 		fmt.Println("Options:")
 		searchCmd.PrintDefaults()

@@ -15,10 +15,27 @@ import (
 
 var version = "dev"
 
+// Global help flags
+var (
+	helpShort = flag.Bool("h", false, "Show help")
+	helpLong  = flag.Bool("help", false, "Show help")
+)
+
+func init() {
+	flag.Usage = func() { client.PrintUsage() }
+}
+
 func main() {
 	running.SetVersion(version)
 
 	flag.Parse()
+
+	// Show help early if requested (skip config load)
+	if *helpShort || *helpLong {
+		flag.Usage()
+		return
+	}
+
 	if err := conf.Load(); err != nil {
 		log.Fatal("[Main] Error loading config:", err)
 		return

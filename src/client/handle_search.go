@@ -25,7 +25,7 @@ func handleSearch(args []string) {
 	caseSensitive := searchCmd.Bool("case-sensitive", false, "Enable case-sensitive search")
 	wholeWord := searchCmd.Bool("whole-word", false, "Match whole words only")
 
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
+	if wantsHelp(args) {
 		fmt.Println("Usage: " + running.ExecutableName() + " search [options] <query>")
 		fmt.Println("Options:")
 		searchCmd.PrintDefaults()
@@ -153,8 +153,8 @@ func handleSearchFiles(args []string) {
 	maxResults := searchCmd.Int("limit", conf.Get().Client.DefaultLimit.MaxFilesResults, "Maximum number of results")
 	workspace := searchCmd.String("workspace", conf.Get().Client.DefaultWorkspace, "Workspace path to search in")
 
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Println("Usage: " + running.ExecutableName() + " search [options] <query>")
+	if wantsHelp(args) {
+		fmt.Println("Usage: " + running.ExecutableName() + " files [options] <query>")
 		fmt.Println("Options:")
 		searchCmd.PrintDefaults()
 		return
