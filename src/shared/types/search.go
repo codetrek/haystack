@@ -51,20 +51,6 @@ type SearchContentRequest struct {
 	UnsavedFilesOnly bool           `json:"unsaved_files_only,omitempty"`
 }
 
-// SearchPromptRequest is the request for searching prompts in a workspace.
-// It's structurally similar to SearchContentRequest but tailored for prompt-specific searches.
-type SearchPromptRequest struct {
-	Workspace     string         `json:"workspace,omitempty"`
-	Query         string         `json:"query,omitempty"`
-	Editor        *Editor        `json:"editor,omitempty"`         // Optional: editor context might be useful
-	CaseSensitive bool           `json:"case_sensitive,omitempty"` // Optional: for query matching
-	Filters       *SearchFilters `json:"filters,omitempty"`        // Optional: to narrow down search by path/type
-	Limit         *SearchLimit   `json:"limit,omitempty"`          // Optional: to limit number of results
-	// Add any prompt-specific fields here, e.g.:
-	// PromptType string `json:"prompt_type,omitempty"`
-	// MinQuality float64 `json:"min_quality,omitempty"`
-}
-
 type SearchFilesRequest struct {
 	Workspace string `json:"workspace,omitempty"`
 	Query     string `json:"query,omitempty"`
@@ -116,12 +102,6 @@ type SearchSymbolsRequest struct {
 	Query     string       `json:"query,omitempty"`
 	Fuzzy     bool         `json:"fuzzy,omitempty"`
 	Limit     *SearchLimit `json:"limit,omitempty"`
-}
-
-type SearchPromptsResponse struct {
-	Code    int      `json:"code"`
-	Message string   `json:"message"`
-	Data    []string `json:"data,omitempty"`
 }
 
 type SymbolsFileMatch struct {

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/ai-microsoft/haystack/server/core/workspace"
-	"github.com/ai-microsoft/haystack/server/searcher"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/server/searcher"
+	"github.com/codetrek/haystack/shared/types"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 

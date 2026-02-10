@@ -1,4 +1,4 @@
-module github.com/ai-microsoft/haystack
+module github.com/codetrek/haystack
 
 go 1.23.0
 

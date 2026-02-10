@@ -6,13 +6,12 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/codetrek/haystack/server/core/storage"
 )
 
 const (
 	KeyTypeSymbolTable        = storage.KeyTypeSymbol
 	KeyTypeSymbolDocFunctions = storage.KeyTypeSymbolDocFunctions
-	KeyTypeEmbeddingFuncFlag  = storage.KeyTypeEmbeddingFuncFlag
 	KeyTypeSymbolWordsTable   = storage.KeyTypeSymbolWords
 	InvalidWorkspaceId        = -1
 )
@@ -43,35 +42,6 @@ func DecodeDocFunctionsKey(key string) (int, string) {
 	}
 
 	return ParseWorkspaceId(parts[0]), parts[1]
-}
-
-func EncodeEmbeddingFuncFlagKey(workspaceid int, functionName string, done int) []byte {
-	return []byte(fmt.Sprintf("%c%d|%d|%s", KeyTypeEmbeddingFuncFlag, done, workspaceid, functionName))
-}
-
-func DecodeEmbeddingFuncFlagKey(key string) (int, int, string) {
-	if !storage.IsKeyType(key, KeyTypeEmbeddingFuncFlag) {
-		return InvalidWorkspaceId, 0, ""
-	}
-
-	key = key[1:]
-
-	parts := strings.SplitN(key, "|", 3)
-	done, _ := strconv.Atoi(parts[0])
-	if len(parts) != 3 {
-		return InvalidWorkspaceId, 0, ""
-	}
-	workspaceid := ParseWorkspaceId(parts[1])
-
-	return workspaceid, done, parts[2]
-}
-
-func EncodeEmbeddingFuncFlagPrefix(done int) []byte {
-	return []byte(fmt.Sprintf("%c%d|", KeyTypeEmbeddingFuncFlag, done))
-}
-
-func EncodeEmbeddingFuncFlagPrefixWithWorkspaceId(done int, workspaceId int) []byte {
-	return []byte(fmt.Sprintf("%c%d|%d|", KeyTypeEmbeddingFuncFlag, done, workspaceId))
 }
 
 func EncodeSymbolTableKey(workspaceid int) []byte {

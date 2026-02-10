@@ -1,9 +1,9 @@
 package searcher
 
 import (
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
 	"github.com/alecthomas/participle/v2"
 	"github.com/alecthomas/participle/v2/lexer"
+	"github.com/codetrek/haystack/server/core/invertedindex"
 )
 
 // Query represents the complete search query

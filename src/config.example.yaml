@@ -42,13 +42,6 @@ server:
 
 symbols:
   enable_feature: false
-  env_installed: true
-  default_enable_symbol_parse: true
-  default_enable_embedding_symbols: true
-  enable_prompt_search: false
-  default_enable_prompt_search: true
 
 bin_path:
-  node: ""
   ctags: ""
-  embedding_server_js: ""

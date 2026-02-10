@@ -3,7 +3,7 @@ package documents
 import (
 	"time"
 
-	"github.com/ai-microsoft/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/server/core/pebble"
 )
 
 // saveDocument saves a document to the database

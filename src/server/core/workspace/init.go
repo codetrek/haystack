@@ -5,9 +5,9 @@ import (
 	"log"
 	"sync"
 
-	"github.com/ai-microsoft/haystack/server/core/pebble"
-	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
-	"github.com/ai-microsoft/haystack/utils"
+	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/server/core/workspace/internal"
+	"github.com/codetrek/haystack/utils"
 )
 
 var (

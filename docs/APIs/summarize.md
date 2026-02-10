@@ -24,7 +24,6 @@ Haystack provides a comprehensive REST API for local code search indexing and qu
 - **Content Search**: Full-text search across code content
 - **File Search**: Find files by name/path with fuzzy matching
 - **Symbol Search**: Search for code symbols (functions, classes, etc.)
-- **Prompt Search**: Search for AI prompts in codebase
 
 ## Base URL Structure
 All APIs follow the pattern: `/api/v1/{category}/{action}`

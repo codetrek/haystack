@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/ai-microsoft/haystack/server/core/workspace"
-	"github.com/ai-microsoft/haystack/server/indexer"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/server/indexer"
+	"github.com/codetrek/haystack/shared/types"
 )
 
 func handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
@@ -343,4 +343,3 @@ func handleMoveWorkspace(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
-

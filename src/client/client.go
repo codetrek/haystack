@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/codetrek/haystack/shared/running"
 )
 
 func Run() {
@@ -27,8 +27,6 @@ func processCommand(args []string) {
 		handleSearchFiles(args[1:])
 	case "symbols":
 		handleSymbols(args[1:])
-	case "prompts":
-		handlePrompts(args[1:])
 	case "workspace":
 		handleWorkspace(args[1:])
 	case "server":
@@ -59,7 +57,6 @@ func PrintUsage() {
 	fmt.Println("  search          Search for documents matching the query")
 	fmt.Println("  files           Search for files matching the query")
 	fmt.Println("  symbols         Search for symbols matching the query")
-	fmt.Println("  prompts         Search for prompts matching the query")
 	fmt.Println("  server          Server commands (start/stop/status/restart/run)")
 	fmt.Println("  workspace       Workspace commands")
 	fmt.Println("  help <command>  Show help for a specific command")

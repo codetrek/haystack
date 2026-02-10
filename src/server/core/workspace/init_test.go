@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
-	"github.com/ai-microsoft/haystack/server/core/storage"
-	"github.com/ai-microsoft/haystack/server/core/symbols"
-	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
-	"github.com/ai-microsoft/haystack/utils/queue"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/storage"
+	"github.com/codetrek/haystack/server/core/symbols"
+	"github.com/codetrek/haystack/server/core/workspace/internal"
+	"github.com/codetrek/haystack/utils/queue"
 )
 
 func TestInit(t *testing.T) {

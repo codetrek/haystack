@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/invertedindex"
 )
 
 type Document struct {

@@ -39,7 +39,7 @@ The Search Indexer is structured with the following components:
 Clone the repository:
 
 ```bash
-git clone https://github.com/ai-microsoft/haystack.git
+git clone https://github.com/codetrek/haystack.git
 cd haystack/src
 ```
 

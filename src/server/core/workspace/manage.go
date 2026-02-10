@@ -8,12 +8,11 @@ import (
 	"sort"
 	"time"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/symbols"
-	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
-	"github.com/ai-microsoft/haystack/shared/types"
-	"github.com/ai-microsoft/haystack/utils"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/symbols"
+	"github.com/codetrek/haystack/server/core/workspace/internal"
+	"github.com/codetrek/haystack/shared/types"
+	"github.com/codetrek/haystack/utils"
 )
 
 func GetAllPaths() []string {
@@ -42,16 +41,15 @@ func GetAll() []types.Workspace {
 		}
 
 		result = append(result, types.Workspace{
-			Id:                 workspace.Id,
-			Path:               workspace.Path,
-			CreatedAt:          workspace.CreatedAt,
-			TotalFiles:         totalFiles,
-			UseGlobalFilters:   workspace.UseGlobalFilters,
-			Filters:            workspace.Filters,
-			EnablePromptSearch: workspace.EnablePromptSearch,
-			LastAccessed:       workspace.LastAccessed,
-			LastFullSync:       workspace.LastFullSync,
-			Indexing:           workspace.indexingStatus != nil,
+			Id:               workspace.Id,
+			Path:             workspace.Path,
+			CreatedAt:        workspace.CreatedAt,
+			TotalFiles:       totalFiles,
+			UseGlobalFilters: workspace.UseGlobalFilters,
+			Filters:          workspace.Filters,
+			LastAccessed:     workspace.LastAccessed,
+			LastFullSync:     workspace.LastFullSync,
+			Indexing:         workspace.indexingStatus != nil,
 		})
 	}
 
@@ -131,12 +129,11 @@ func Create(workspacePath string) (*Workspace, error) {
 	}
 
 	workspace = &Workspace{
-		Id:                 id,
-		Path:               workspacePath,
-		UseGlobalFilters:   true,
-		EnablePromptSearch: conf.Get().Symbols.DefaultEnablePromptSearch,
-		CreatedAt:          time.Now(),
-		LastAccessed:       time.Now(),
+		Id:               id,
+		Path:             workspacePath,
+		UseGlobalFilters: true,
+		CreatedAt:        time.Now(),
+		LastAccessed:     time.Now(),
 	}
 
 	if err := workspace.Save(); err != nil {

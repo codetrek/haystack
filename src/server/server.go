@@ -7,19 +7,18 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/idtable"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
-	"github.com/ai-microsoft/haystack/server/core/prompts"
-	"github.com/ai-microsoft/haystack/server/core/storage"
-	"github.com/ai-microsoft/haystack/server/core/symbols"
-	"github.com/ai-microsoft/haystack/server/core/workspace"
-	"github.com/ai-microsoft/haystack/server/indexer"
-	"github.com/ai-microsoft/haystack/server/searcher"
-	"github.com/ai-microsoft/haystack/server/server"
-	"github.com/ai-microsoft/haystack/shared/running"
-	"github.com/ai-microsoft/haystack/utils/queue"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/idtable"
+	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/storage"
+	"github.com/codetrek/haystack/server/core/symbols"
+	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/server/indexer"
+	"github.com/codetrek/haystack/server/searcher"
+	"github.com/codetrek/haystack/server/server"
+	"github.com/codetrek/haystack/shared/running"
+	"github.com/codetrek/haystack/utils/queue"
 )
 
 func Run() {
@@ -81,12 +80,6 @@ func Run() {
 
 	if err := symbols.Init(db, mpsc); err != nil {
 		log.Fatal("[Server] Error initializing symbols:", err)
-		running.Shutdown()
-		return
-	}
-
-	if err := prompts.Init(db, mpsc); err != nil {
-		log.Fatal("[Server] Error initializing prompts:", err)
 		running.Shutdown()
 		return
 	}

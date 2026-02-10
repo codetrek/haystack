@@ -6,10 +6,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex/tokenizer"
-	"github.com/ai-microsoft/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/invertedindex/tokenizer"
+	"github.com/codetrek/haystack/server/core/pebble"
 )
 
 type Function struct {
@@ -103,16 +103,6 @@ func saveDocFunctions(batch pebble.Batch, workspaceid int, doc *DocFunction) {
 
 		for _, function := range doc.Functions {
 			functionMap[function.Name] = append(functionMap[function.Name], function.Line)
-
-			// for embedding
-			// embeddingFlag, err := db.Get(EncodeEmbeddingFuncFlagKey(workspaceid, function.Name, 1))
-			// if err != nil {
-			// 	continue
-			// }
-			// if len(embeddingFlag) == 0 {
-			// 	batch.Put(EncodeEmbeddingFuncFlagKey(workspaceid, function.Name, 0), nil)
-			// }
-			batch.Put(EncodeEmbeddingFuncFlagKey(workspaceid, function.Name, 0), []byte("0"))
 		}
 
 		var functionEntries []string
@@ -281,107 +271,5 @@ func AddFunctions(workspaceid int, functions []DocFunction) error {
 		}
 
 		return err
-	})
-}
-
-func ScanPendingEmbeddingFunctions(limit int) map[int][]string {
-	functions := make(map[int][]string)
-	count := 0
-	db.Scan(EncodeEmbeddingFuncFlagPrefix(0), func(key, value []byte) bool {
-		workspaceId, _, fn := DecodeEmbeddingFuncFlagKey(string(key))
-
-		functions[workspaceId] = append(functions[workspaceId], fn)
-		count++
-		if limit > 0 && count >= limit {
-			return false
-		}
-
-		return true
-	})
-
-	return functions
-}
-
-func ScanPendingEmbeddingFunctionsWithWorkspaceIds(workspaceId []int, limit int) map[int][]string {
-	functions := make(map[int][]string)
-	count := 0
-	for _, id := range workspaceId {
-
-		db.Scan(EncodeEmbeddingFuncFlagPrefixWithWorkspaceId(0, id), func(key, value []byte) bool {
-			workspaceId, _, fn := DecodeEmbeddingFuncFlagKey(string(key))
-
-			functions[workspaceId] = append(functions[workspaceId], fn)
-			count++
-			if limit > 0 && count >= limit {
-				return false
-			}
-
-			return true
-		})
-
-		if count >= limit {
-			break
-		}
-	}
-
-	return functions
-}
-
-func RemoveComputedEmbeddings(workspace2Functions map[int][]string) (map[int][]string, error) {
-	result := make(map[int][]string)
-	needRemove := [][]byte{}
-	for workspaceId, functions := range workspace2Functions {
-		var filteredFunctions []string
-		for _, fn := range functions {
-			v, err := db.Get(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 1))
-			if err != nil {
-				continue
-			}
-
-			if len(string(v)) > 0 {
-				needRemove = append(needRemove, EncodeEmbeddingFuncFlagKey(workspaceId, fn, 0))
-			} else {
-				filteredFunctions = append(filteredFunctions, fn)
-			}
-		}
-
-		// Only add to result if there are functions remaining after filtering
-		if len(filteredFunctions) > 0 {
-			result[workspaceId] = filteredFunctions
-		}
-	}
-
-	return result, mpsc.RunFunc(func() error {
-		if db.IsClosed() {
-			log.Println("[Symbols] Database is closed, skip saving new functions")
-			return nil
-		}
-
-		batch := NewBatch(db)
-		for _, key := range needRemove {
-			batch.Delete(key)
-		}
-		batch.Commit()
-		return nil
-	})
-}
-
-func UpdateEmbeddingFunctionsFlag(workspace2Functions map[int][]string) error {
-	return mpsc.RunFunc(func() error {
-		if db.IsClosed() {
-			log.Println("[Symbols] Database is closed, skip saving new functions")
-			return nil
-		}
-
-		batch := NewBatch(db)
-		for workspaceId, functions := range workspace2Functions {
-			for _, fn := range functions {
-				batch.Delete(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 0))
-				batch.Put(EncodeEmbeddingFuncFlagKey(workspaceId, fn, 1), []byte("1"))
-			}
-		}
-		batch.Commit()
-
-		return nil
 	})
 }

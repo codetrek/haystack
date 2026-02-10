@@ -7,10 +7,10 @@ import (
 	_ "net/http/pprof"
 	"path/filepath"
 
-	"github.com/ai-microsoft/haystack/client"
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server"
-	"github.com/ai-microsoft/haystack/shared/running"
+	"github.com/codetrek/haystack/client"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server"
+	"github.com/codetrek/haystack/shared/running"
 )
 
 var version = "dev"

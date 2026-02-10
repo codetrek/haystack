@@ -23,11 +23,8 @@ const (
 	// Symbol types
 	KeyTypeSymbol             = byte(30) // symbol inverted id
 	KeyTypeSymbolDocFunctions = byte(31) // "df:"
-	KeyTypeEmbeddingFuncFlag  = byte(32) // "ef:"
 	KeyTypeSymbolWords        = byte(33) // symbol words inverted id
 
-	// Prompt key types
-	KeyTypePromptPath = byte(40) // "pp:"
 )
 
 func IsKeyType(key string, keyType byte) bool {
