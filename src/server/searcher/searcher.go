@@ -323,9 +323,9 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			log.Printf("[Searcher] Failed to open file:`%s`, error:%s", fullPath, err)
 			continue
 		}
-		defer file.Close()
 
 		fileMatch, err := searchInContent(doc.RelPath, file, engine, beforeAfter, req.Limit, &totalHits)
+		file.Close()
 		if err != nil {
 			log.Printf("[Searcher] Failed to search in file %s: %v", doc.RelPath, err)
 			continue
