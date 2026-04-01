@@ -1,0 +1,42 @@
+#!/bin/bash
+# Pre-push hook: Run coverage check and block push if critical issues found
+set -e
+
+echo "Running coverage check before push..."
+
+# Get the directory of this script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+cd "$PROJECT_ROOT"
+
+# Run coverage and capture output
+COVERAGE_OUTPUT=$(mktemp)
+trap 'rm -f "$COVERAGE_OUTPUT"' EXIT
+
+# Run make coverage and capture output
+if ! make coverage 2>&1 | tee "$COVERAGE_OUTPUT"; then
+    echo ""
+    echo "Push rejected: Tests failed"
+    exit 1
+fi
+
+# Check for CRITICAL issues in the output
+if grep -q "CRITICAL" "$COVERAGE_OUTPUT"; then
+    echo ""
+    echo "Push rejected: Critical coverage issues found"
+    echo ""
+    echo "Critical issues detected:"
+    grep "CRITICAL" "$COVERAGE_OUTPUT"
+    echo ""
+    echo "Please fix the coverage issues before pushing."
+    exit 1
+fi
+
+echo ""
+echo "Coverage check passed"
+
+# Run git-lfs if available
+command -v git-lfs >/dev/null 2>&1 && git lfs pre-push "$@"
+
+exit 0
