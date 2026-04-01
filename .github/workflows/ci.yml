@@ -2,12 +2,17 @@ name: CI Pipeline
 
 on:
   pull_request:
-    branches: [ main ]
+    branches: [ "main", "master" ]
+    paths:
+      - 'src/**'
+      - 'scripts/**'
+      - '.github/workflows/ci.yml'
 
 jobs:
-  build:
+  build-and-test:
+    name: Build & Test (Go)
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -20,12 +25,29 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: 'src/go.mod'
+          cache: true
+
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-${{ hashFiles('src/go.mod', 'src/go.sum', 'src/**/*.go') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-
+
+      - name: Verify Go version
+        run: go version
+
+      - name: Check Formatting
+        working-directory: ./src
+        run: |
+          ../.github/workflows/scripts/check-fmt.sh
 
       - name: Build
-        working-directory: ./src
-        run: go build ./
+        run: make build
 
-      - name: Run tests
+      - name: Test and Coverage
         working-directory: ./src
-        run: go test ./...
+        run: |
+          ../.github/workflows/scripts/test_and_coverage.sh

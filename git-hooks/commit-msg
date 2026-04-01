@@ -1,0 +1,13 @@
+#!/bin/bash
+set -e
+
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(cat "$COMMIT_MSG_FILE")
+
+if echo "$COMMIT_MSG" | grep -Eqi "happy(.|@)engineering|generated with|co-authored-by:|\[claude code\]"; then
+    echo "Commit rejected: commit message contains co-author credits."
+    echo "Please remove any 'Generated with xxx', 'via Happy', or any co-author credits in commit messages."
+    exit 1
+fi
+
+exit 0
