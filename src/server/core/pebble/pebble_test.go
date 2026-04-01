@@ -283,3 +283,67 @@ func TestBatch_Close(t *testing.T) {
 	batch := db.NewBatch(0)
 	assert.NoError(t, batch.Close())
 }
+
+func TestDB_ScanAfterClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	db.Close()
+
+	err = db.Scan([]byte("k"), func(key, value []byte) bool { return true })
+	assert.Error(t, err)
+}
+
+func TestDB_ScanRangeAfterClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	db.Close()
+
+	err = db.ScanRange([]byte("a"), []byte("z"), func(key, value []byte) bool { return true })
+	assert.Error(t, err)
+}
+
+func TestDB_GetIncrementalIdAfterClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	db.Close()
+
+	_, err = db.GetIncrementalId([]byte("counter"))
+	assert.Error(t, err)
+}
+
+func TestDB_NewBatchAndOps(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	// Test batch with maxBatchSize > 0 but not enough ops to trigger
+	batch := db.NewBatch(10)
+	assert.NoError(t, batch.Put([]byte("k1"), []byte("v1")))
+	assert.Equal(t, int32(1), batch.Count())
+	assert.NoError(t, batch.Delete([]byte("k1")))
+	assert.Equal(t, int32(2), batch.Count())
+	assert.NoError(t, batch.Commit())
+	assert.Equal(t, int32(0), batch.Count())
+}
+
+func TestDB_ScanRange_StopEarly(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	db.Put([]byte("a"), []byte("1"))
+	db.Put([]byte("b"), []byte("2"))
+	db.Put([]byte("c"), []byte("3"))
+
+	count := 0
+	db.ScanRange([]byte("a"), []byte("d"), func(key, value []byte) bool {
+		count++
+		return count < 2
+	})
+	assert.Equal(t, 2, count)
+}

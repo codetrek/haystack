@@ -110,6 +110,83 @@ func TestLoad_SearchLimitsValidation(t *testing.T) {
 	assert.True(t, conf.Server.Search.MaxKeywordDistance > 0)
 }
 
+func TestLoad_SocketPath(t *testing.T) {
+	old := *conf
+	defer func() { *conf = old }()
+
+	confFile = ""
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	conf.Global.Port = -1
+	conf.Global.SocketPath = "haystack.sock"
+	Load()
+	// Relative socket path should be made absolute
+	assert.True(t, filepath.IsAbs(conf.Global.SocketPath))
+	// Port should be 0 when socket is set
+	assert.Equal(t, 0, conf.Global.Port)
+}
+
+func TestLoad_ClientLimitsValidation(t *testing.T) {
+	old := *conf
+	defer func() { *conf = old }()
+
+	confFile = ""
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	conf.Client.DefaultLimit.MaxResults = -1
+	conf.Client.DefaultLimit.MaxResultsPerFile = -1
+	conf.Client.DefaultLimit.MaxFilesResults = -1
+	Load()
+	assert.True(t, conf.Client.DefaultLimit.MaxResults > 0)
+	assert.True(t, conf.Client.DefaultLimit.MaxResultsPerFile > 0)
+	assert.True(t, conf.Client.DefaultLimit.MaxFilesResults > 0)
+}
+
+func TestLoad_IndexWorkers(t *testing.T) {
+	old := *conf
+	defer func() { *conf = old }()
+
+	confFile = ""
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	conf.Server.IndexWorkers = -1
+	conf.Server.SymbolParserWorkers = -1
+	conf.Server.MaxFileSize = -1
+	conf.Server.CacheSize = -1
+	Load()
+	assert.True(t, conf.Server.IndexWorkers > 0)
+	assert.True(t, conf.Server.SymbolParserWorkers > 0)
+	assert.True(t, conf.Server.MaxFileSize > 0)
+	assert.True(t, conf.Server.CacheSize > 0)
+}
+
+func TestLoad_WildcardAndDistanceLimits(t *testing.T) {
+	old := *conf
+	defer func() { *conf = old }()
+
+	confFile = ""
+	tmpDir := t.TempDir()
+	origDir, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(origDir)
+
+	// Values too high should be clamped
+	conf.Server.Search.MaxWildcardLength = 999
+	conf.Server.Search.MaxKeywordDistance = 999
+	Load()
+	assert.Equal(t, DefaultMaxSearchWildcardLength, conf.Server.Search.MaxWildcardLength)
+	assert.Equal(t, DefaultMaxSearchKeywordDistance, conf.Server.Search.MaxKeywordDistance)
+}
+
 func TestDefaultValues(t *testing.T) {
 	assert.Equal(t, int64(5*1024*1024), int64(DefaultMaxFileSize))
 	assert.Equal(t, 6, DefaultIndexWorkers)

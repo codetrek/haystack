@@ -217,3 +217,36 @@ func TestNormalizePath_ViaExecutable(t *testing.T) {
 	_, err := os.Stat(exe)
 	assert.NoError(t, err)
 }
+
+func TestIsShuttingDown_BeforeInit(t *testing.T) {
+	// After InitShutdown + Shutdown, should be true
+	wg := &sync.WaitGroup{}
+	InitShutdown(wg)
+	assert.False(t, IsShuttingDown())
+	Shutdown()
+	assert.True(t, IsShuttingDown())
+	wg.Wait()
+}
+
+func TestVersion_Empty(t *testing.T) {
+	version = ""
+	assert.Equal(t, "", Version())
+}
+
+func TestExecutablePath_IsDir(t *testing.T) {
+	once = sync.Once{}
+	executable = ""
+	path := ExecutablePath()
+	stat, err := os.Stat(path)
+	assert.NoError(t, err)
+	assert.True(t, stat.IsDir())
+}
+
+func TestUserHomeDir_Consistent(t *testing.T) {
+	initHomeDir = sync.Once{}
+	userHomeDir = ""
+	dir1 := UserHomeDir()
+	dir2 := UserHomeDir()
+	assert.Equal(t, dir1, dir2)
+	assert.True(t, filepath.IsAbs(dir1))
+}
