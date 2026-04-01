@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/ai-microsoft/haystack/shared/running"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/shared/running"
+	"github.com/codetrek/haystack/shared/types"
 )
 
 func handleWorkspace(args []string) {

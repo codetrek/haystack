@@ -102,36 +102,22 @@ server:
 ```yaml
 symbols:
   enable_feature: bool                     # Enable symbol parsing (default: true)
-  enable_prompt_search: bool              # [WIP] Enable prompt-based search (default: false)
-  embedding_port: int                     # [WIP] Port for embedding server (default: 13144)
-  env_installed: bool                     # [WIP] Whether embedding environment is installed
-  default_enable_embedding_symbols: bool  # [WIP] Default setting for embedding symbols
-  default_enable_embedding_prompt: bool   # [WIP] Default setting for embedding prompts
 ```
 
 **Symbol Settings:**
 
 - `enable_feature`: Master switch for symbol parsing functionality
-- `enable_prompt_search`: Enable AI-powered prompt search capabilities
-- `embedding_port`: Port for the embedding server component
-- `env_installed`: Indicates if the embedding environment is properly installed
-- `default_enable_embedding_symbols`: Default setting for enabling symbol embeddings in new workspaces
-- `default_enable_embedding_prompt`: Default setting for enabling prompt embeddings in new workspaces
 
 ### Binary Path Configuration
 
 ```yaml
 bin_path:
-  node: string                # [WIP] Path to Node.js executable
   ctags: string               # Path to CTags executable
-  embedding_server_js: string # [WIP] Path to embedding server JavaScript file
 ```
 
 **Binary Path Settings:**
 
-- `node`: Path to the Node.js executable (for running JavaScript components)
 - `ctags`: Path to the CTags executable (for symbol parsing)
-- `embedding_server_js`: Path to the embedding server JavaScript file
 
 ### Test Configuration
 
@@ -159,8 +145,6 @@ for_test:
 | `client.default_limit.max_results_per_file` | 50 | Client max results per file |
 | `client.default_limit.max_files_results` | 100 | Client max files in results |
 | `symbols.enable_feature` | true | Symbol parsing enabled |
-| `symbols.enable_prompt_search` | false | Prompt search disabled |
-| `symbols.embedding_port` | 13144 | Embedding server port |
 
 ## Configuration Validation
 

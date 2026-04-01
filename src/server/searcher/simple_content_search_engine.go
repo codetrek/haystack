@@ -7,10 +7,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex/tokenizer"
-	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/invertedindex/tokenizer"
+	"github.com/codetrek/haystack/server/core/workspace"
 )
 
 // SimpleContentSearchEngine is a simple search engine that uses regex to find documents

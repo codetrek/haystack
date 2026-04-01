@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/utils"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/utils"
 )
 
 func parseAndValidateSearchArgs(arguments map[string]any) (string, string, int, error) {

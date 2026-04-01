@@ -1,8 +1,8 @@
 package symbols
 
 import (
-	"github.com/ai-microsoft/haystack/server/core/pebble"
-	"github.com/ai-microsoft/haystack/utils/queue"
+	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/utils/queue"
 )
 
 const Shards = 8

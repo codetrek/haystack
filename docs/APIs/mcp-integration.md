@@ -53,28 +53,12 @@ The MCP server is automatically initialized when Haystack starts with a TCP addr
 
 - `limit` (optional): Maximum number of results to return
 
-### 3. HaystackPromptSearch
-
-**Tool Name:** `HaystackPromptSearch`
-
-**Description:** Search for prompts in current project, supports fuzzy matching on prompt names and attempts to return a list of the most relevant prompts.
-
-**Parameters:**
-
-- `workspace` (required): Absolute path to the project directory
-
-- `query` (optional): Case-insensitive search query
-
-- `path` (optional): Relative path to search within workspace (e.g., components/)
-
-- `limit` (optional): Maximum number of results to return
 
 ## MCP Server Configuration
 
 The MCP server is configured with the following capabilities:
 
 - **Resource Capabilities:** Read and subscribe support enabled
-- **Prompt Capabilities:** Enabled for AI prompt handling
 - **Logging:** Enabled for debugging and monitoring
 - **Keep-Alive:** 20-second intervals for SSE connections
 - **Heartbeat:** 20-second intervals for HTTP connections
@@ -101,6 +85,5 @@ AI tools can use these MCP tools to:
 
 1. Search for specific code patterns using `HaystackSearch`
 2. Find relevant files quickly using `HaystackFiles`
-3. **[WIP]** Locate AI prompts and templates using `HaystackPromptSearch`
 
 This enables AI systems to have contextual understanding of codebases and provide more accurate assistance to developers.

@@ -5,14 +5,13 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex/tokenizer"
-	"github.com/ai-microsoft/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/invertedindex/tokenizer"
+	"github.com/codetrek/haystack/server/core/workspace"
 )
 
 // ParseFile represents a file to be parsed
@@ -92,11 +91,6 @@ func (p *Parser) processFile(file ParseFile) error {
 		symbolParser.Add(file.Workspace, file.RelFilePath)
 	}
 
-	// If the document is a prompt, add it to the prompts data
-	if file.Workspace.EnablePromptSearch && strings.HasSuffix(doc.RelPath, ".prompt.md") {
-		promptParser.Add(file.Workspace, []string{doc.RelPath})
-	}
-
 	file.Workspace.AddIndexingFiles(1)
 
 	return nil
@@ -132,7 +126,7 @@ func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool
 	// If the document exists and the modified time is the same, return nil
 	if existing != nil &&
 		existing.ModifiedTime == info.ModTime().UnixNano() {
-			// log.Printf("[Indexer] File `%s` has not been touched, skipping", file.RelFilePath)
+		// log.Printf("[Indexer] File `%s` has not been touched, skipping", file.RelFilePath)
 		return nil, false, fileSizeExceedLimit, nil
 	}
 

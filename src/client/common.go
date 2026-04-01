@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/shared/types"
 )
 
 type result struct {

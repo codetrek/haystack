@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/ai-microsoft/haystack/shared/running"
-	"github.com/ai-microsoft/haystack/shared/types"
-	fsutils "github.com/ai-microsoft/haystack/utils/fs"
+	"github.com/codetrek/haystack/shared/running"
+	"github.com/codetrek/haystack/shared/types"
+	fsutils "github.com/codetrek/haystack/utils/fs"
 
 	"gopkg.in/yaml.v3"
 )
@@ -30,8 +30,6 @@ const (
 
 	DefaultMaxSearchWildcardLength  = 24
 	DefaultMaxSearchKeywordDistance = 32
-
-	DefaultEmbeddingPort = 13144
 )
 
 var (
@@ -71,12 +69,7 @@ type Server struct {
 }
 
 type Symbols struct {
-	EnableFeature                 bool `yaml:"enable_feature,omitempty"`
-	EnablePromptSearch            bool `yaml:"enable_prompt_search,omitempty"`
-	EmbeddingPort                 int  `yaml:"embedding_port,omitempty"`
-	EnvInstalled                  bool `yaml:"env_installed,omitempty"`
-	DefaultEnableEmbeddingSymbols bool `yaml:"default_enable_embedding_symbols,omitempty"`
-	DefaultEnablePromptSearch     bool `yaml:"default_enable_embedding_prompt,omitempty"`
+	EnableFeature bool `yaml:"enable_feature,omitempty"`
 }
 
 type Conf struct {
@@ -92,9 +85,7 @@ type Conf struct {
 }
 
 type BinPath struct {
-	Node              string `yaml:"node,omitempty"`
-	CTags             string `yaml:"ctags,omitempty"`
-	EmbeddingServerJS string `yaml:"embedding_server_js,omitempty"`
+	CTags string `yaml:"ctags,omitempty"`
 }
 
 var conf = &Conf{
@@ -132,18 +123,11 @@ var conf = &Conf{
 		},
 	},
 	Symbols: Symbols{
-		EnableFeature:                 true,
-		EnablePromptSearch:            false,
-		EmbeddingPort:                 DefaultEmbeddingPort,
-		EnvInstalled:                  false,
-		DefaultEnableEmbeddingSymbols: false,
-		DefaultEnablePromptSearch:     false,
+		EnableFeature: true,
 	},
 
 	BinPath: BinPath{
-		Node:              "",
-		CTags:             "",
-		EmbeddingServerJS: "",
+		CTags: "",
 	},
 }
 
@@ -262,10 +246,6 @@ func Load() error {
 	if conf.Client.DefaultLimit.MaxFilesResults <= 0 ||
 		conf.Client.DefaultLimit.MaxFilesResults > DefaultMaxFiles {
 		conf.Client.DefaultLimit.MaxFilesResults = DefaultMaxFiles
-	}
-
-	if conf.Symbols.EmbeddingPort <= 0 || conf.Symbols.EmbeddingPort > 65535 {
-		conf.Symbols.EmbeddingPort = DefaultEmbeddingPort
 	}
 
 	return nil

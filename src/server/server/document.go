@@ -5,9 +5,9 @@ import (
 	"log"
 	"net/http"
 
-	"github.com/ai-microsoft/haystack/server/core/workspace"
-	"github.com/ai-microsoft/haystack/server/indexer"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/server/indexer"
+	"github.com/codetrek/haystack/shared/types"
 )
 
 func handleUpdateDocument(w http.ResponseWriter, r *http.Request) {

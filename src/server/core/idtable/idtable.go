@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-microsoft/haystack/server/core/pebble"
-	"github.com/ai-microsoft/haystack/server/core/storage"
+	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/server/core/storage"
 )
 
 // LRUCacheSize defines the maximum number of entries in the LRU cache.

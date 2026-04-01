@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/invertedindex"
 )
 
 type SymbolUniversalTable struct {
@@ -47,7 +47,6 @@ func Delete(workspaceId int) error {
 	if !conf.Get().Symbols.EnableFeature {
 		return nil
 	}
-	EmbeddingRemoveDB(workspaceId)
 
 	return mpsc.RunFunc(func() error {
 		tableMetaKeys := [][]byte{

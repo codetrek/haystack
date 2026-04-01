@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-microsoft/haystack/conf"
-	"github.com/ai-microsoft/haystack/server/core/workspace/internal"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/workspace/internal"
+	"github.com/codetrek/haystack/shared/types"
 )
 
 type IndexingStatus struct {
@@ -19,12 +19,11 @@ type IndexingStatus struct {
 }
 
 type Workspace struct {
-	Id                 int            `json:"id"`
-	Path               string         `json:"path"`
-	UseGlobalFilters   bool           `json:"use_global_filters"`
-	Filters            *types.Filters `json:"filters,omitempty" optional:"true"`
-	TotalFiles         int            `json:"total_files"`
-	EnablePromptSearch bool           `json:"enable_prompt_search"`
+	Id               int            `json:"id"`
+	Path             string         `json:"path"`
+	UseGlobalFilters bool           `json:"use_global_filters"`
+	Filters          *types.Filters `json:"filters,omitempty" optional:"true"`
+	TotalFiles       int            `json:"total_files"`
 
 	CreatedAt    time.Time `json:"created_time"`
 	LastAccessed time.Time `json:"last_accessed_time"`

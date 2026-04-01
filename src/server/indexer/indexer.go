@@ -7,20 +7,18 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/symbols"
-	"github.com/ai-microsoft/haystack/server/core/workspace"
-	"github.com/ai-microsoft/haystack/shared/running"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/symbols"
+	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/shared/running"
+	"github.com/codetrek/haystack/shared/types"
 )
 
 var (
-	scanner         = NewScanner()
-	parser          = NewParser()
-	promptParser    = NewPromptParser()
-	writer          = NewWriter()
-	symbolParser    = NewSymbolParser()
-	embeddingEngine = NewEmbeddingEngine()
+	scanner      = NewScanner()
+	parser       = NewParser()
+	writer       = NewWriter()
+	symbolParser = NewSymbolParser()
 )
 
 // Run starts the indexer components in separate goroutines.
@@ -29,10 +27,8 @@ func Run(wg *sync.WaitGroup) {
 
 	scanner.Start(wg)
 	parser.Start(wg)
-	promptParser.Start(wg)
 	writer.Start(wg)
 	symbolParser.Start(wg)
-	embeddingEngine.Start(wg)
 	log.Println("[Indexer] Started.")
 
 	go func() {
@@ -40,10 +36,8 @@ func Run(wg *sync.WaitGroup) {
 		log.Println("[Indexer] Stopping...")
 		scanner.Stop()
 		parser.Stop()
-		promptParser.Stop()
 		writer.Stop()
 		symbolParser.Stop()
-		embeddingEngine.Stop()
 		log.Println("[Indexer] Stopped.")
 	}()
 }

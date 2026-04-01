@@ -31,7 +31,6 @@ server:
 
 symbols:
   enable_feature: true           # Enable symbol parsing
-  enable_prompt_search: false    # Disable AI search by default, WIP
 ```
 
 ## Performance Tuning
@@ -99,10 +98,6 @@ server:
 ```yaml
 symbols:
   enable_feature: true
-  enable_prompt_search: true
-  embedding_port: 13144
-  default_enable_embedding_symbols: true
-  default_enable_embedding_prompt: true
 ```
 
 ### Disable Symbol Features
@@ -110,7 +105,6 @@ symbols:
 ```yaml
 symbols:
   enable_feature: false
-  enable_prompt_search: false
 ```
 
 ## Networking
@@ -145,9 +139,7 @@ global:
 
 ```yaml
 bin_path:
-  node: "/usr/local/bin/node"
   ctags: "/usr/local/bin/ctags"
-  embedding_server_js: "./embedding/dist/index.js"
 ```
 
 ## Configuration File Locations
@@ -161,7 +153,6 @@ Haystack searches for configuration files in this order:
 ## Default Ports
 
 - **Main Server**: 13134
-- **Embedding Server**: 13144
 
 ## Default Data Location
 

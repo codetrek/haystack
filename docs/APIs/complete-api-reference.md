@@ -93,10 +93,6 @@ All search endpoints are documented in detail at: [Search APIs](./search.md)
 - **Endpoint:** `POST /api/v1/search/symbols`
 - **Description:** Search for code symbols (functions, classes, variables)
 
-### Prompt Search
-- **Endpoint:** `POST /api/v1/search/prompts`
-- **Description:** Search for AI prompts within the codebase
-
 ## MCP Integration
 
 Model Context Protocol integration is documented at: [MCP Integration](./mcp-integration.md)
@@ -109,7 +105,6 @@ Model Context Protocol integration is documented at: [MCP Integration](./mcp-int
 ### MCP Tools
 - **HaystackSearch:** Code content search tool
 - **HaystackFiles:** File search tool
-- **HaystackPromptSearch:** Prompt search tool
 
 ## API Conventions
 

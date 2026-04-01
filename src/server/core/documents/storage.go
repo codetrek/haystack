@@ -6,9 +6,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
-	"github.com/ai-microsoft/haystack/server/core/pebble"
-	"github.com/ai-microsoft/haystack/utils/queue"
+	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/utils/queue"
 )
 
 var (

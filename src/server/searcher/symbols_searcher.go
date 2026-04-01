@@ -4,17 +4,16 @@ import (
 	"crypto/md5"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/ai-microsoft/haystack/server/core/documents"
-	"github.com/ai-microsoft/haystack/server/core/invertedindex"
-	"github.com/ai-microsoft/haystack/server/core/symbols"
-	"github.com/ai-microsoft/haystack/server/core/workspace"
-	"github.com/ai-microsoft/haystack/server/indexer"
-	"github.com/ai-microsoft/haystack/shared/types"
+	"github.com/codetrek/haystack/server/core/documents"
+	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/symbols"
+	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/server/indexer"
+	"github.com/codetrek/haystack/shared/types"
 
 	"github.com/AntoineAugusti/wordsegmentation"
 	"github.com/AntoineAugusti/wordsegmentation/corpus"
@@ -218,93 +217,6 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 	return result, nil
 }
 
-func searchSymbolsEmbedding(workspace *workspace.Workspace, req *types.SearchSymbolsRequest) (types.SymbolsContentResults, error) {
-	result := types.SymbolsContentResults{
-		Query:   req.Query,
-		Symbols: []types.SymbolContent{},
-	}
-
-	resp, err := symbols.EmbeddingSearch(workspace.Id, req.Query, *req.Limit)
-	if err != nil || resp.Code != 0 {
-		return result, err
-	}
-
-	st, err := symbols.GetSymbolTable(workspace.Id)
-	if err != nil {
-		return result, err
-	}
-
-	// Use a map to collect all files for each symbol
-	symbolFiles := make(map[string][]types.SymbolsFileMatch)
-	// Keep track of the order of symbols as they appear in resp.Data
-	var symbolOrder []string
-
-	for _, ss := range resp.Data {
-		if ss.Score > 1.2 {
-			continue
-		}
-
-		symbolOrder = append(symbolOrder, ss.Symbol)
-		r := invertedindex.GetDocs(st.InvertedId, ss.Symbol)
-		// log.Printf("query: %s, symbol: %s, score: %f, len docs: %d", req.Query, ss.Symbol, ss.Score, len(r.DocIds))
-
-		fileCorpusCount := 0
-		for docId := range r.DocIds {
-			// Get document info for file path
-			doc, err := documents.GetDocument(workspace.Id, docId, false)
-			if err != nil || doc == nil {
-				continue
-			}
-
-			if !isFileChanged(workspace, doc) {
-				continue
-			}
-
-			// Get functions from this document
-			functions, err := symbols.GetDocFunctions(workspace.Id, docId)
-			randomN := 30
-			if len(functions) == randomN {
-				rand.Shuffle(len(functions), func(i, j int) {
-					functions[i], functions[j] = functions[j], functions[i]
-				})
-			}
-			if err != nil {
-				continue
-			}
-
-			// For each function/symbol in the document, add it to our results
-			for _, f := range functions {
-				if f.Name == ss.Symbol {
-					symbolFiles[ss.Symbol] = append(symbolFiles[f.Name], types.SymbolsFileMatch{
-						Path: doc.RelPath,
-						Line: f.Line,
-					})
-				}
-			}
-
-			if fileCorpusCount++; fileCorpusCount >= req.Limit.MaxResultsPerFile {
-				break
-			}
-		}
-	}
-
-	for _, name := range symbolOrder {
-		if files, ok := symbolFiles[name]; ok {
-			result.Symbols = append(result.Symbols, types.SymbolContent{
-				Name:  name,
-				Files: files,
-			})
-		}
-	}
-
-	return result, nil
-
-}
-
 func SearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsRequest) (types.SymbolsContentResults, error) {
-	if req.Fuzzy {
-		return fuzzySearchSymbols(workspace, req)
-	} else {
-		return searchSymbolsEmbedding(workspace, req)
-	}
+	return fuzzySearchSymbols(workspace, req)
 }

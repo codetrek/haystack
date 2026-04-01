@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/ai-microsoft/haystack/server/core/idtable"
-	"github.com/ai-microsoft/haystack/utils"
+	"github.com/codetrek/haystack/server/core/idtable"
+	"github.com/codetrek/haystack/utils"
 
 	"github.com/gabriel-vasile/mimetype"
 )
