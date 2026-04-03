@@ -368,7 +368,7 @@ func TestWriterRun_ProcessesDocsBeforeStop(t *testing.T) {
 	w.Add(ws, doc, true)
 
 	// Give the writer a moment to process
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(50 * time.Millisecond)
 
 	// Stop should drain any remaining docs
 	w.Stop()

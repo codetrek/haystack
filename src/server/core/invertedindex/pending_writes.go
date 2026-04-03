@@ -17,6 +17,7 @@ var (
 	FlushTicker        = 1 * time.Second
 	FlushWaitTimeout   = 3 * time.Second
 	FlushWaitBatchSize = 200
+	FlushCooldown      = 1 * time.Second
 )
 
 type BufferedWrites struct {
@@ -62,7 +63,7 @@ func getPendingWrite(tableId int) *PendingTableWrites {
 
 // flushPendingWrites flushes the pending writes to the database
 func flushPendingWrites(closing bool) {
-	if !closing && time.Since(lastFlushWriteTime) < 1*time.Second {
+	if !closing && time.Since(lastFlushWriteTime) < FlushCooldown {
 		return
 	}
 	lastFlushWriteTime = time.Now()
@@ -119,7 +120,7 @@ func getPendingDelete(tableId int) *PendingTableWrites {
 }
 
 func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
-	if !closing && time.Since(lastFlushDeleteTime) < 1*time.Second {
+	if !closing && time.Since(lastFlushDeleteTime) < FlushCooldown {
 		return
 	}
 	lastFlushDeleteTime = time.Now()

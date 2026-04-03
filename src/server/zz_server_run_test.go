@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -68,7 +69,19 @@ func TestZZ_Run(t *testing.T) {
 		Run()
 	}()
 
-	time.Sleep(1 * time.Second)
+	// Poll until the server is ready instead of a fixed 1s sleep.
+	serverURL := fmt.Sprintf("http://127.0.0.1:%d", 19876)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(serverURL + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	running.Shutdown()
 

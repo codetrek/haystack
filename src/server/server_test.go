@@ -50,13 +50,13 @@ func TestServerEndToEnd(t *testing.T) {
 	t.Run("WorkspaceOperations", testWorkspaceOperations)
 	t.Run("EdgeCases", testServerEdgeCases)
 
-	time.Sleep(1000 * time.Millisecond)
+	waitForIndexingDone(t, testWorkspacePath, 5*time.Second)
 	t.Run("SearchBeforeUpdate", testSearchBeforeUpdate)
 	t.Run("SearchUnsavedFiles", testSearchUnsavedFiles)
 
 	t.Run("DocumentOperations", testDocumentOperations)
 
-	time.Sleep(1000 * time.Millisecond)
+	waitForIndexingDone(t, testWorkspacePath, 5*time.Second)
 	t.Run("SearchOperations", testSearchOperations)
 	t.Run("WorkspaceIndexing", testWorkspaceIndexing)
 }
@@ -78,6 +78,41 @@ func setupTestEnvironment(t *testing.T) {
 	invertedindex.FlushTicker = 50 * time.Millisecond
 	invertedindex.FlushWaitTimeout = 1 * time.Microsecond
 	invertedindex.FlushWaitBatchSize = 10
+	invertedindex.FlushCooldown = 50 * time.Millisecond
+}
+
+// waitForServerReady polls the health endpoint until the server responds.
+func waitForServerReady(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(testServerURL + "/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("server did not become ready within timeout")
+}
+
+// waitForIndexingDone polls until the workspace's indexing is complete and
+// documents are searchable.
+func waitForIndexingDone(t *testing.T, wsPath string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ws, err := workspace.GetByPath(wsPath)
+		if err == nil && !ws.LastFullSync.IsZero() && ws.GetIndexingStatus() == nil {
+			// Wait for inverted index flush ticker + cooldown to commit.
+			time.Sleep(200 * time.Millisecond)
+			return
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	t.Fatal("indexing did not complete within timeout")
 }
 
 func createTestFiles(t *testing.T) {
@@ -192,7 +227,7 @@ func startTestServer(t *testing.T) func() {
 	go server.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", testPort), "")
 
 	// Wait for server to start
-	time.Sleep(100 * time.Millisecond)
+	waitForServerReady(t)
 
 	// Cleanup function
 	return func() {
@@ -740,7 +775,7 @@ func testWorkspaceIndexing(t *testing.T) {
 
 		assert.Equal(t, 0, response.Code)
 		assert.Contains(t, response.Message, "Sync all in progress")
-		time.Sleep(200 * time.Millisecond)
+		waitForIndexingDone(t, testWorkspacePath, 5*time.Second)
 	})
 
 	t.Run("VerifyIndexingAfterFileOperations", func(t *testing.T) {
@@ -759,10 +794,7 @@ func testWorkspaceIndexing(t *testing.T) {
 		resp := makeRequest(t, "POST", "/api/v1/document/update", updateRequest)
 		resp.Body.Close()
 
-		// Wait for indexing
-		time.Sleep(1000 * time.Millisecond)
-
-		// Search for the unique content
+		// Poll until the document appears in search results.
 		searchRequest := types.SearchContentRequest{
 			Workspace: testWorkspacePath,
 			Query:     "unique test content",
@@ -771,12 +803,18 @@ func testWorkspaceIndexing(t *testing.T) {
 			},
 		}
 
-		resp = makeRequest(t, "POST", "/api/v1/search/content", searchRequest)
-		defer resp.Body.Close()
-
 		var searchResponse types.SearchContentResponse
-		err = json.NewDecoder(resp.Body).Decode(&searchResponse)
-		assert.NoError(t, err)
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			resp = makeRequest(t, "POST", "/api/v1/search/content", searchRequest)
+			err = json.NewDecoder(resp.Body).Decode(&searchResponse)
+			resp.Body.Close()
+			assert.NoError(t, err)
+			if len(searchResponse.Data.Results) > 0 {
+				break
+			}
+			time.Sleep(30 * time.Millisecond)
+		}
 
 		assert.Equal(t, 0, searchResponse.Code)
 		assert.True(t, len(searchResponse.Data.Results) > 0, "Should find the indexed content")

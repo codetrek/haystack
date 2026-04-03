@@ -38,7 +38,9 @@ func setupMCPTestEnv(t *testing.T) {
 	testSetupOnce.Do(func() {
 		tempDir := t.TempDir()
 		testWorkspacePath = filepath.Join(tempDir, "mcp_test_workspace")
-		if !assert.NoError(t, os.MkdirAll(testWorkspacePath, 0755)) { return }
+		if !assert.NoError(t, os.MkdirAll(testWorkspacePath, 0755)) {
+			return
+		}
 
 		// Configure
 		conf.Get().Global.DataPath = filepath.Join(tempDir, "mcp_test_data")
@@ -46,6 +48,7 @@ func setupMCPTestEnv(t *testing.T) {
 		invertedindex.FlushTicker = 50 * time.Millisecond
 		invertedindex.FlushWaitTimeout = 1 * time.Microsecond
 		invertedindex.FlushWaitBatchSize = 10
+		invertedindex.FlushCooldown = 50 * time.Millisecond
 
 		// Create test files
 		testFiles := map[string]string{
@@ -74,8 +77,12 @@ This is a test project.`,
 
 		for filename, content := range testFiles {
 			fullPath := filepath.Join(testWorkspacePath, filename)
-			if !assert.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755)) { return }
-			if !assert.NoError(t, os.WriteFile(fullPath, []byte(content), 0644)) { return }
+			if !assert.NoError(t, os.MkdirAll(filepath.Dir(fullPath), 0755)) {
+				return
+			}
+			if !assert.NoError(t, os.WriteFile(fullPath, []byte(content), 0644)) {
+				return
+			}
 		}
 
 		// Start engine
@@ -83,28 +90,53 @@ This is a test project.`,
 		running.InitShutdown(wg)
 
 		db, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "data"), conf.Get().Server.CacheSize)
-		if !assert.NoError(t, err) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
 		indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
-		if !assert.NoError(t, err) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
 
 		mpsc := queue.NewMpsc("MCPTestDBQueue")
 		mpsc.Start()
 
-		if !assert.NoError(t, idtable.Init(db)) { return }
-		if !assert.NoError(t, invertedindex.Init(indexdb, mpsc)) { return }
-		if !assert.NoError(t, documents.Init(db, mpsc)) { return }
-		if !assert.NoError(t, workspace.Init(db)) { return }
-		if !assert.NoError(t, symbols.Init(db, mpsc)) { return }
+		if !assert.NoError(t, idtable.Init(db)) {
+			return
+		}
+		if !assert.NoError(t, invertedindex.Init(indexdb, mpsc)) {
+			return
+		}
+		if !assert.NoError(t, documents.Init(db, mpsc)) {
+			return
+		}
+		if !assert.NoError(t, workspace.Init(db)) {
+			return
+		}
+		if !assert.NoError(t, symbols.Init(db, mpsc)) {
+			return
+		}
 
 		indexer.Run(wg)
 		searcher.Run(wg)
 
 		// Create and index workspace
 		_, err = indexer.CreateWorkspace(testWorkspacePath, true, nil)
-		if !assert.NoError(t, err) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
 
-		// Wait for indexing to complete
-		time.Sleep(1500 * time.Millisecond)
+		// Poll until indexing completes instead of a fixed sleep.
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			ws, wsErr := workspace.GetByPath(testWorkspacePath)
+			if wsErr == nil && !ws.LastFullSync.IsZero() && ws.GetIndexingStatus() == nil {
+				break
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+		// Wait for inverted index flush ticker + cooldown to commit.
+		time.Sleep(200 * time.Millisecond)
 
 		testCleanup = func() {
 			running.Shutdown()
@@ -152,8 +184,12 @@ func TestMCPSearchContent(t *testing.T) {
 		})
 
 		result, err := SearchContent(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 		assert.True(t, len(result.Content) > 0)
 
 		text := result.Content[0].(mcp.TextContent).Text
@@ -168,8 +204,12 @@ func TestMCPSearchContent(t *testing.T) {
 		})
 
 		result, err := SearchContent(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 
 		text := result.Content[0].(mcp.TextContent).Text
 		assert.Contains(t, text, "Found 0 results")
@@ -247,8 +287,12 @@ func TestMCPSearchContent(t *testing.T) {
 		}
 
 		result, err := SearchContent(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 
 		text := result.Content[0].(mcp.TextContent).Text
 		// If there are results, they should only be from .js files
@@ -288,8 +332,12 @@ func TestMCPSearchContent(t *testing.T) {
 		}
 
 		result, err := SearchContent(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 		// With limit=1, results should be limited
 		assert.True(t, len(result.Content) > 0)
 	})
@@ -303,8 +351,12 @@ func TestMCPSearchContent(t *testing.T) {
 		})
 
 		result, err := SearchFiles(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 
 		// Should find main.go
 		allText := ""
@@ -323,8 +375,12 @@ func TestMCPSearchContent(t *testing.T) {
 		})
 
 		result, err := SearchFiles(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 
 		text := result.Content[0].(mcp.TextContent).Text
 		assert.Contains(t, text, "Found 0 files")
@@ -364,8 +420,12 @@ func TestMCPSearchContent(t *testing.T) {
 		}
 
 		result, err := SearchFiles(context.Background(), req)
-		if !assert.NoError(t, err) { return }
-		if !assert.NotNil(t, result) { return }
+		if !assert.NoError(t, err) {
+			return
+		}
+		if !assert.NotNil(t, result) {
+			return
+		}
 
 		// First content is "Found N files.", file entries follow
 		// With limit=1, should have at most 1 file entry after the header

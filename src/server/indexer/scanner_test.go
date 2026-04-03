@@ -334,7 +334,7 @@ func TestScannerRun_ProcessesQueuedTask(t *testing.T) {
 		for {
 			select {
 			case <-parser.ch:
-			case <-time.After(2 * time.Second):
+			case <-time.After(500 * time.Millisecond):
 				return
 			}
 		}
@@ -346,7 +346,7 @@ func TestScannerRun_ProcessesQueuedTask(t *testing.T) {
 	s.mu.Unlock()
 
 	// Wait a bit for the scanner to process the task, then stop
-	time.Sleep(300 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 	s.Stop()
 	<-drainDone
 
@@ -405,7 +405,7 @@ func TestProcessWorkspace_WithFiles(t *testing.T) {
 		for {
 			select {
 			case <-parser.ch:
-			case <-time.After(1 * time.Second):
+			case <-time.After(500 * time.Millisecond):
 				return
 			}
 		}

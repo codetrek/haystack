@@ -95,6 +95,11 @@ func TestInitPeriodicCommit(t *testing.T) {
 	assert.NoError(t, err)
 	defer database.Close()
 
+	// Use a short commit interval so we don't wait 5+ seconds.
+	saved := CommitInterval
+	CommitInterval = 50 * time.Millisecond
+	defer func() { CommitInterval = saved }()
+
 	err = Init(database)
 	assert.NoError(t, err)
 
@@ -105,9 +110,8 @@ func TestInitPeriodicCommit(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	// Wait long enough for the background goroutine's 5-second timer to fire.
-	// This ensures the timer path in Init's goroutine is exercised.
-	time.Sleep(6 * time.Second)
+	// Wait long enough for the background goroutine's timer to fire.
+	time.Sleep(200 * time.Millisecond)
 
 	// Verify the keys are still accessible (the commit didn't break anything).
 	for i := 0; i < 5; i++ {
