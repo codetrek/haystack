@@ -312,16 +312,33 @@ func TestScanner_QueueIsStandardList(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScannerRun_ProcessesQueuedTask(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
 	s := NewScanner()
 	var wg sync.WaitGroup
 
 	s.Start(&wg)
 
-	// Create a workspace that will be processed through the run loop.
-	// The processWorkspace will fail (because the global `parser` channel
-	// may not be drained, or the workspace path doesn't exist), but the
-	// run loop's error handling and setCurrent should still be exercised.
-	ws := &workspace.Workspace{Id: 1, Path: t.TempDir()}
+	// Create a workspace through the proper API so storage is usable.
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	// Drain the parser channel in background so processWorkspace doesn't block
+	drainDone := make(chan struct{})
+	go func() {
+		defer close(drainDone)
+		for {
+			select {
+			case <-parser.ch:
+			case <-time.After(2 * time.Second):
+				return
+			}
+		}
+	}()
 
 	// Manually push to the queue (bypassing Add's StartIndexing check)
 	s.mu.Lock()
@@ -331,6 +348,7 @@ func TestScannerRun_ProcessesQueuedTask(t *testing.T) {
 	// Wait a bit for the scanner to process the task, then stop
 	time.Sleep(300 * time.Millisecond)
 	s.Stop()
+	<-drainDone
 
 	done := make(chan struct{})
 	go func() {
