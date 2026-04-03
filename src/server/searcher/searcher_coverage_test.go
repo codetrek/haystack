@@ -500,7 +500,22 @@ func TestRun(t *testing.T) {
 // (indexer.Run can only be called once because it uses package-level vars).
 // =========================================================================
 
+// integrationOnce ensures the indexer-based integration test only runs once,
+// even with -count=N, because the indexer uses package-level singletons
+// with channels that cannot be re-used after Stop().
+var integrationOnce sync.Once
+var integrationRan bool
+
 func TestFullIntegration(t *testing.T) {
+	// The indexer package uses singleton channels (scanner.stop, scanner.done, etc.)
+	// that panic on "close of closed channel" if Run/Stop is called more than once.
+	// Guard against re-runs with -count=N.
+	ranBefore := integrationRan
+	integrationOnce.Do(func() { integrationRan = true })
+	if ranBefore {
+		t.Skip("skipping: indexer singleton already used in this process (re-run via -count)")
+	}
+
 	env := testutil.SetupEnv(t, "searcher-integ")
 
 	var shutdownWg sync.WaitGroup

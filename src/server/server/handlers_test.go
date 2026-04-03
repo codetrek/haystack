@@ -544,11 +544,11 @@ func TestHandleMoveWorkspace_NotFound(t *testing.T) {
 }
 
 func TestHandleMoveWorkspace_Success(t *testing.T) {
-	// Create workspace first.
-	wsPath := filepath.Join(testEnv.tempDir, "ws-move-src")
-	os.MkdirAll(wsPath, 0755)
+	// Use t.TempDir() to get unique directories per test run (important for -count=N).
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
 
-	createReq := types.CreateWorkspaceRequest{Workspace: wsPath}
+	createReq := types.CreateWorkspaceRequest{Workspace: srcDir}
 	createBody, _ := json.Marshal(createReq)
 	r1 := httptest.NewRequest("POST", "/api/v1/workspace/create", bytes.NewReader(createBody))
 	w1 := httptest.NewRecorder()
@@ -558,13 +558,10 @@ func TestHandleMoveWorkspace_Success(t *testing.T) {
 	json.NewDecoder(w1.Body).Decode(&createResp)
 	assert.Equal(t, 0, createResp.Code)
 
-	// Move it to a new path.
-	newPath := filepath.Join(testEnv.tempDir, "ws-move-dst")
-	os.MkdirAll(newPath, 0755)
-
+	// Move it to the new path.
 	moveReq := types.MoveWorkspaceRequest{
 		Id:      createResp.Data.Id,
-		NewPath: newPath,
+		NewPath: dstDir,
 	}
 	moveBody, _ := json.Marshal(moveReq)
 
@@ -579,7 +576,7 @@ func TestHandleMoveWorkspace_Success(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&resp)
 	assert.Equal(t, 0, resp.Code)
 	assert.Equal(t, "Ok", resp.Message)
-	assert.Equal(t, newPath, resp.Data.Path)
+	assert.Equal(t, dstDir, resp.Data.Path)
 }
 
 // ============================================================
