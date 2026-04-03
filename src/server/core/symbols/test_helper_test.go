@@ -1,11 +1,15 @@
 package symbols
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/codetrek/haystack/conf"
 	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/codetrek/haystack/utils/queue"
 )
 
 // testEnv holds all resources created during test setup so they can
@@ -48,7 +52,9 @@ func (e *testEnv) teardown() {
 	e.T.Helper()
 
 	// 1. symbols package
-	CloseAndWait()
+	if mpsc != nil {
+		CloseAndWait()
+	}
 
 	// 2. inverted index
 	invertedindex.CloseAndWait()
@@ -62,5 +68,44 @@ func mustCreateWorkspace(t *testing.T, workspaceId int) {
 	t.Helper()
 	if err := Create(workspaceId, "test-workspace"); err != nil {
 		t.Fatalf("failed to create workspace %d: %v", workspaceId, err)
+	}
+}
+
+// setupClosedDbEnv properly tears down the full test environment, then sets
+// the package-level db to a freshly-opened-and-closed database and mpsc to a
+// running queue, so that callers can exercise the db.IsClosed() early-return
+// paths without causing panics in background goroutines.
+// Returns a cleanup function that must be deferred.
+func setupClosedDbEnv(t *testing.T) func() {
+	t.Helper()
+
+	// Ensure the symbols feature flag is enabled.
+	conf.Get().Symbols.EnableFeature = true
+
+	tmpDir, err := os.MkdirTemp("", "haystack-closed-db-*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+
+	closedDB, err := pebble.OpenDB(filepath.Join(tmpDir, "closed"), 0)
+	if err != nil {
+		os.RemoveAll(tmpDir)
+		t.Fatalf("failed to open pebble for closed-db test: %v", err)
+	}
+	// Immediately close it so IsClosed() returns true.
+	closedDB.Close()
+
+	q := queue.NewMpsc("TestClosedDbQueue")
+	q.Start()
+
+	// Install into package globals.
+	db = closedDB
+	mpsc = q
+
+	return func() {
+		db = nil
+		mpsc = nil
+		q.Stop()
+		os.RemoveAll(tmpDir)
 	}
 }

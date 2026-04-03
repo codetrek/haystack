@@ -1,10 +1,12 @@
 package documents
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/pebble"
 )
 
 // testEnv holds all resources created during test setup so they can
@@ -59,4 +61,32 @@ func mustCreateWorkspace(t *testing.T, workspaceId int) {
 	if err := Create(workspaceId, "test-workspace"); err != nil {
 		t.Fatalf("failed to create workspace %d: %v", workspaceId, err)
 	}
+}
+
+// closedDB implements pebble.DB but always reports itself as closed.
+// This lets tests exercise the db.IsClosed() early-return paths without
+// actually closing the underlying Pebble database (which would crash
+// background goroutines like the inverted-index flusher).
+type closedDB struct{}
+
+func (closedDB) GetIncrementalId([]byte) (int, error)         { return 0, fmt.Errorf("closed") }
+func (closedDB) ScheduleCompact()                             {}
+func (closedDB) Close() error                                 { return fmt.Errorf("closed") }
+func (closedDB) IsClosed() bool                               { return true }
+func (closedDB) Put(key, value []byte) error                  { return fmt.Errorf("closed") }
+func (closedDB) Get(key []byte) ([]byte, error)               { return nil, fmt.Errorf("closed") }
+func (closedDB) Delete(key []byte) error                      { return fmt.Errorf("closed") }
+func (closedDB) NewBatch(maxBatchSize int32) pebble.Batch     { return nil }
+func (closedDB) Scan([]byte, func([]byte, []byte) bool) error { return fmt.Errorf("closed") }
+func (closedDB) ScanRange([]byte, []byte, func([]byte, []byte) bool) error {
+	return fmt.Errorf("closed")
+}
+
+// simulateClosedDB replaces the package-level db with a closedDB stub and
+// returns a restore function that puts the original db back.  Call the
+// restore function in a defer (before teardown) so cleanup works normally.
+func simulateClosedDB() (restore func()) {
+	orig := db
+	db = closedDB{}
+	return func() { db = orig }
 }

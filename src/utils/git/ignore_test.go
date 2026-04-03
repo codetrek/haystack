@@ -302,3 +302,82 @@ func TestGitIgnoreEdgeCases(t *testing.T) {
 		assert.False(t, ignorer.IsIgnored("/", false), "Root path should not be ignored")
 	})
 }
+
+func TestNewGitIgnoreRulesFromString(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "gitignore-test")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	t.Run("basic patterns", func(t *testing.T) {
+		rules := "*.log\n!important.log\ndir/"
+		ruleFile, err := NewGitIgnoreRulesFromString(rules, tempDir, false)
+		assert.NoError(t, err, "Failed to create rules from string")
+
+		assert.True(t, ruleFile.IsIgnored(filepath.Join(tempDir, "test.log"), false),
+			"Log file should be ignored by *.log pattern")
+		assert.False(t, ruleFile.IsIgnored(filepath.Join(tempDir, "important.log"), false),
+			"important.log should not be ignored due to negation rule")
+		assert.True(t, ruleFile.IsIgnored(filepath.Join(tempDir, "dir"), true),
+			"dir/ should be ignored")
+		assert.False(t, ruleFile.IsIgnored(filepath.Join(tempDir, "other.txt"), false),
+			"other.txt should not be ignored")
+	})
+
+	t.Run("empty string", func(t *testing.T) {
+		ruleFile, err := NewGitIgnoreRulesFromString("", tempDir, false)
+		assert.NoError(t, err, "Failed to create rules from empty string")
+
+		assert.False(t, ruleFile.IsIgnored(filepath.Join(tempDir, "test.txt"), false),
+			"No file should be ignored with empty rules")
+	})
+
+	t.Run("comments and blank lines", func(t *testing.T) {
+		rules := "# this is a comment\n\n*.tmp\n# another comment"
+		ruleFile, err := NewGitIgnoreRulesFromString(rules, tempDir, false)
+		assert.NoError(t, err, "Failed to create rules from string with comments")
+
+		assert.True(t, ruleFile.IsIgnored(filepath.Join(tempDir, "file.tmp"), false),
+			"tmp file should be ignored")
+		assert.False(t, ruleFile.IsIgnored(filepath.Join(tempDir, "file.txt"), false),
+			"txt file should not be ignored")
+	})
+}
+
+func TestClearCache(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "gitignore-test")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	// Create a .gitignore that ignores a directory
+	gitignoreContent := "ignored_dir/"
+	err = os.WriteFile(filepath.Join(tempDir, ".gitignore"), []byte(gitignoreContent), 0644)
+	assert.NoError(t, err, "Failed to create .gitignore")
+
+	err = os.MkdirAll(filepath.Join(tempDir, "ignored_dir"), 0755)
+	assert.NoError(t, err, "Failed to create ignored_dir")
+
+	ignorer := NewGitIgnore(tempDir, true)
+
+	// Query a directory to populate the cache
+	result := ignorer.IsIgnored("ignored_dir", true)
+	assert.True(t, result, "ignored_dir should be ignored")
+
+	// Verify cache is populated
+	ignorer.mutex.RLock()
+	cacheLen := len(ignorer.cache)
+	ignorer.mutex.RUnlock()
+	assert.Greater(t, cacheLen, 0, "Cache should be populated after directory query")
+
+	// Clear cache
+	ignorer.ClearCache()
+
+	// Verify cache is empty
+	ignorer.mutex.RLock()
+	cacheLenAfter := len(ignorer.cache)
+	ignorer.mutex.RUnlock()
+	assert.Equal(t, 0, cacheLenAfter, "Cache should be empty after ClearCache")
+
+	// Verify the system still works correctly after clearing cache
+	result = ignorer.IsIgnored("ignored_dir", true)
+	assert.True(t, result, "ignored_dir should still be ignored after cache clear")
+}

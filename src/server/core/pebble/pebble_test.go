@@ -1,12 +1,37 @@
 package pebble
 
 import (
+	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	pebbledb "github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/assert"
 )
+
+// errBatchWriter is a mock pebbleBatchWriter that returns errors from every operation.
+type errBatchWriter struct {
+	err error
+}
+
+func (e *errBatchWriter) Set(key, value []byte, opts *pebbledb.WriteOptions) error {
+	return e.err
+}
+func (e *errBatchWriter) Delete(key []byte, opts *pebbledb.WriteOptions) error {
+	return e.err
+}
+func (e *errBatchWriter) DeleteRange(start, end []byte, opts *pebbledb.WriteOptions) error {
+	return e.err
+}
+func (e *errBatchWriter) Commit(o *pebbledb.WriteOptions) error {
+	return e.err
+}
+func (e *errBatchWriter) Reset() {}
+func (e *errBatchWriter) Close() error {
+	return nil
+}
 
 func TestOpenDB_And_BasicOps(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -328,6 +353,54 @@ func TestDB_NewBatchAndOps(t *testing.T) {
 	assert.Equal(t, int32(2), batch.Count())
 	assert.NoError(t, batch.Commit())
 	assert.Equal(t, int32(0), batch.Count())
+}
+
+func TestBatch_PutError(t *testing.T) {
+	injectedErr := errors.New("set failed")
+	batch := &PebbleBatch{
+		batch:        &errBatchWriter{err: injectedErr},
+		maxBatchSize: 0,
+		count:        atomic.Int32{},
+	}
+
+	err := batch.Put([]byte("k"), []byte("v"))
+	assert.ErrorIs(t, err, injectedErr)
+}
+
+func TestBatch_DeleteError(t *testing.T) {
+	injectedErr := errors.New("delete failed")
+	batch := &PebbleBatch{
+		batch:        &errBatchWriter{err: injectedErr},
+		maxBatchSize: 0,
+		count:        atomic.Int32{},
+	}
+
+	err := batch.Delete([]byte("k"))
+	assert.ErrorIs(t, err, injectedErr)
+}
+
+func TestBatch_DeleteRangeError(t *testing.T) {
+	injectedErr := errors.New("delete range failed")
+	batch := &PebbleBatch{
+		batch:        &errBatchWriter{err: injectedErr},
+		maxBatchSize: 0,
+		count:        atomic.Int32{},
+	}
+
+	err := batch.DeleteRange([]byte("a"), []byte("z"))
+	assert.ErrorIs(t, err, injectedErr)
+}
+
+func TestBatch_DeletePrefixError(t *testing.T) {
+	injectedErr := errors.New("delete range failed")
+	batch := &PebbleBatch{
+		batch:        &errBatchWriter{err: injectedErr},
+		maxBatchSize: 0,
+		count:        atomic.Int32{},
+	}
+
+	err := batch.DeletePrefix([]byte("pfx:"))
+	assert.ErrorIs(t, err, injectedErr)
 }
 
 func TestDB_ScanRange_StopEarly(t *testing.T) {

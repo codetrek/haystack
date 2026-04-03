@@ -214,6 +214,22 @@ func TestSaveNewDocuments_MultipleDocuments(t *testing.T) {
 	}
 }
 
+func TestSaveNewDocuments_ClosedDB(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	mustCreateWorkspace(t, 1)
+
+	// Swap in a fake closed DB to trigger the db.IsClosed() early return
+	restore := simulateClosedDB()
+	defer restore()
+
+	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
+	err := SaveNewDocuments(1, []*Document{doc})
+	// SaveNewDocuments returns nil when db is closed (silent skip)
+	assert.NoError(t, err, "closed DB should cause a silent skip, not an error")
+}
+
 func TestSaveNewDocuments_DeletedWorkspaceRejected(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
@@ -273,6 +289,22 @@ func TestUpdateDocuments_OverwriteExisting(t *testing.T) {
 	assert.Equal(t, int64(20), got.Size)
 	assert.Equal(t, "newhash", got.Hash)
 	assert.Equal(t, []string{"new", "updated"}, got.Words)
+}
+
+func TestUpdateDocuments_ClosedDB(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	mustCreateWorkspace(t, 1)
+
+	// Swap in a fake closed DB to trigger the db.IsClosed() early return
+	restore := simulateClosedDB()
+	defer restore()
+
+	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
+	err := UpdateDocuments(1, []*Document{doc})
+	// UpdateDocuments returns an error when db is closed
+	assert.Error(t, err, "closed DB should return an error")
 }
 
 func TestUpdateDocuments_DeletedWorkspaceRejected(t *testing.T) {
@@ -357,6 +389,21 @@ func TestDeleteDocument_ExistingDoc(t *testing.T) {
 
 	path := GetDocumentPath(1, "d1")
 	assert.Empty(t, path, "path should be deleted")
+}
+
+func TestDeleteDocument_ClosedDB(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	mustCreateWorkspace(t, 1)
+
+	// Swap in a fake closed DB to trigger the db.IsClosed() early return
+	restore := simulateClosedDB()
+	defer restore()
+
+	err := DeleteDocument(1, "d1")
+	// DeleteDocument returns nil when db is closed (silent skip)
+	assert.NoError(t, err, "closed DB should cause a silent skip, not an error")
 }
 
 func TestDeleteDocument_MissingDocReturnsError(t *testing.T) {
