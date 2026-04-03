@@ -773,3 +773,127 @@ func max(a, b int) int {
 	}
 	return b
 }
+
+// ---------------------------------------------------------------------------
+// mergeKeywordTask.Run – cover both branches (pendingWrites empty / non-empty)
+// ---------------------------------------------------------------------------
+
+func TestMergeKeywordTask_Run_NoPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// pendingWrites is reset to empty in setupTestEnv
+	task := &mergeKeywordTask{
+		merging: Merging{
+			NextIter: string(KeyTypeRow),
+		},
+	}
+
+	err := task.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be false")
+	}
+}
+
+func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Add a pending write to trigger the waiting path
+	pendingWrites[1] = &PendingTableWrites{}
+
+	task := &mergeKeywordTask{
+		merging: Merging{
+			NextIter: string(KeyTypeRow),
+		},
+	}
+
+	err := task.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be true")
+	}
+
+	// Clean up
+	pendingWrites = map[int]*PendingTableWrites{}
+}
+
+// ---------------------------------------------------------------------------
+// KeywordsMerger.GetWait – verify it returns the mergerDone channel
+// ---------------------------------------------------------------------------
+
+func TestKeywordsMerger_GetWait(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &KeywordsMerger{}
+	km.Start()
+
+	ch := km.GetWait()
+	if ch == nil {
+		t.Fatal("expected non-nil channel from GetWait")
+	}
+
+	km.Shutdown()
+
+	select {
+	case <-ch:
+		// success — channel closed after shutdown
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetWait channel not closed after shutdown")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// KeywordsMerger.run – exercise the merge loop via mpsc queue
+// This test creates a KeywordsMerger, immediately shuts it down,
+// and verifies the shutdown path. The 300s initial timer makes it
+// impractical to test the merge-loop path without modifying prod code.
+// ---------------------------------------------------------------------------
+
+func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &KeywordsMerger{}
+	km.Start()
+
+	// Verify mergerDone is not closed yet
+	select {
+	case <-km.mergerDone:
+		t.Fatal("mergerDone should not be closed before shutdown")
+	default:
+		// expected
+	}
+
+	km.Shutdown()
+	km.Wait()
+}
+
+// ---------------------------------------------------------------------------
+// mergeKeywordTask.Run via mpscQueue – exercises Run through the queue
+// ---------------------------------------------------------------------------
+
+func TestMergeKeywordTask_RunViaQueue(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	task := &mergeKeywordTask{
+		merging: Merging{
+			NextIter: string(KeyTypeRow),
+		},
+	}
+
+	err := mpscQueue.RunTask(task)
+	if err != nil {
+		t.Fatalf("unexpected error from RunTask: %v", err)
+	}
+	if task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be false with empty pendingWrites")
+	}
+}
