@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/codetrek/haystack/conf"
 	"github.com/codetrek/haystack/server/core/pebble"
@@ -42,6 +43,17 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	q := queue.NewMpsc("TestInvertedQueue")
 	q.Start()
+
+	// Reset all package-level state to ensure test isolation.
+	// This prevents leakage from tests that mock these globals
+	// (e.g. keywords_merger_test mocking NewBatch, writeInvertedIndex).
+	pendingWrites = map[int]*PendingTableWrites{}
+	pendingDeletes = map[int]*PendingTableWrites{}
+	lastFlushWriteTime = time.Now()
+	lastFlushDeleteTime = time.Now()
+	NewBatch = func(database pebble.DB) pebble.Batch {
+		return database.NewBatch(MaxBatchSize)
+	}
 
 	if err := Init(database, q); err != nil {
 		q.Stop()

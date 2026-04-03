@@ -327,15 +327,17 @@ func (d *mockDB) GetIncrementalId(key []byte) (int, error) {
 
 // TestMergeKeywordsIndexEmptyInput tests merging with an empty initial state
 func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
-	// Create a mock database for testing
+	// Save and defer-restore original functions
 	originalDB := db
+	defer func() { db = originalDB }()
+
+	// Create a mock database for testing
 	mockDB := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Empty database, no keys to scan
 		},
 	}
 	db = mockDB
-	defer func() { db = originalDB }()
 
 	// Set up test data
 	input := Merging{
@@ -365,9 +367,15 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 
 // TestMergeKeywordsIndexSingleTable tests merging keywords from a single table
 func TestMergeKeywordsIndexSingleTable(t *testing.T) {
-	// Save original functions
+	// Save and defer-restore original functions
 	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := NewBatch
+	defer func() {
+		db = originalDB
+		writeInvertedIndex = originalWriteKeywordIndex
+		NewBatch = originalNewBatch
+	}()
 
 	writtenTables := []int{}
 	writtenKeywords := []string{}
@@ -415,10 +423,6 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 	// Run function
 	result := mergeKeywordsIndex(input, 6)
-
-	// Restore original functions
-	db = originalDB
-	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Validate results
 	if result.NextIter != "" {
@@ -475,9 +479,15 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 // TestMergeKeywordsIndexMultipleTables tests merging keywords from multiple tables
 func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
-	// Save original functions
+	// Save and defer-restore original functions
 	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := NewBatch
+	defer func() {
+		db = originalDB
+		writeInvertedIndex = originalWriteKeywordIndex
+		NewBatch = originalNewBatch
+	}()
 
 	// Track writes by table
 	writtenData := make(map[int]map[string][]string) // tableId -> keyword -> docIDs
@@ -548,10 +558,6 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 
 	// Run function
 	result := mergeKeywordsIndex(input, 6)
-
-	// Restore original functions
-	db = originalDB
-	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Validate results
 	if result.NextIter != "" {
@@ -681,9 +687,15 @@ func (m *mockBatchWriteWithFuncs) DeletePrefix(prefix []byte) error {
 
 // TestMergeKeywordsIndexTimeout tests the timeout behavior of mergeKeywordsIndex
 func TestMergeKeywordsIndexTimeout(t *testing.T) {
-	// Save original functions
+	// Save and defer-restore original functions
 	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := NewBatch
+	defer func() {
+		db = originalDB
+		writeInvertedIndex = originalWriteKeywordIndex
+		NewBatch = originalNewBatch
+	}()
 
 	// Create a lot of entries with properly formatted keys to trigger timeout
 	keyCount := 1000
@@ -743,10 +755,6 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	}
 
 	result := mergeKeywordsIndex(input, 5)
-
-	// Restore original functions
-	db = originalDB
-	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Verify we hit the timeout (NextIter should be non-empty)
 	if result.NextIter == "" {
