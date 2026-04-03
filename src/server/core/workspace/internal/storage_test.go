@@ -115,3 +115,103 @@ func TestGetIncreasedWorkspaceID(t *testing.T) {
 		ids[id] = true
 	}
 }
+
+func setupDB(t *testing.T) func() {
+	t.Helper()
+	tempDir, err := os.MkdirTemp("", "haystack-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	conf.Get().Global.DataPath = tempDir
+	d, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
+	if err := Init(d); err != nil {
+		d.Close()
+		os.RemoveAll(tempDir)
+		t.Fatalf("Init failed: %v", err)
+	}
+	return func() {
+		d.Close()
+		os.RemoveAll(tempDir)
+	}
+}
+
+func TestGet_Success(t *testing.T) {
+	cleanup := setupDB(t)
+	defer cleanup()
+
+	workspaceID := 42
+	wsJSON := `{"id":42,"path":"/test/get"}`
+	if err := Save(workspaceID, wsJSON); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	got, err := Get(workspaceID)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got != wsJSON {
+		t.Errorf("Get returned %q, want %q", got, wsJSON)
+	}
+}
+
+func TestGet_NotFound(t *testing.T) {
+	cleanup := setupDB(t)
+	defer cleanup()
+
+	val, err := Get(9999)
+	// Pebble may return empty string without error for missing keys
+	if err != nil {
+		// error path is also valid
+		return
+	}
+	if val != "" {
+		t.Errorf("Get for non-existent workspace should return empty string, got %q", val)
+	}
+}
+
+func TestScanAll_Empty(t *testing.T) {
+	cleanup := setupDB(t)
+	defer cleanup()
+
+	all, err := ScanAll()
+	if err != nil {
+		t.Fatalf("ScanAll failed: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("ScanAll on empty db returned %d workspaces, want 0", len(all))
+	}
+}
+
+func TestSave_And_ScanAll_Multiple(t *testing.T) {
+	cleanup := setupDB(t)
+	defer cleanup()
+
+	for i := 1; i <= 5; i++ {
+		data := map[string]interface{}{
+			"id":   i,
+			"path": "/test/path/" + string(rune('a'+i-1)),
+		}
+		j, _ := json.Marshal(data)
+		if err := Save(i, string(j)); err != nil {
+			t.Fatalf("Save(%d) failed: %v", i, err)
+		}
+	}
+
+	all, err := ScanAll()
+	if err != nil {
+		t.Fatalf("ScanAll failed: %v", err)
+	}
+	if len(all) != 5 {
+		t.Errorf("ScanAll returned %d workspaces, want 5", len(all))
+	}
+}
+
+func TestDelete_NonExistentKey(t *testing.T) {
+	cleanup := setupDB(t)
+	defer cleanup()
+
+	err := Delete(12345)
+	if err != nil {
+		t.Errorf("Delete of non-existent key should not error, got: %v", err)
+	}
+}

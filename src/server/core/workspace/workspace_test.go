@@ -143,3 +143,214 @@ func TestWorkspaceFilters(t *testing.T) {
 		t.Error("GetFilters failed to return global filters")
 	}
 }
+
+func TestAddSymbolParsedFiles(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+
+	// When no indexing status, should be a no-op
+	ws.AddSymbolParsedFiles(5)
+	if ws.indexingStatus != nil {
+		t.Error("AddSymbolParsedFiles should not create indexing status")
+	}
+
+	// Start indexing, then add
+	if err := ws.StartIndexing(); err != nil {
+		t.Fatalf("StartIndexing failed: %v", err)
+	}
+
+	ws.AddSymbolParsedFiles(3)
+	ws.AddSymbolParsedFiles(2)
+
+	status := ws.GetIndexingStatus()
+	if status == nil {
+		t.Fatal("Indexing status should not be nil")
+	}
+	if status.SymbolParsedFiles != 5 {
+		t.Errorf("SymbolParsedFiles = %d, want 5", status.SymbolParsedFiles)
+	}
+}
+
+func TestAddIndexingFiles_NoIndexingStatus(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+	ws.AddIndexingFiles(5)
+	if ws.indexingStatus != nil {
+		t.Error("AddIndexingFiles should not create indexing status")
+	}
+}
+
+func TestAddIndexingTotalFiles_NoIndexingStatus(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+	ws.AddIndexingTotalFiles(5)
+	if ws.indexingStatus != nil {
+		t.Error("AddIndexingTotalFiles should not create indexing status")
+	}
+}
+
+func TestStartIndexing_AlreadyIndexing(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+	if err := ws.StartIndexing(); err != nil {
+		t.Fatalf("First StartIndexing failed: %v", err)
+	}
+	err := ws.StartIndexing()
+	if err == nil {
+		t.Error("StartIndexing should fail when already indexing")
+	}
+}
+
+func TestGetTotalFiles_FallbackToIndexingStatus(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 0}
+	if err := ws.StartIndexing(); err != nil {
+		t.Fatalf("StartIndexing failed: %v", err)
+	}
+	ws.AddIndexingTotalFiles(42)
+	total := ws.GetTotalFiles()
+	if total != 42 {
+		t.Errorf("GetTotalFiles = %d, want 42 (fallback to indexing status)", total)
+	}
+}
+
+func TestGetTotalFiles_PrefersTotalFiles(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 100}
+	if err := ws.StartIndexing(); err != nil {
+		t.Fatalf("StartIndexing failed: %v", err)
+	}
+	ws.AddIndexingTotalFiles(50)
+	total := ws.GetTotalFiles()
+	if total != 100 {
+		t.Errorf("GetTotalFiles = %d, want 100 (should prefer TotalFiles)", total)
+	}
+}
+
+func TestGetTotalFiles_NoIndexingStatusZero(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 0}
+	total := ws.GetTotalFiles()
+	if total != 0 {
+		t.Errorf("GetTotalFiles = %d, want 0", total)
+	}
+}
+
+func TestSerialize_Success(t *testing.T) {
+	ws := &Workspace{
+		Id:               5,
+		Path:             "/test/serialize",
+		UseGlobalFilters: true,
+		TotalFiles:       10,
+		CreatedAt:        time.Now(),
+		LastAccessed:     time.Now(),
+	}
+	data, err := ws.Serialize()
+	if err != nil {
+		t.Fatalf("Serialize failed: %v", err)
+	}
+	if len(data) == 0 {
+		t.Error("Serialize returned empty data")
+	}
+}
+
+func TestIsDeleted_Default(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+	if ws.IsDeleted() {
+		t.Error("New workspace should not be deleted")
+	}
+}
+
+func TestUpdateLastFullSync_NoIndexingStatus(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 50}
+	before := ws.TotalFiles
+	ws.UpdateLastFullSync()
+	if ws.TotalFiles != before {
+		t.Errorf("TotalFiles changed from %d to %d without indexing status", before, ws.TotalFiles)
+	}
+	if ws.LastFullSync.IsZero() {
+		t.Error("LastFullSync should be set after UpdateLastFullSync")
+	}
+}
+
+func TestGetFilters_NilFilters_NotGlobal(t *testing.T) {
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test",
+		UseGlobalFilters: false,
+		Filters:          nil,
+	}
+	filters := ws.GetFilters()
+	globalFilters := conf.Get().Server.Filters
+	if !reflect.DeepEqual(filters, globalFilters) {
+		t.Error("GetFilters with nil Filters should return global filters")
+	}
+}
+
+func TestGetFilters_CustomFilters_EmptyInclude(t *testing.T) {
+	globalFilters := conf.Get().Server.Filters
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test",
+		UseGlobalFilters: false,
+		Filters: &types.Filters{
+			Include: []string{},
+			Exclude: types.Exclude{UseGitIgnore: true, Customized: []string{"*.log"}},
+		},
+	}
+	filters := ws.GetFilters()
+	if !reflect.DeepEqual(filters.Include, globalFilters.Include) {
+		t.Errorf("Empty Include should fallback to global, got %v", filters.Include)
+	}
+	if len(filters.Exclude.Customized) == 0 || filters.Exclude.Customized[0] != "*.log" {
+		t.Errorf("Exclude should remain custom, got %v", filters.Exclude.Customized)
+	}
+}
+
+func TestGetFilters_CustomFilters_NoGitIgnoreNoExclude(t *testing.T) {
+	globalFilters := conf.Get().Server.Filters
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test",
+		UseGlobalFilters: false,
+		Filters: &types.Filters{
+			Include: []string{"*.go", "*.js"},
+			Exclude: types.Exclude{UseGitIgnore: false, Customized: []string{}},
+		},
+	}
+	filters := ws.GetFilters()
+	if len(filters.Include) != 2 || filters.Include[0] != "*.go" {
+		t.Errorf("Include should be custom, got %v", filters.Include)
+	}
+	if !reflect.DeepEqual(filters.Exclude.Customized, globalFilters.Exclude.Customized) {
+		t.Errorf("Exclude.Customized should fallback to global, got %v", filters.Exclude.Customized)
+	}
+}
+
+func TestGetFilters_CustomFilters_WithGitIgnoreNoCustomized(t *testing.T) {
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test",
+		UseGlobalFilters: false,
+		Filters: &types.Filters{
+			Include: []string{"*.go"},
+			Exclude: types.Exclude{UseGitIgnore: true, Customized: []string{}},
+		},
+	}
+	filters := ws.GetFilters()
+	if len(filters.Exclude.Customized) != 0 {
+		t.Errorf("Exclude.Customized should stay empty when UseGitIgnore=true, got %v", filters.Exclude.Customized)
+	}
+}
+
+func TestGetFilters_CustomFilters_BothPopulated(t *testing.T) {
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test",
+		UseGlobalFilters: false,
+		Filters: &types.Filters{
+			Include: []string{"*.rs"},
+			Exclude: types.Exclude{UseGitIgnore: false, Customized: []string{"target/"}},
+		},
+	}
+	filters := ws.GetFilters()
+	if filters.Include[0] != "*.rs" {
+		t.Errorf("Include should be custom, got %v", filters.Include)
+	}
+	if filters.Exclude.Customized[0] != "target/" {
+		t.Errorf("Exclude.Customized should be custom, got %v", filters.Exclude.Customized)
+	}
+}
