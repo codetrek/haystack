@@ -22,7 +22,7 @@ func TestLRUCache_BasicOps(t *testing.T) {
 	assert.Equal(t, int64(2), v)
 }
 
-func TestLRUCache_Eviction(t *testing.T) {
+func TestLRUCache_Eviction_Simple(t *testing.T) {
 	c := NewLRUCache(2)
 
 	c.Put("a", 1)
@@ -52,7 +52,7 @@ func TestLRUCache_Update(t *testing.T) {
 	assert.Equal(t, int64(10), v)
 }
 
-func TestLRUCache_Delete(t *testing.T) {
+func TestLRUCache_Delete_Simple(t *testing.T) {
 	c := NewLRUCache(3)
 
 	c.Put("a", 1)
@@ -72,7 +72,7 @@ func TestLRUCache_DeleteNonExistent(t *testing.T) {
 	c.Delete("nonexistent") // should not panic
 }
 
-func TestLRUCache_Clear(t *testing.T) {
+func TestLRUCache_Clear_Simple(t *testing.T) {
 	c := NewLRUCache(3)
 
 	c.Put("a", 1)
@@ -96,7 +96,7 @@ func TestLRUCache_NegativeCapacity(t *testing.T) {
 	assert.Equal(t, 0, c.capacity)
 }
 
-func TestLRUCache_GetMiss(t *testing.T) {
+func TestLRUCache_GetMiss_Simple(t *testing.T) {
 	c := NewLRUCache(3)
 
 	v, ok := c.Get("miss")

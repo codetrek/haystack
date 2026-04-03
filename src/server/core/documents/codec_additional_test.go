@@ -83,7 +83,7 @@ func TestEncodeDecodeDocumentWordsValue(t *testing.T) {
 	assert.Equal(t, words, decoded)
 }
 
-func TestDecodeDocumentWordsValue_Empty(t *testing.T) {
+func TestDecodeDocumentWordsValue_EmptyString(t *testing.T) {
 	decoded := DecodeDocumentWordsValue("")
 	assert.Equal(t, []string{}, decoded)
 }
