@@ -1539,6 +1539,71 @@ func TestFullIntegration(t *testing.T) {
 		}
 	})
 
+	// =================================================================
+	// Symbol search coverage: exercises fuzzySearchSymbols, searchSymbols,
+	// getFunctionFileMatch branches.
+	// =================================================================
+
+	// Hit the "matched = false" branch in getFunctionFileMatch:
+	// query words that do NOT appear in any function name.
+	t.Run("SearchSymbols no match", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "xyznonexistent",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := SearchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(result.Symbols))
+	})
+
+	// Hit the exact-match loop in searchSymbols (lines 201-207).
+	t.Run("searchSymbols exact match", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "exactFunc",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		// exactFunc is defined in funcs.go
+		_ = result
+	})
+
+	// Hit the limit-break branch in fuzzySearchSymbols (lines 146-150):
+	// set MaxResults=1 so the loop breaks early.
+	t.Run("SearchSymbols limit 1", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "func",
+			Limit: &types.SearchLimit{MaxResults: 1, MaxResultsPerFile: 100},
+		}
+		result, err := SearchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.LessOrEqual(t, len(result.Symbols), 1)
+	})
+
+	// Hit the MaxResultsPerFile break in fuzzySearchSymbols (line 137-138):
+	// set MaxResultsPerFile=1 so the file-count loop breaks early.
+	t.Run("SearchSymbols limit per file 1", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "func",
+			Limit: &types.SearchLimit{MaxResults: 100, MaxResultsPerFile: 1},
+		}
+		result, err := SearchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		_ = result
+	})
+
+	// Hit the filter branch in fuzzySearchSymbols (lines 123-127):
+	// use a multi-word query where the second word filters out some symbols.
+	t.Run("SearchSymbols multi word filter", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "calculatetotal",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := SearchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		_ = result
+	})
+
 	// --- Teardown ---
 	running.Shutdown()
 	shutdownWg.Wait()

@@ -10,10 +10,11 @@ import (
 )
 
 type KeywordsMerger struct {
-	shutdown   context.Context
-	shutdownFn context.CancelFunc
-	mergerDone chan struct{}
-	merging    Merging
+	shutdown     context.Context
+	shutdownFn   context.CancelFunc
+	mergerDone   chan struct{}
+	merging      Merging
+	InitialDelay time.Duration // 0 means use default (300s)
 }
 
 type Merging struct {
@@ -73,6 +74,9 @@ func (km *KeywordsMerger) run() {
 	log.Printf("[Inverted] Keywords merger: started")
 
 	nextDelay := 300 * time.Second
+	if km.InitialDelay > 0 {
+		nextDelay = km.InitialDelay
+	}
 
 	for {
 		select {

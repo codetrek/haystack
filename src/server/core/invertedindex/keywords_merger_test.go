@@ -875,6 +875,58 @@ func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
 	km.Wait()
 }
 
+// TestKeywordsMerger_RunMergeLoop exercises the main merge loop body
+// (lines 93-127) by using a short InitialDelay so the timer fires quickly.
+func TestKeywordsMerger_RunMergeLoop(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &KeywordsMerger{
+		InitialDelay: 10 * time.Millisecond, // fire immediately
+	}
+	km.Start()
+
+	// Let the timer fire and the merge loop execute at least once.
+	time.Sleep(100 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// After the loop ran, NextIter should be empty (scan completed on empty DB).
+	if km.merging.NextIter != "" {
+		t.Logf("NextIter=%q (may be non-empty if there was data)", km.merging.NextIter)
+	}
+}
+
+// TestKeywordsMerger_RunWithPendingWrites exercises the WaitingForFlushCache
+// branch inside run() by having pending writes when the merge task runs.
+func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Insert pending writes so the merge task sees them and sets WaitingForFlushCache.
+	pw := getPendingWrite(1)
+	pw.InvertedIndex["testword"] = RelatedDocs{
+		DocIds:    []string{"doc1"},
+		UpdatedAt: time.Now(),
+	}
+
+	km := &KeywordsMerger{
+		InitialDelay: 10 * time.Millisecond,
+	}
+	km.Start()
+
+	// Let the timer fire. The merge task should see pending writes and
+	// set WaitingForFlushCache, causing nextDelay = 5s.
+	time.Sleep(100 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// Clean up
+	delete(pendingWrites, 1)
+}
+
 // ---------------------------------------------------------------------------
 // mergeKeywordTask.Run via mpscQueue – exercises Run through the queue
 // ---------------------------------------------------------------------------

@@ -1388,6 +1388,41 @@ func TestHandleSearchContent_StreamingEmptyQuery(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
+// TestHandleSearchContent_StreamingWithResults exercises the streaming callback
+// (search.go lines 94-100) by using UnsavedFiles so the searcher returns results
+// without needing indexed content.
+func TestHandleSearchContent_StreamingWithResults(t *testing.T) {
+	wsPath := filepath.Join(testEnv.tempDir, "ws-stream-results")
+	os.MkdirAll(wsPath, 0755)
+	os.WriteFile(filepath.Join(wsPath, "dummy.go"), []byte("package dummy\n"), 0644)
+
+	createReq := types.CreateWorkspaceRequest{Workspace: wsPath}
+	createBody, _ := json.Marshal(createReq)
+	r1 := httptest.NewRequest("POST", "/api/v1/workspace/create", bytes.NewReader(createBody))
+	w1 := httptest.NewRecorder()
+	handleCreateWorkspace(w1, r1)
+
+	request := types.SearchContentRequest{
+		Workspace: wsPath,
+		Query:     "streamHit",
+		UnsavedFiles: []types.UnsavedFile{
+			{Path: "dummy.go", Content: "package dummy\nfunc streamHit() {}\n"},
+		},
+	}
+	body, _ := json.Marshal(request)
+
+	req := httptest.NewRequest("POST", "/api/v1/search/content", bytes.NewReader(body))
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+
+	handleSearchContent(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	respBody := w.Body.String()
+	assert.Contains(t, respBody, "event:result")
+	assert.Contains(t, respBody, "event:done")
+}
+
 // ============================================================
 // StartServer test — lightweight: no addr, no socket, immediate shutdown
 // ============================================================
