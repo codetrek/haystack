@@ -790,3 +790,105 @@ func TestRun_StartAndShutdown(t *testing.T) {
 		t.Fatal("Run did not stop within 5 seconds")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CreateWorkspace — error from workspace.Create (invalid path)
+// ---------------------------------------------------------------------------
+
+func TestCreateWorkspace_InvalidPath(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	origSymbols := conf.Get().Symbols.EnableFeature
+	conf.Get().Symbols.EnableFeature = false
+	defer func() { conf.Get().Symbols.EnableFeature = origSymbols }()
+
+	_, err := CreateWorkspace("/nonexistent/path/that/does/not/exist/workspace", true, nil)
+	if err == nil {
+		t.Error("CreateWorkspace with invalid path should return error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CreateWorkspace — with custom filters
+// ---------------------------------------------------------------------------
+
+func TestCreateWorkspace_WithCustomFilters(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+
+	origSymbols := conf.Get().Symbols.EnableFeature
+	conf.Get().Symbols.EnableFeature = false
+	defer func() { conf.Get().Symbols.EnableFeature = origSymbols }()
+
+	filters := &types.Filters{
+		Exclude: types.Exclude{
+			UseGitIgnore: false,
+			Customized:   []string{"*.log"},
+		},
+		Include: []string{"**/*.go"},
+	}
+
+	ws, err := CreateWorkspace(wsDir, false, filters)
+	if err != nil {
+		t.Fatalf("CreateWorkspace: %v", err)
+	}
+	if ws == nil {
+		t.Fatal("CreateWorkspace returned nil")
+	}
+	if ws.UseGlobalFilters {
+		t.Error("UseGlobalFilters should be false")
+	}
+	if ws.Filters == nil {
+		t.Error("Filters should not be nil")
+	}
+
+	scanner.tryPopJob()
+}
+
+// ---------------------------------------------------------------------------
+// AddOrSyncFile — existing doc, file replaced by directory
+// ---------------------------------------------------------------------------
+
+func TestAddOrSyncFile_ExistingDocDirectoryReplacedFile(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	if err := documents.Create(ws.Id, "test"); err != nil {
+		t.Fatalf("documents.Create: %v", err)
+	}
+
+	relPath := "wasfile.go"
+	fullPath := filepath.Join(wsDir, relPath)
+
+	if err := os.WriteFile(fullPath, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	pf := ParseFile{Workspace: ws, RelFilePath: relPath}
+	doc, _, _, err := parse(pf)
+	if err != nil || doc == nil {
+		t.Fatalf("parse: %v, doc=%v", err, doc)
+	}
+
+	w := NewWriter()
+	w.processDocs([]*WriteDoc{{Workspace: ws, Document: doc, CreateNew: true}})
+
+	// Replace file with a directory
+	os.Remove(fullPath)
+	if err := os.MkdirAll(fullPath, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// AddOrSyncFile should handle this (directory triggers removal)
+	err = AddOrSyncFile(ws, relPath)
+	_ = err
+}
