@@ -625,6 +625,243 @@ func TestProcessFileBatch_MixedFiles(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// processFileBatch — with fake ctags producing JSON (successful parse path)
+// ---------------------------------------------------------------------------
+
+func TestProcessFileBatch_SuccessfulParseFunctions(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	// Create Go files with actual content
+	goFile1 := filepath.Join(wsDir, "main.go")
+	goFile2 := filepath.Join(wsDir, "lib.go")
+	if err := os.WriteFile(goFile1, []byte("package main\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := os.WriteFile(goFile2, []byte("package main\nfunc helper() {}\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	// Create fake ctags that outputs JSON with found functions for main.go
+	// but NOT for lib.go — so lib.go exercises the "missing from docs" path
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n" +
+		`{"_type": "tag", "name": "main", "path": "` + goFile1 + `", "kind": "function", "line": 2, "signature": "()"}` + "\n" +
+		"JSONEOF\n"
+	if err := os.WriteFile(fakeCtags, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake ctags: %v", err)
+	}
+
+	sp := NewSymbolParser()
+	sp.ctags = fakeCtags
+
+	batch := ParseBatch{
+		Workspace: ws,
+		Files:     []string{"main.go", "lib.go"},
+	}
+
+	err = sp.processFileBatch(batch)
+	if err != nil {
+		t.Errorf("processFileBatch: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// processFileBatch — tmpDir already exists (stat passes, skip MkdirAll)
+// ---------------------------------------------------------------------------
+
+func TestProcessFileBatch_ExistingTmpDir(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	// Pre-create the tmp directory so the stat check passes (no MkdirAll needed)
+	// Use the same path calculation as processFileBatch
+	dataPath := conf.Get().Global.DataPath
+	tmpDir := filepath.Join(dataPath, "data", "tmp")
+	// workspace ID is an int; just create the whole tree
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		t.Fatalf("pre-create tmpDir parent: %v", err)
+	}
+	// Create workspace-specific tmp dir by walking the same path as source code
+	wsTmpDir := filepath.Join(tmpDir, func() string {
+		// Simple int to string without importing strconv
+		s := ""
+		id := ws.Id
+		if id == 0 {
+			return "0"
+		}
+		for id > 0 {
+			s = string(rune('0'+id%10)) + s
+			id /= 10
+		}
+		return s
+	}())
+	if err := os.MkdirAll(wsTmpDir, 0755); err != nil {
+		t.Fatalf("pre-create wsTmpDir: %v", err)
+	}
+
+	goFile := filepath.Join(wsDir, "test.go")
+	if err := os.WriteFile(goFile, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	if err := os.WriteFile(fakeCtags, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("write fake ctags: %v", err)
+	}
+
+	sp := NewSymbolParser()
+	sp.ctags = fakeCtags
+
+	batch := ParseBatch{
+		Workspace: ws,
+		Files:     []string{"test.go"},
+	}
+
+	err = sp.processFileBatch(batch)
+	if err != nil {
+		t.Errorf("processFileBatch with existing tmpDir: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseFunction — no "kind" field in JSON (exercises kind !ok branch)
+// ---------------------------------------------------------------------------
+
+func TestParseFunction_NoKindField(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	goFilePath := filepath.Join(wsDir, "nokind.go")
+	if err := os.WriteFile(goFilePath, []byte("package main\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	// Output JSON without "kind" field
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n" +
+		`{"_type": "tag", "name": "NoKind", "path": "` + goFilePath + `", "line": 1}` + "\n" +
+		"JSONEOF\n"
+	if err := os.WriteFile(fakeCtags, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake ctags: %v", err)
+	}
+
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(inputFile, []byte(goFilePath+"\n"), 0644); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	docs, err := parseFunction(fakeCtags, inputFile, "go", wsDir)
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+
+	// No entries should be included (kind is not "function"/"method"/"prototype")
+	totalFunctions := 0
+	for _, doc := range docs {
+		totalFunctions += len(doc.Functions)
+	}
+	if totalFunctions != 0 {
+		t.Errorf("expected 0 functions when kind is missing, got %d", totalFunctions)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseFunction — relPath calculation with workspace prefix
+// ---------------------------------------------------------------------------
+
+func TestParseFunction_RelPathExtraction(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	subDir := filepath.Join(wsDir, "src")
+	if err := os.MkdirAll(subDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	goFilePath := filepath.Join(subDir, "handler.go")
+	if err := os.WriteFile(goFilePath, []byte("package src\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n" +
+		`{"_type": "tag", "name": "Handle", "path": "` + goFilePath + `", "kind": "function", "line": 2, "signature": "()"}` + "\n" +
+		"JSONEOF\n"
+	if err := os.WriteFile(fakeCtags, []byte(script), 0755); err != nil {
+		t.Fatalf("write fake ctags: %v", err)
+	}
+
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	if err := os.WriteFile(inputFile, []byte(goFilePath+"\n"), 0644); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	docs, err := parseFunction(fakeCtags, inputFile, "go", wsDir)
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+
+	if len(docs) == 0 {
+		t.Fatal("expected at least one DocFunction")
+	}
+
+	// Check that relPath is relative to workspace
+	for _, doc := range docs {
+		if doc.RelPath == goFilePath {
+			t.Errorf("relPath should be relative, got absolute: %s", doc.RelPath)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// flushCache — workspace with only empty file lists (exercises skip in loop)
+// ---------------------------------------------------------------------------
+
+func TestSymbolParserFlushCache_MixedEmptyAndNonEmpty(t *testing.T) {
+	sp := NewSymbolParser()
+	ws1 := &workspace.Workspace{Id: 1, Path: "/tmp/a"}
+	ws2 := &workspace.Workspace{Id: 2, Path: "/tmp/b"}
+
+	sp.cacheMutex.Lock()
+	sp.cacheMap[ws1] = []string{}       // Empty — should be skipped in the loop
+	sp.cacheMap[ws2] = []string{"x.go"} // Non-empty — should be sent
+	sp.cacheMutex.Unlock()
+
+	// Drain channel for the non-empty batch
+	done := make(chan struct{})
+	go func() {
+		batch := <-sp.ch
+		if batch.Workspace.Id != 2 {
+			t.Errorf("expected workspace id 2, got %d", batch.Workspace.Id)
+		}
+		close(done)
+	}()
+
+	sp.flushCache()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("flushCache did not send batch within 2 seconds")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // SymbolParser.Add — batch size trigger
 // ---------------------------------------------------------------------------
 
@@ -668,5 +905,258 @@ func TestSymbolParserAdd_BatchSizeTrigger(t *testing.T) {
 
 	if remaining != 0 {
 		t.Errorf("expected 0 remaining cached files after batch flush, got %d", remaining)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SymbolParser Start/Stop with enabled feature + fake ctags
+// ---------------------------------------------------------------------------
+
+func TestSymbolParserStartStop_EnabledFeature(t *testing.T) {
+	sp := NewSymbolParser()
+	var wg sync.WaitGroup
+	orig := conf.Get().Symbols.EnableFeature
+	origW := conf.Get().Server.SymbolParserWorkers
+	conf.Get().Symbols.EnableFeature = true
+	conf.Get().Server.SymbolParserWorkers = 1
+	defer func() { conf.Get().Symbols.EnableFeature = orig; conf.Get().Server.SymbolParserWorkers = origW }()
+
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	os.WriteFile(fakeCtags, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	origC := conf.Get().BinPath.CTags
+	conf.Get().BinPath.CTags = fakeCtags
+	defer func() { conf.Get().BinPath.CTags = origC }()
+
+	sp.Start(&wg)
+	if sp.ctags == "" {
+		t.Error("ctags should be set")
+	}
+	sp.Stop()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestSymbolParserStartStop_CtagsNotFound(t *testing.T) {
+	sp := NewSymbolParser()
+	var wg sync.WaitGroup
+	orig := conf.Get().Symbols.EnableFeature
+	conf.Get().Symbols.EnableFeature = true
+	defer func() { conf.Get().Symbols.EnableFeature = orig }()
+	origC := conf.Get().BinPath.CTags
+	conf.Get().BinPath.CTags = "/nonexistent/ctags"
+	defer func() { conf.Get().BinPath.CTags = origC }()
+
+	sp.Start(&wg)
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+func TestSymbolParserRun_ProcessesBatch(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+	sp := NewSymbolParser()
+	var wg sync.WaitGroup
+	orig := conf.Get().Symbols.EnableFeature
+	origW := conf.Get().Server.SymbolParserWorkers
+	conf.Get().Symbols.EnableFeature = true
+	conf.Get().Server.SymbolParserWorkers = 1
+	defer func() { conf.Get().Symbols.EnableFeature = orig; conf.Get().Server.SymbolParserWorkers = origW }()
+
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	os.WriteFile(fakeCtags, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	origC := conf.Get().BinPath.CTags
+	conf.Get().BinPath.CTags = fakeCtags
+	defer func() { conf.Get().BinPath.CTags = origC }()
+
+	sp.Start(&wg)
+	wsDir := t.TempDir()
+	ws, _ := workspace.Create(wsDir)
+	os.WriteFile(filepath.Join(wsDir, "main.go"), []byte("package main\n"), 0644)
+	sp.Add(ws, "main.go")
+	sp.flushCache()
+	time.Sleep(500 * time.Millisecond)
+	sp.Stop()
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseFunction — fake ctags tests
+// ---------------------------------------------------------------------------
+
+func TestParseFunction_WithFakeCtagsOutput(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+	wsDir := t.TempDir()
+	goFile := filepath.Join(wsDir, "main.go")
+	os.WriteFile(goFile, []byte("package main\nfunc hello() {}\nfunc world() {}\n"), 0644)
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n" +
+		`{"_type":"tag","name":"hello","path":"` + goFile + `","kind":"function","line":2}` + "\n" +
+		`{"_type":"tag","name":"world","path":"` + goFile + `","kind":"function","line":3}` + "\n" +
+		"JSONEOF\n"
+	os.WriteFile(fakeCtags, []byte(script), 0755)
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	os.WriteFile(inputFile, []byte(goFile+"\n"), 0644)
+	docs, err := parseFunction(fakeCtags, inputFile, "go", wsDir)
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+	total := 0
+	for _, d := range docs {
+		total += len(d.Functions)
+	}
+	if total < 2 {
+		t.Errorf("expected >=2 functions, got %d", total)
+	}
+}
+
+func TestParseFunction_SkipsAnonymous(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+	wsDir := t.TempDir()
+	goFile := filepath.Join(wsDir, "a.go")
+	os.WriteFile(goFile, []byte("package main\n"), 0644)
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n" +
+		`{"name":"__anon1","path":"` + goFile + `","kind":"function","line":5}` + "\n" +
+		`{"name":"real","path":"` + goFile + `","kind":"function","line":10}` + "\n" +
+		"JSONEOF\n"
+	os.WriteFile(fakeCtags, []byte(script), 0755)
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	os.WriteFile(inputFile, []byte(goFile+"\n"), 0644)
+	docs, err := parseFunction(fakeCtags, inputFile, "go", wsDir)
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+	for _, d := range docs {
+		for _, fn := range d.Functions {
+			if fn.Name == "__anon1" {
+				t.Error("anonymous function should be skipped")
+			}
+		}
+	}
+}
+
+func TestParseFunction_MalformedJSON(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+	wsDir := t.TempDir()
+	goFile := filepath.Join(wsDir, "b.go")
+	os.WriteFile(goFile, []byte("package main\n"), 0644)
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n{bad json}\n" +
+		`{"name":"valid","path":"` + goFile + `","kind":"function","line":1}` + "\nJSONEOF\n"
+	os.WriteFile(fakeCtags, []byte(script), 0755)
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	os.WriteFile(inputFile, []byte(goFile+"\n"), 0644)
+	docs, err := parseFunction(fakeCtags, inputFile, "go", wsDir)
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+	total := 0
+	for _, d := range docs {
+		total += len(d.Functions)
+	}
+	if total != 1 {
+		t.Errorf("expected 1 valid function, got %d", total)
+	}
+}
+
+func TestParseFunction_MethodKind(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+	wsDir := t.TempDir()
+	goFile := filepath.Join(wsDir, "m.go")
+	os.WriteFile(goFile, []byte("package main\n"), 0644)
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	script := "#!/bin/sh\ncat <<'JSONEOF'\n" +
+		`{"name":"Method","path":"` + goFile + `","kind":"method","line":5}` + "\n" +
+		`{"name":"Var","path":"` + goFile + `","kind":"variable","line":3}` + "\n" +
+		"JSONEOF\n"
+	os.WriteFile(fakeCtags, []byte(script), 0755)
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	os.WriteFile(inputFile, []byte(goFile+"\n"), 0644)
+	docs, err := parseFunction(fakeCtags, inputFile, "go", wsDir)
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+	total := 0
+	for _, d := range docs {
+		total += len(d.Functions)
+	}
+	if total != 1 {
+		t.Errorf("expected 1 method, got %d", total)
+	}
+}
+
+func TestParseFunction_CtagsError(t *testing.T) {
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	os.WriteFile(fakeCtags, []byte("#!/bin/sh\nexit 1\n"), 0755)
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	os.WriteFile(inputFile, []byte("/file.go\n"), 0644)
+	_, err := parseFunction(fakeCtags, inputFile, "go", "/tmp")
+	if err == nil {
+		t.Error("expected error when ctags fails")
+	}
+}
+
+func TestParseFunction_EmptyOutput(t *testing.T) {
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	os.WriteFile(fakeCtags, []byte("#!/bin/sh\n"), 0755)
+	inputFile := filepath.Join(t.TempDir(), "input.txt")
+	os.WriteFile(inputFile, []byte("/file.go\n"), 0644)
+	docs, err := parseFunction(fakeCtags, inputFile, "go", "/tmp")
+	if err != nil {
+		t.Fatalf("parseFunction: %v", err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("expected 0, got %d", len(docs))
+	}
+}
+
+func TestProcessFileBatch_WithFakeCtags(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+	wsDir := t.TempDir()
+	ws, _ := workspace.Create(wsDir)
+	os.WriteFile(filepath.Join(wsDir, "main.go"), []byte("package main\n"), 0644)
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	os.WriteFile(fakeCtags, []byte("#!/bin/sh\nexit 0\n"), 0755)
+	sp := NewSymbolParser()
+	sp.ctags = fakeCtags
+	err := sp.processFileBatch(ParseBatch{Workspace: ws, Files: []string{"main.go"}})
+	if err != nil {
+		t.Errorf("processFileBatch: %v", err)
+	}
+}
+
+func TestGetCtagsPath_ValidPath(t *testing.T) {
+	fakeCtags := filepath.Join(t.TempDir(), "ctags")
+	os.WriteFile(fakeCtags, []byte("#!/bin/sh\n"), 0755)
+	orig := conf.Get().BinPath.CTags
+	conf.Get().BinPath.CTags = fakeCtags
+	defer func() { conf.Get().BinPath.CTags = orig }()
+	path, err := getCtagsPath()
+	if err != nil {
+		t.Errorf("error: %v", err)
+	}
+	if path != fakeCtags {
+		t.Errorf("expected %q, got %q", fakeCtags, path)
 	}
 }

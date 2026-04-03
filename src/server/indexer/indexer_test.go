@@ -3,12 +3,14 @@ package indexer
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/codetrek/haystack/conf"
 	"github.com/codetrek/haystack/server/core/documents"
 	"github.com/codetrek/haystack/server/core/workspace"
+	"github.com/codetrek/haystack/shared/running"
 	"github.com/codetrek/haystack/shared/types"
 )
 
@@ -750,5 +752,41 @@ func TestAddOrSyncFile_ExistingDocFileDeleted(t *testing.T) {
 	err = AddOrSyncFile(ws, relPath)
 	if err != nil {
 		t.Errorf("AddOrSyncFile for deleted file: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run — full pipeline start/shutdown integration
+// ---------------------------------------------------------------------------
+
+func TestRun_StartAndShutdown(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	origSymbols := conf.Get().Symbols.EnableFeature
+	conf.Get().Symbols.EnableFeature = false
+	defer func() { conf.Get().Symbols.EnableFeature = origSymbols }()
+
+	origWorkers := conf.Get().Server.IndexWorkers
+	conf.Get().Server.IndexWorkers = 1
+	defer func() { conf.Get().Server.IndexWorkers = origWorkers }()
+
+	scanner = NewScanner()
+	parser = NewParser()
+	writer = NewWriter()
+	symbolParser = NewSymbolParser()
+
+	var wg sync.WaitGroup
+	Run(&wg)
+	time.Sleep(100 * time.Millisecond)
+
+	running.Shutdown()
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not stop within 5 seconds")
 	}
 }
