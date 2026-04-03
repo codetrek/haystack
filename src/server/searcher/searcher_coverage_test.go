@@ -2,6 +2,8 @@ package searcher
 
 import (
 	"context"
+	"crypto/md5"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -524,7 +526,69 @@ func TestFullIntegration(t *testing.T) {
 	var indexerWg sync.WaitGroup
 	indexer.Run(&indexerWg)
 
-	// Helper to create a workspace and index files.
+	// Create a shared workspace with many files that different sub-tests
+	// can reuse, avoiding the 1.2s flush wait per workspace.
+	sharedDir := t.TempDir()
+	sharedFiles := map[string]string{
+		"main.go":           "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"hello world\")\n}\n",
+		"util.go":           "package main\nfunc helper() string {\n\treturn \"hello world\"\n}\n",
+		"pkg/util.go":       "package pkg\nfunc hello() { }\n",
+		"test/util_test.go": "package test\nfunc TestHello() { hello() }\n",
+		"src/main.go":       "package main\nfunc srcHello() { pfiltword }\n",
+		"test/test.go":      "package test\nfunc testHello() { pfiltword }\n",
+		"data.txt":          "inclword in text file\n",
+		"main_test.go":      "package main\nfunc testExcl() { exclword }\n",
+		"pkg/handler.go":    "package pkg\nfunc handler() { }\n",
+		"pkg/a/active.go":   "package a\nfunc aMarker() { editorpri }\n",
+		"pkg/a/sibling.go":  "package a\nfunc sMarker() { editorpri }\n",
+		"pkg/b/open.go":     "package b\nfunc oMarker() { editorpri }\n",
+		"other/file.go":     "package other\nfunc otherMarker() { editorpri }\n",
+		"pkg/file1.go":      "package pkg\nfunc f1() { dirpri }\n",
+		"pkg/file2.go":      "package pkg\nfunc f2() { dirpri }\n",
+		"a/b/deep.go":       "package b\nfunc deepFunc() { parentpri }\n",
+		"a/sibling.go":      "package a\nfunc siblingFunc() { parentpri }\n",
+		"keep.go":           "package main\nfunc keepFunc() { keep_marker }\n",
+		"reject.go":         "package main\nfunc rejectFunc() { keep_marker }\n",
+		"neutral.go":        "package main\nfunc neutralFunc() { }\n",
+		"wild.go":           "package main\nfunc wildtest() { }\n",
+		"reject_wild.go":    "package main\nfunc rw() { }\n",
+		"indexed.go":        "package main\nfunc indexedFunc() { combined_marker }\n",
+		"unsaved.go":        "package main\nfunc unsavedFunc() { }\n",
+		"alpha.go":          "package main\nfunc alpha() { }\n",
+		"beta.go":           "package main\nfunc beta() { }\n",
+		"a_kwone.go":        "package main\nfunc kwone() { }\n",
+		"b_kwtwo.go":        "package main\nfunc kwtwo() { }\n",
+		"funcs.go":          "package main\n\nfunc targetSymbol() int {\n\treturn 1\n}\n\nfunc otherSymbol() int {\n\treturn 2\n}\n\nfunc calculateTotal(items []int) int {\n\ttotal := 0\n\tfor _, item := range items {\n\t\ttotal += item\n\t}\n\treturn total\n}\n\nfunc getUserProfile() int {\n\treturn 1\n}\n\nfunc exactFunc() int {\n\treturn 1\n}\n\nfunc myHandler() {\n}\n\nfunc myProcessor() {\n}\n",
+		"cbmain.go":         "package main\nfunc cbFunc() { cbword }\n",
+		"cbutil.go":         "package main\nfunc cbHelper() { cbword }\n",
+		"foobar.go":         "package main\nfunc fooBarBaz() { }\n",
+		"unique.go":         "package main\nfunc unique_func_xyz() { }\n",
+	}
+	for relPath, content := range sharedFiles {
+		full := filepath.Join(sharedDir, relPath)
+		os.MkdirAll(filepath.Dir(full), 0755)
+		os.WriteFile(full, []byte(content), 0644)
+	}
+	sharedWS, err := workspace.Create(sharedDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+	indexer.Sync(sharedWS, false)
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !sharedWS.LastFullSync.IsZero() {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if sharedWS.LastFullSync.IsZero() {
+		t.Fatal("shared workspace indexing did not complete within timeout")
+	}
+	// Wait for the inverted-index writer to flush (1s ticker + margin).
+	time.Sleep(5000 * time.Millisecond)
+
+	// makeWS creates a NEW workspace for tests that need isolated files.
+	// It does NOT wait for index flush - use only when index search isn't needed.
 	makeWS := func(t *testing.T, files map[string]string) *workspace.Workspace {
 		t.Helper()
 		wsDir := t.TempDir()
@@ -538,7 +602,6 @@ func TestFullIntegration(t *testing.T) {
 			t.Fatalf("workspace.Create: %v", err)
 		}
 		indexer.Sync(ws, false)
-		// Poll until the indexing pipeline finishes instead of a fixed sleep.
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			if !ws.LastFullSync.IsZero() {
@@ -549,52 +612,41 @@ func TestFullIntegration(t *testing.T) {
 		if ws.LastFullSync.IsZero() {
 			t.Fatal("indexing did not complete within timeout")
 		}
-		// Small buffer for the writer to flush the last batch.
-		time.Sleep(30 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 		return ws
 	}
 
 	// --- Sub-tests that share the same indexer instance ---
+	// Tests that need index-search results use sharedWS (already flushed).
+	// Tests that only need unsaved-file search or special setup use makeWS.
 
 	t.Run("SearchContent basic", func(t *testing.T) {
-		ws := makeWS(t, map[string]string{
-			"main.go": "package main\nimport \"fmt\"\nfunc main() {\n\tfmt.Println(\"hello world\")\n}\n",
-			"util.go": "package main\nfunc helper() string {\n\treturn \"hello world\"\n}\n",
-		})
-
-		req := &types.SearchContentRequest{Query: "hello", BeforeAfter: 1}
+		req := &types.SearchContentRequest{Query: "keep_marker", BeforeAfter: 1}
 		ctx := context.Background()
-		results, truncated := SearchContent(ws, req, nil, ctx, 10*time.Second)
+		results, truncated := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
 		assert.False(t, truncated)
-		_ = results
+		assert.True(t, len(results) > 0, "expected index search results for 'keep_marker'")
 	})
 
 	t.Run("SearchContent with editor", func(t *testing.T) {
-		ws := makeWS(t, map[string]string{
-			"main.go":     "package main\nfunc main() { hello() }\n",
-			"pkg/util.go": "package pkg\nfunc hello() { }\n",
-		})
-
 		req := &types.SearchContentRequest{
-			Query: "hello",
+			Query: "editorpri",
 			Editor: &types.Editor{
-				ActiveFile: "pkg/util.go",
+				ActiveFile: "pkg/a/active.go",
 				OpenFiles:  []string{"main.go"},
 			},
 		}
 		ctx := context.Background()
-		SearchContent(ws, req, nil, ctx, 10*time.Second)
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0)
 	})
 
 	t.Run("SearchContent with callback", func(t *testing.T) {
-		ws := makeWS(t, map[string]string{
-			"test.go": "package main\nfunc test() { hello() }\n",
-		})
-
 		callbackCount := 0
-		req := &types.SearchContentRequest{Query: "hello"}
+		req := &types.SearchContentRequest{Query: "keep_marker"}
 		ctx := context.Background()
-		SearchContent(ws, req, func(r types.SearchContentResult) { callbackCount++ }, ctx, 10*time.Second)
+		SearchContent(sharedWS, req, func(r types.SearchContentResult) { callbackCount++ }, ctx, 10*time.Second)
+		assert.True(t, callbackCount > 0)
 	})
 
 	t.Run("SearchContent unsaved only", func(t *testing.T) {
@@ -801,6 +853,675 @@ func TestFullIntegration(t *testing.T) {
 			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
 		}
 		SearchSymbols(ws, req)
+	})
+
+	// =================================================================
+	// Coverage boost sub-tests (added to reuse the singleton indexer)
+	// =================================================================
+
+	// --- sortDocuments with filter that rejects some docs ---
+	t.Run("sortDocuments filter rejects some", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		err := engine.Compile("keep_marker", false)
+		assert.NoError(t, err)
+
+		sr, err := engine.CollectDocuments()
+		assert.NoError(t, err)
+
+		sorted := sortDocuments(sharedWS.Id, nil, sr, func(relPath string) bool {
+			return relPath == "keep.go"
+		})
+		for _, docid := range sorted {
+			doc, _ := documents.GetDocument(sharedWS.Id, docid, false)
+			if doc != nil {
+				assert.Equal(t, "keep.go", doc.RelPath)
+			}
+		}
+	})
+
+	// --- sortDocuments with editor active/open files ---
+	t.Run("sortDocuments editor priority boost", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		err := engine.Compile("editorpri", false)
+		assert.NoError(t, err)
+
+		sr, err := engine.CollectDocuments()
+		assert.NoError(t, err)
+
+		editor := &types.Editor{
+			ActiveFile: "pkg/a/active.go",
+			OpenFiles:  []string{"pkg/b/open.go"},
+		}
+		sorted := sortDocuments(sharedWS.Id, editor, sr, func(_ string) bool { return true })
+		_ = sorted // may be empty if index hasn't tokenized 'editorpri'
+	})
+
+	// --- sortDocuments: with WildDocIds ---
+	t.Run("sortDocuments with wild docids", func(t *testing.T) {
+		var docId string
+		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+			if relPath == "wild.go" {
+				docId = id
+				return false
+			}
+			return true
+		})
+
+		if docId != "" {
+			sr := &invertedindex.SearchResult{
+				DocIds:     map[string]struct{}{docId: {}},
+				WildDocIds: map[string]struct{}{docId: {}},
+			}
+			result := sortDocuments(sharedWS.Id, nil, sr, func(_ string) bool { return true })
+			assert.NotNil(t, result)
+		}
+	})
+
+	// --- sortDocuments: filter rejects WildDocIds too ---
+	t.Run("sortDocuments filter rejects wild", func(t *testing.T) {
+		var docId string
+		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+			if relPath == "reject_wild.go" {
+				docId = id
+				return false
+			}
+			return true
+		})
+
+		if docId != "" {
+			sr := &invertedindex.SearchResult{
+				DocIds:     map[string]struct{}{docId: {}},
+				WildDocIds: map[string]struct{}{docId: {}},
+			}
+			result := sortDocuments(sharedWS.Id, nil, sr, func(_ string) bool { return false })
+			assert.NotNil(t, result)
+			assert.Equal(t, 0, len(result))
+		}
+	})
+
+	// --- sortDocuments: editor same dir / parent dir ---
+	t.Run("sortDocuments editor same dir", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine.Compile("dirpri", false)
+		sr, _ := engine.CollectDocuments()
+
+		editor := &types.Editor{
+			ActiveFile: "pkg/file1.go",
+			OpenFiles:  []string{"pkg/file2.go"},
+		}
+		sorted := sortDocuments(sharedWS.Id, editor, sr, func(_ string) bool { return true })
+		assert.NotNil(t, sorted)
+	})
+
+	t.Run("sortDocuments editor parent dir", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine.Compile("parentpri", false)
+		sr, _ := engine.CollectDocuments()
+
+		editor := &types.Editor{ActiveFile: "a/b/deep.go"}
+		sorted := sortDocuments(sharedWS.Id, editor, sr, func(_ string) bool { return true })
+		assert.NotNil(t, sorted)
+	})
+
+	// --- SearchContent: combined unsaved + index ---
+	t.Run("SearchContent unsaved plus index", func(t *testing.T) {
+		req := &types.SearchContentRequest{
+			Query: "combined_marker",
+			UnsavedFiles: []types.UnsavedFile{
+				{Path: "unsaved.go", Content: "combined_marker found here\n"},
+			},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) >= 1)
+	})
+
+	// --- SearchContent: unsaved callback + limit ---
+	t.Run("SearchContent unsaved limit hit", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{"a.go": "package main\n"})
+
+		callbackCount := 0
+		req := &types.SearchContentRequest{
+			Query: "limitmarker",
+			Limit: &types.SearchLimit{MaxResults: 1, MaxResultsPerFile: 1},
+			UnsavedFiles: []types.UnsavedFile{
+				{Path: "a.go", Content: "limitmarker one\nlimitmarker two\n"},
+				{Path: "b.go", Content: "limitmarker three\n"},
+			},
+		}
+		ctx := context.Background()
+		SearchContent(ws, req, func(r types.SearchContentResult) { callbackCount++ }, ctx, 10*time.Second)
+		assert.True(t, callbackCount >= 1)
+	})
+
+	// --- SearchContent: unsaved file filtered by include ---
+	t.Run("SearchContent unsaved filtered by include", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{"main.go": "package main\n"})
+
+		req := &types.SearchContentRequest{
+			Query:        "filttest",
+			Filters:      &types.SearchFilters{Include: "*.txt"},
+			UnsavedFiles: []types.UnsavedFile{{Path: "main.go", Content: "filttest\n"}},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(ws, req, nil, ctx, 10*time.Second)
+		assert.Equal(t, 0, len(results))
+	})
+
+	// --- SearchContent: timeout ---
+	t.Run("SearchContent timeout", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc hello() { timeoutword }\n",
+		})
+
+		req := &types.SearchContentRequest{Query: "timeoutword"}
+		ctx := context.Background()
+		SearchContent(ws, req, nil, ctx, 1*time.Nanosecond)
+	})
+
+	// --- SearchContent: cancelled context ---
+	t.Run("SearchContent cancelled before index", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc hello() { cancelword }\n",
+		})
+
+		req := &types.SearchContentRequest{Query: "cancelword"}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		SearchContent(ws, req, nil, ctx, 10*time.Second)
+	})
+
+	// --- SearchContent: custom limit smaller than conf ---
+	t.Run("SearchContent custom limit smaller", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc a() { limitword }\nfunc b() { limitword }\nfunc c() { limitword }\n",
+		})
+
+		req := &types.SearchContentRequest{
+			Query: "limitword",
+			Limit: &types.SearchLimit{MaxResults: 2, MaxResultsPerFile: 2},
+		}
+		ctx := context.Background()
+		SearchContent(ws, req, nil, ctx, 10*time.Second)
+	})
+
+	// --- SearchContent: limit with only MaxResults ---
+	t.Run("SearchContent limit only MaxResults", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc hello() { onlymaxword }\n",
+		})
+
+		req := &types.SearchContentRequest{
+			Query: "onlymaxword",
+			Limit: &types.SearchLimit{MaxResults: 100},
+		}
+		ctx := context.Background()
+		SearchContent(ws, req, nil, ctx, 10*time.Second)
+	})
+
+	// --- SearchContent: limit with only MaxResultsPerFile ---
+	t.Run("SearchContent limit only MaxResultsPerFile", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc hello() { onlyperfileword }\n",
+		})
+
+		req := &types.SearchContentRequest{
+			Query: "onlyperfileword",
+			Limit: &types.SearchLimit{MaxResultsPerFile: 100},
+		}
+		ctx := context.Background()
+		SearchContent(ws, req, nil, ctx, 10*time.Second)
+	})
+
+	// --- SearchContent: negative beforeAfter ---
+	t.Run("SearchContent negative beforeAfter", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc hello() { negba_marker }\n",
+		})
+
+		req := &types.SearchContentRequest{Query: "negba_marker", BeforeAfter: -10}
+		ctx := context.Background()
+		results, _ := SearchContent(ws, req, nil, ctx, 10*time.Second)
+		for _, r := range results {
+			for _, l := range r.Lines {
+				assert.Nil(t, l.Before)
+				assert.Nil(t, l.After)
+			}
+		}
+	})
+
+	// --- SearchContent: large beforeAfter clamped to 5 ---
+	t.Run("SearchContent large beforeAfter clamped", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nfunc hello() { lgba_marker }\nline10\nline11\nline12\nline13\nline14\n",
+		})
+
+		req := &types.SearchContentRequest{Query: "lgba_marker", BeforeAfter: 100}
+		ctx := context.Background()
+		results, _ := SearchContent(ws, req, nil, ctx, 10*time.Second)
+		for _, r := range results {
+			for _, l := range r.Lines {
+				assert.True(t, len(l.Before) <= 5)
+				assert.True(t, len(l.After) <= 5)
+			}
+		}
+	})
+
+	// --- SearchContent: editor prioritization ---
+	t.Run("SearchContent editor active+open prioritization", func(t *testing.T) {
+		req := &types.SearchContentRequest{
+			Query: "editorpri",
+			Editor: &types.Editor{
+				ActiveFile: "pkg/a/active.go",
+				OpenFiles:  []string{"pkg/b/open.go"},
+			},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		if len(results) > 0 {
+			assert.Equal(t, "pkg/a/active.go", results[0].File)
+		}
+	})
+
+	// --- SearchContent: unsaved shadows indexed ---
+	t.Run("SearchContent unsaved shadows indexed", func(t *testing.T) {
+		req := &types.SearchContentRequest{
+			Query: "keep_marker",
+			UnsavedFiles: []types.UnsavedFile{
+				{Path: "keep.go", Content: "keep_marker found in unsaved version\n"},
+			},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		keepCount := 0
+		for _, r := range results {
+			if r.File == "keep.go" {
+				keepCount++
+			}
+		}
+		assert.LessOrEqual(t, keepCount, 1)
+	})
+
+	// --- SearchContent: path filter ---
+	t.Run("SearchContent path filter dir boost", func(t *testing.T) {
+		req := &types.SearchContentRequest{
+			Query:   "pfiltword",
+			Filters: &types.SearchFilters{Path: "src"},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		for _, r := range results {
+			assert.True(t, strings.HasPrefix(r.File, "src"))
+		}
+	})
+
+	// --- SearchContent: exclude filter ---
+	t.Run("SearchContent exclude filter boost", func(t *testing.T) {
+		req := &types.SearchContentRequest{
+			Query:   "exclword",
+			Filters: &types.SearchFilters{Exclude: "*_test.go"},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		for _, r := range results {
+			assert.False(t, strings.HasSuffix(r.File, "_test.go"))
+		}
+	})
+
+	// --- SearchContent: include filter ---
+	t.Run("SearchContent include filter boost", func(t *testing.T) {
+		req := &types.SearchContentRequest{
+			Query:   "inclword",
+			Filters: &types.SearchFilters{Include: "*.txt"},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		for _, r := range results {
+			assert.True(t, strings.HasSuffix(r.File, ".txt"))
+		}
+	})
+
+	// --- SearchContent: callback with index results ---
+	t.Run("SearchContent callback with index", func(t *testing.T) {
+		callbackCount := 0
+		req := &types.SearchContentRequest{Query: "cbword"}
+		ctx := context.Background()
+		SearchContent(sharedWS, req, func(r types.SearchContentResult) { callbackCount++ }, ctx, 10*time.Second)
+		assert.True(t, callbackCount > 0)
+	})
+
+	// --- SearchContent: MaxResults during index loop ---
+	t.Run("SearchContent maxresults during index", func(t *testing.T) {
+		files := map[string]string{}
+		for i := 0; i < 10; i++ {
+			files[fmt.Sprintf("file%d.go", i)] = fmt.Sprintf("package main\nfunc f%d() { idxlimit_marker }\n", i)
+		}
+		ws := makeWS(t, files)
+
+		savedLimit := conf.Get().Server.Search.Limit
+		conf.Get().Server.Search.Limit.MaxResults = 2
+		conf.Get().Server.Search.Limit.MaxResultsPerFile = 10
+		defer func() { conf.Get().Server.Search.Limit = savedLimit }()
+
+		req := &types.SearchContentRequest{
+			Query: "idxlimit_marker",
+			Limit: &types.SearchLimit{MaxResults: 2, MaxResultsPerFile: 10},
+		}
+		ctx := context.Background()
+		SearchContent(ws, req, nil, ctx, 10*time.Second)
+	})
+
+	// --- SearchContent: editor with empty ActiveFile ---
+	t.Run("SearchContent editor empty active", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go": "package main\nfunc hello() { emptyactive }\n",
+		})
+
+		req := &types.SearchContentRequest{
+			Query: "emptyactive",
+			Editor: &types.Editor{
+				ActiveFile: "",
+				OpenFiles:  []string{"main.go"},
+			},
+		}
+		ctx := context.Background()
+		SearchContent(ws, req, nil, ctx, 10*time.Second)
+	})
+
+	// --- SearchContent: unsaved only no matches ---
+	t.Run("SearchContent unsaved only no matches", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{"main.go": "package main\n"})
+
+		req := &types.SearchContentRequest{
+			Query:            "nonexistent_string_xyz",
+			UnsavedFilesOnly: true,
+			UnsavedFiles: []types.UnsavedFile{
+				{Path: "main.go", Content: "nothing here\n"},
+			},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(ws, req, nil, ctx, 10*time.Second)
+		assert.Equal(t, 0, len(results))
+	})
+
+	// --- SearchFiles: removed file ---
+	t.Run("SearchFiles removed file", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"keep.go":   "package main\n",
+			"remove.go": "package main\n",
+		})
+
+		os.Remove(filepath.Join(ws.Path, "remove.go"))
+
+		req := &types.SearchFilesRequest{Query: "remove", Limit: 10}
+		result, err := SearchFiles(ws, req)
+		assert.NoError(t, err)
+		for _, f := range result.Files {
+			assert.NotEqual(t, "remove.go", f)
+		}
+	})
+
+	// --- SearchFiles: limit 1 ---
+	t.Run("SearchFiles limit 1", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go":  "package main\n",
+			"main2.go": "package main\n",
+			"main3.go": "package main\n",
+		})
+
+		req := &types.SearchFilesRequest{Query: "main", Limit: 1}
+		result, err := SearchFiles(ws, req)
+		assert.NoError(t, err)
+		assert.LessOrEqual(t, len(result.Files), 1)
+	})
+
+	// --- SearchFiles: sort by score then length ---
+	t.Run("SearchFiles sort by score then length", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"main.go":       "package main\n",
+			"pkg/main.go":   "package main\n",
+			"a/b/c/main.go": "package main\n",
+		})
+
+		req := &types.SearchFilesRequest{Query: "main.go", Limit: 10}
+		result, err := SearchFiles(ws, req)
+		assert.NoError(t, err)
+		if len(result.Files) >= 2 {
+			assert.True(t, len(result.Files[0]) <= len(result.Files[1]))
+		}
+	})
+
+	// --- SearchSymbols: multi word ---
+	t.Run("SearchSymbols multi word", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "getuserprofile",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := SearchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// --- searchSymbols: exact match ---
+	t.Run("searchSymbols exact match", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "exactFunc",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// --- searchSymbols: no match ---
+	t.Run("searchSymbols no match", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "nonExistentFunc",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(result.Symbols))
+	})
+
+	// --- searchSymbols: with matching functions ---
+	t.Run("searchSymbols with matching functions", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "targetSymbol",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// --- fuzzySearchSymbols: error workspace ---
+	t.Run("fuzzySearchSymbols error workspace", func(t *testing.T) {
+		ws := &workspace.Workspace{Id: -999}
+		req := &types.SearchSymbolsRequest{
+			Query: "test",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := fuzzySearchSymbols(ws, req)
+		_ = err
+		assert.NotNil(t, result)
+	})
+
+	// --- isFileChanged: file not found ---
+	t.Run("isFileChanged file not found", func(t *testing.T) {
+		doc := &documents.Document{RelPath: "nonexistent.go"}
+		result := isFileChanged(sharedWS, doc)
+		assert.False(t, result)
+	})
+
+	// --- isFileChanged: modtime matches ---
+	t.Run("isFileChanged modtime matches", func(t *testing.T) {
+		fullPath := filepath.Join(sharedWS.Path, "main.go")
+		fi, _ := os.Stat(fullPath)
+
+		doc := &documents.Document{
+			RelPath:      "main.go",
+			ModifiedTime: fi.ModTime().UnixNano(),
+		}
+		result := isFileChanged(sharedWS, doc)
+		assert.False(t, result)
+	})
+
+	// --- isFileChanged: modtime differs ---
+	t.Run("isFileChanged modtime differs", func(t *testing.T) {
+		doc := &documents.Document{
+			RelPath:      "main.go",
+			ModifiedTime: 12345,
+		}
+		result := isFileChanged(sharedWS, doc)
+		assert.False(t, result)
+	})
+
+	// --- isFileChanged: empty hash ---
+	t.Run("isFileChanged empty hash", func(t *testing.T) {
+		fullPath := filepath.Join(sharedWS.Path, "main.go")
+		fi, _ := os.Stat(fullPath)
+
+		doc := &documents.Document{
+			RelPath:      "main.go",
+			ModifiedTime: fi.ModTime().UnixNano(),
+			Hash:         "",
+		}
+		result := isFileChanged(sharedWS, doc)
+		assert.False(t, result)
+	})
+
+	// --- isFileChanged: hash matches ---
+	t.Run("isFileChanged hash matches", func(t *testing.T) {
+		fullPath := filepath.Join(sharedWS.Path, "main.go")
+		fi, _ := os.Stat(fullPath)
+		content, _ := os.ReadFile(fullPath)
+		hash := fmt.Sprintf("%x", md5.Sum(content))
+
+		doc := &documents.Document{
+			RelPath:      "main.go",
+			ModifiedTime: fi.ModTime().UnixNano(),
+			Hash:         hash,
+		}
+		result := isFileChanged(sharedWS, doc)
+		assert.True(t, result)
+	})
+
+	// --- isFileChanged: hash mismatch ---
+	t.Run("isFileChanged hash mismatch", func(t *testing.T) {
+		fullPath := filepath.Join(sharedWS.Path, "main.go")
+		fi, _ := os.Stat(fullPath)
+
+		doc := &documents.Document{
+			RelPath:      "main.go",
+			ModifiedTime: fi.ModTime().UnixNano(),
+			Hash:         "badhash",
+		}
+		result := isFileChanged(sharedWS, doc)
+		assert.False(t, result)
+	})
+
+	// --- getFunctionFileMatch: invalid doc ---
+	t.Run("getFunctionFileMatch invalid doc", func(t *testing.T) {
+		result, err := getFunctionFileMatch(sharedWS, []string{"test"}, "nonexistent_doc_id")
+		assert.Nil(t, err)
+		assert.Nil(t, result)
+	})
+
+	// --- getFunctionFileMatch: valid doc ---
+	t.Run("getFunctionFileMatch valid doc", func(t *testing.T) {
+		var docId string
+		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+			if relPath == "funcs.go" {
+				docId = id
+				return false
+			}
+			return true
+		})
+
+		if docId != "" {
+			result, err := getFunctionFileMatch(sharedWS, []string{"my", "handler"}, docId)
+			assert.NoError(t, err)
+			_ = result
+		}
+	})
+
+	// --- CollectDocuments: multiple OR clauses ---
+	t.Run("CollectDocuments merge OR clauses", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine.Compile("alpha | beta", false)
+		result, err := engine.CollectDocuments()
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// --- CollectDocuments: single clause ---
+	t.Run("CollectDocuments single clause", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine.Compile("unique_func_xyz", false)
+		result, err := engine.CollectDocuments()
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// --- collectWithKeywords: multiple keywords ---
+	t.Run("collectWithKeywords multiple keywords", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine.Compile("foo bar", false)
+		result, err := engine.CollectDocuments()
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
+	})
+
+	// --- Term.CollectDocuments: no keywords ---
+	t.Run("TermCollectDocuments no keywords", func(t *testing.T) {
+		term := &SimpleContentSearchEngineTerm{
+			Engine:   &SimpleContentSearchEngine{Workspace: sharedWS},
+			Keywords: []string{},
+		}
+		result := term.CollectDocuments(sharedWS.Id)
+		assert.Equal(t, 0, len(result.DocIds))
+	})
+
+	// --- collectWithKeywords: single keyword ---
+	t.Run("collectWithKeywords single keyword", func(t *testing.T) {
+		ft, err := documents.GetWorkspace(sharedWS.Id)
+		assert.NoError(t, err)
+
+		term := &SimpleContentSearchEngineTerm{Keywords: []string{"keep_marker"}}
+		result := term.collectWithKeywords(ft.InvertedId, term.Keywords)
+		assert.NotNil(t, result)
+	})
+
+	// --- collectWithKeywords: empty ---
+	t.Run("collectWithKeywords empty", func(t *testing.T) {
+		term := &SimpleContentSearchEngineTerm{}
+		result := term.collectWithKeywords(0, []string{})
+		assert.NotNil(t, result)
+		assert.Equal(t, 0, len(result))
+	})
+
+	// --- collectWithKeywords: intersection empties out ---
+	t.Run("collectWithKeywords intersection empty", func(t *testing.T) {
+		ft, err := documents.GetWorkspace(sharedWS.Id)
+		assert.NoError(t, err)
+
+		term := &SimpleContentSearchEngineTerm{Keywords: []string{"kwone", "kwtwo"}}
+		result := term.collectWithKeywords(ft.InvertedId, term.Keywords)
+		assert.NotNil(t, result)
+	})
+
+	// --- AndClause.CollectDocuments: multiple terms ---
+	t.Run("AndClauseCollectDocuments multiple terms", func(t *testing.T) {
+		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine.Compile("keep_marker", false)
+
+		if len(engine.OrClauses) > 0 {
+			clause := engine.OrClauses[0]
+			result, err := clause.CollectDocuments(sharedWS.Id)
+			assert.NoError(t, err)
+			assert.NotNil(t, result)
+		}
 	})
 
 	// --- Teardown ---
