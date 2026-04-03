@@ -379,6 +379,76 @@ func TestHandleListWorkspace(t *testing.T) {
 	// Should have at least the workspaces created by other tests.
 }
 
+// panicResponseWriter is an http.ResponseWriter that panics on the first
+// Write call, used to exercise the panic-recovery defer in handlers.
+// Subsequent Write calls (e.g. from http.Error inside the recover block)
+// succeed normally so the recovery itself does not re-panic.
+type panicResponseWriter struct {
+	header   http.Header
+	panicked bool
+	code     int
+	body     bytes.Buffer
+}
+
+func (p *panicResponseWriter) Header() http.Header        { return p.header }
+func (p *panicResponseWriter) WriteHeader(statusCode int) { p.code = statusCode }
+func (p *panicResponseWriter) Write(b []byte) (int, error) {
+	if !p.panicked {
+		p.panicked = true
+		panic("simulated write panic")
+	}
+	return p.body.Write(b)
+}
+
+func TestHandleListWorkspace_PanicRecovery(t *testing.T) {
+	req := httptest.NewRequest("GET", "/api/v1/workspace/list", nil)
+	w := &panicResponseWriter{header: make(http.Header)}
+
+	// handleListWorkspace should recover from the panic without propagating it.
+	assert.NotPanics(t, func() {
+		handleListWorkspace(w, req)
+	})
+
+	// The recover block calls http.Error which sets status 500.
+	assert.Equal(t, http.StatusInternalServerError, w.code)
+	assert.Contains(t, w.body.String(), "Internal server error")
+}
+
+func TestHandleListWorkspace_MultipleWorkspaces(t *testing.T) {
+	// Create two additional workspaces so the list contains multiple entries.
+	paths := []string{
+		filepath.Join(testEnv.tempDir, "ws-list-multi-a"),
+		filepath.Join(testEnv.tempDir, "ws-list-multi-b"),
+	}
+	for _, p := range paths {
+		os.MkdirAll(p, 0755)
+		createReq := types.CreateWorkspaceRequest{Workspace: p}
+		body, _ := json.Marshal(createReq)
+		r := httptest.NewRequest("POST", "/api/v1/workspace/create", bytes.NewReader(body))
+		w := httptest.NewRecorder()
+		handleCreateWorkspace(w, r)
+		assert.Equal(t, http.StatusOK, w.Code)
+	}
+
+	req := httptest.NewRequest("GET", "/api/v1/workspace/list", nil)
+	w := httptest.NewRecorder()
+	handleListWorkspace(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp types.ListWorkspaceResponse
+	err := json.NewDecoder(w.Body).Decode(&resp)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, resp.Code)
+	assert.GreaterOrEqual(t, len(resp.Data.Workspaces), 2, "expected at least 2 workspaces")
+
+	// Verify workspaces are sorted by Id (ascending).
+	for i := 1; i < len(resp.Data.Workspaces); i++ {
+		assert.LessOrEqual(t, resp.Data.Workspaces[i-1].Id, resp.Data.Workspaces[i].Id,
+			"workspaces should be sorted by Id")
+	}
+}
+
 func TestHandleGetWorkspace_InvalidJSON(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v1/workspace/get", bytes.NewReader([]byte("bad")))
 	w := httptest.NewRecorder()

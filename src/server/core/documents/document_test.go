@@ -415,3 +415,12 @@ func TestDeleteDocument_MissingDocReturnsError(t *testing.T) {
 	err := DeleteDocument(1, "nonexistent")
 	assert.Error(t, err, "deleting a missing doc should return error")
 }
+
+func TestDeleteDocument_NonExistentWorkspaceReturnsError(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Do NOT create workspace 999 — GetWorkspace should fail
+	err := DeleteDocument(999, "d1")
+	assert.Error(t, err, "deleting from a non-existent workspace should return error")
+}

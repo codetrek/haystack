@@ -45,6 +45,87 @@ func TestOpen_BasicOps(t *testing.T) {
 	assert.Equal(t, []byte("v"), val)
 }
 
+func TestCleanup_RemovesOldVersionDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	storagePath := filepath.Join(tmpDir, "storage")
+	os.MkdirAll(storagePath, 0755)
+
+	// Old version directories that cleanup should remove
+	oldDirs := []string{"index", "1.0", "1.1", "1.2", "1.3"}
+	for _, name := range oldDirs {
+		dirPath := filepath.Join(storagePath, name)
+		os.MkdirAll(dirPath, 0755)
+		// Put a file inside to verify recursive removal
+		os.WriteFile(filepath.Join(dirPath, "data.sst"), []byte("dummy"), 0644)
+	}
+
+	// A directory that should NOT be removed (current version)
+	currentDir := filepath.Join(storagePath, StorageVersion)
+	os.MkdirAll(currentDir, 0755)
+	os.WriteFile(filepath.Join(currentDir, "data.sst"), []byte("current"), 0644)
+
+	// An unrelated directory that should NOT be removed
+	otherDir := filepath.Join(storagePath, "other")
+	os.MkdirAll(otherDir, 0755)
+
+	cleanup(storagePath)
+
+	// All old version directories should be gone
+	for _, name := range oldDirs {
+		dirPath := filepath.Join(storagePath, name)
+		_, err := os.Stat(dirPath)
+		assert.True(t, os.IsNotExist(err), "expected %s to be removed, but it still exists", name)
+	}
+
+	// Current version directory should still exist
+	_, err := os.Stat(currentDir)
+	assert.NoError(t, err, "current version directory should not be removed")
+
+	// Unrelated directory should still exist
+	_, err = os.Stat(otherDir)
+	assert.NoError(t, err, "unrelated directory should not be removed")
+}
+
+func TestCleanup_NoOldDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	storagePath := filepath.Join(tmpDir, "storage")
+	os.MkdirAll(storagePath, 0755)
+
+	// Only the current version exists, nothing to clean up — should not panic
+	currentDir := filepath.Join(storagePath, StorageVersion)
+	os.MkdirAll(currentDir, 0755)
+
+	cleanup(storagePath)
+
+	// Current version should still be intact
+	_, err := os.Stat(currentDir)
+	assert.NoError(t, err)
+}
+
+func TestCleanup_PartialOldDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+	storagePath := filepath.Join(tmpDir, "storage")
+	os.MkdirAll(storagePath, 0755)
+
+	// Only some old dirs exist
+	existing := []string{"1.0", "1.2"}
+	for _, name := range existing {
+		os.MkdirAll(filepath.Join(storagePath, name), 0755)
+	}
+	absent := []string{"index", "1.1", "1.3"}
+
+	cleanup(storagePath)
+
+	for _, name := range existing {
+		_, err := os.Stat(filepath.Join(storagePath, name))
+		assert.True(t, os.IsNotExist(err), "expected %s to be removed", name)
+	}
+	for _, name := range absent {
+		_, err := os.Stat(filepath.Join(storagePath, name))
+		assert.True(t, os.IsNotExist(err), "%s should still not exist", name)
+	}
+}
+
 func TestStorageVersion(t *testing.T) {
 	assert.Equal(t, "1.4", StorageVersion)
 }

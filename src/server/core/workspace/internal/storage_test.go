@@ -215,3 +215,29 @@ func TestDelete_NonExistentKey(t *testing.T) {
 		t.Errorf("Delete of non-existent key should not error, got: %v", err)
 	}
 }
+
+func TestGet_ErrorFromClosedDB(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "haystack-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	conf.Get().Global.DataPath = tempDir
+	d, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
+	if err := Init(d); err != nil {
+		d.Close()
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Close the database so that db.Get returns an error
+	d.Close()
+
+	val, err := Get(1)
+	if err == nil {
+		t.Fatal("expected error from Get on closed database, got nil")
+	}
+	if val != "" {
+		t.Errorf("expected empty string on error, got %q", val)
+	}
+}
