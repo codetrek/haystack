@@ -21,6 +21,12 @@ func RegisterLockFile(file string) {
 	lockFile = file
 }
 
+// ResetLockFileForTest clears the lockFile so RegisterLockFile can be called
+// again. This is only intended for use in tests.
+func ResetLockFileForTest() {
+	lockFile = ""
+}
+
 func CheckAndLockServer() (func(), error) {
 	if len(lockFile) == 0 {
 		return nil, fmt.Errorf("lock file not registered")
