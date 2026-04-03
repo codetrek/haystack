@@ -73,6 +73,13 @@ func ExecutablePath() string {
 }
 
 func StartNewServer() {
+	// Guard against infinite fork when the test binary spawns itself.
+	// Child processes inherit this env var and bail out immediately.
+	if os.Getenv("HAYSTACK_SKIP_STARTNEW") != "" {
+		log.Println("[Running] Skipping StartNewServer (HAYSTACK_SKIP_STARTNEW is set)")
+		return
+	}
+
 	executable, err := os.Executable()
 	if err != nil {
 		log.Printf("[Running] Failed to get executable path: %v", err)
@@ -86,10 +93,15 @@ func StartNewServer() {
 	}
 
 	args := os.Args[1:]
+	env := os.Environ()
+	// Propagate the guard to the child so it won't re-spawn itself
+	// when it is a test binary that runs all tests again.
+	env = append(env, "HAYSTACK_SKIP_STARTNEW=1")
+
 	procAttr := &os.ProcAttr{
 		Dir:   wd,
 		Files: []*os.File{nil, os.Stdout, os.Stderr},
-		Env:   os.Environ(),
+		Env:   env,
 	}
 
 	if args[0] != "--daemon" {

@@ -93,9 +93,6 @@ func TestStartNewServer_DaemonArg(t *testing.T) {
 		t.Skip("child process – skip to prevent cascade")
 	}
 
-	os.Setenv("HAYSTACK_SKIP_STARTNEW", "1")
-	defer os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
-
 	savedArgs := os.Args
 	defer func() { os.Args = savedArgs }()
 
@@ -107,9 +104,6 @@ func TestStartNewServer_NonDaemonArg(t *testing.T) {
 	if os.Getenv("HAYSTACK_SKIP_STARTNEW") != "" {
 		t.Skip("child process – skip to prevent cascade")
 	}
-
-	os.Setenv("HAYSTACK_SKIP_STARTNEW", "1")
-	defer os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
 
 	savedArgs := os.Args
 	defer func() { os.Args = savedArgs }()
@@ -211,12 +205,9 @@ func TestStartNewServer_GetwdFails(t *testing.T) {
 func TestStartNewServer_EmptyArgs_Panics(t *testing.T) {
 	// StartNewServer accesses os.Args[1:] then args[0]. If os.Args has
 	// only 1 element, args is empty and args[0] panics. Verify that.
-	if os.Getenv("HAYSTACK_SKIP_STARTNEW") != "" {
-		t.Skip("child process – skip to prevent cascade")
-	}
-
-	os.Setenv("HAYSTACK_SKIP_STARTNEW", "1")
-	defer os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
+	//
+	// No need to set HAYSTACK_SKIP_STARTNEW here — the panic happens
+	// before os.StartProcess, so no child process is ever spawned.
 
 	savedArgs := os.Args
 	defer func() { os.Args = savedArgs }()
@@ -228,6 +219,12 @@ func TestStartNewServer_EmptyArgs_Panics(t *testing.T) {
 			t.Fatal("expected panic from empty args slice")
 		}
 	}()
+
+	// Temporarily clear the env var so StartNewServer doesn't bail out
+	// before reaching the panic point.
+	saved := os.Getenv("HAYSTACK_SKIP_STARTNEW")
+	os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
+	defer os.Setenv("HAYSTACK_SKIP_STARTNEW", saved)
 
 	StartNewServer()
 }
