@@ -14,6 +14,6 @@ trap 'rm -f "$COVERAGE_BIN"' EXIT
 cd "$SCRIPT_DIR/lib/coverage"
 go build -o "$COVERAGE_BIN" .
 
-# Run the coverage tool from the src directory
-cd "$PROJECT_ROOT/src"
+# Run the coverage tool from the project root
+cd "$PROJECT_ROOT"
 "$COVERAGE_BIN" "$@"

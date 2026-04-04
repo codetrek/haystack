@@ -1,7 +1,6 @@
 #!/bin/bash
 # Run coverage tool in CI mode
-# This script is called by GitHub Actions workflow (working-directory: ./src)
-# The coverage tool has its own go.mod, so we build it first, then run from src/.
+# This script is called by GitHub Actions workflow
 
 set -e
 
@@ -14,5 +13,5 @@ trap 'rm -f "$COVERAGE_BIN"' EXIT
 cd "$PROJECT_ROOT/scripts/lib/coverage"
 go build -o "$COVERAGE_BIN" .
 
-cd "$PROJECT_ROOT/src"
+cd "$PROJECT_ROOT"
 "$COVERAGE_BIN"

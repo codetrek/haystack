@@ -2,7 +2,6 @@
 
 APP_NAME=haystack
 BUILD_DIR=build
-SRC_DIR=src
 
 ifeq ($(OS),Windows_NT)
 	MKDIR_P = powershell -NoProfile -Command "if (-not (Test-Path '$(BUILD_DIR)')) { New-Item -ItemType Directory -Path '$(BUILD_DIR)' | Out-Null }"
@@ -21,12 +20,12 @@ APP_BIN=$(BUILD_DIR)/$(APP_NAME)$(EXE_EXT)
 build:
 	@$(MKDIR_P)
 	@echo "Building $(APP_NAME)..."
-	@cd $(SRC_DIR) && go build -o ../$(APP_BIN) ./
+	@go build -o $(APP_BIN) ./cmd/haystack/
 	@echo "Build complete: $(APP_BIN)"
 
 test:
 	@echo "Running tests..."
-	@cd $(SRC_DIR) && go test ./... -count=1
+	@go test ./... -count=1
 
 coverage:
 	@echo "Running tests with coverage..."
@@ -34,7 +33,7 @@ coverage:
 
 fmt:
 	@echo "Formatting Go code..."
-	@cd $(SRC_DIR) && find . -name "*.go" -not -path "./vendor/*" | xargs gofmt -w
+	@find . -name "*.go" -not -path "./vendor/*" | xargs gofmt -w
 	@echo "Formatting complete."
 
 clean:

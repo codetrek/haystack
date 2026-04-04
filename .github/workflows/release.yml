@@ -27,11 +27,9 @@ jobs:
           go-version: '1.23'
 
       - name: Run tests
-        working-directory: ./src
         run: go test ./...
 
       - name: Run build.go
-        working-directory: ./src
         run: go run build.go
 
       - name: Create and upload to GitHub Release
@@ -40,7 +38,7 @@ jobs:
           gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes
 
           # Upload artifacts
-          gh release upload "${{ github.ref_name }}" src/dist/* --clobber
+          gh release upload "${{ github.ref_name }}" dist/* --clobber
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

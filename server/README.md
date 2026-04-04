@@ -28,25 +28,25 @@ This directory contains the server-side implementation of the Local Code Search 
 
 ## Key Components
 
-1. **Main Server (`src/server/server.go`)**
+1. **Main Server (`server/server.go`)**
    - Main server entry point.
    - Handles server initialization, configuration, and component orchestration.
 
-2. **Logging (`src/server/log.go`)**
+2. **Logging (`server/log.go`)**
    - Implements server-wide logging.
    - Manages log levels, formatting, and output.
 
-3. **Core Module (`src/server/core/`)**
+3. **Core Module (`server/core/`)**
    - Encapsulates core business logic including document processing, storage management (utilizing PebbleDB via `pebble/`), parsing, and workspace data.
 
-4. **Indexer Module (`src/server/indexer/`)**
+4. **Indexer Module (`server/indexer/`)**
    - Responsible for creating, updating, and optimizing search indexes.
    - Includes components for scanning repositories (`scanner.go`) and writing index data (`writer.go`).
 
-5. **Searcher Module (`src/server/searcher/`)**
+5. **Searcher Module (`server/searcher/`)**
    - Handles incoming search queries, parsing them (`query_parser.go`), and executing search operations using defined algorithms.
 
-6. **API and Request Handling (`src/server/server/`)**
+6. **API and Request Handling (`server/server/`)**
    - Manages the specifics of API endpoints and request/response cycles.
    - Implements handlers for search, document management, MCP, and other server interactions.
 

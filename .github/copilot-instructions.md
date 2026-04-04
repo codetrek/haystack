@@ -46,7 +46,6 @@ Haystack is a local code search indexer tool designed to create and query search
 ### Project Documentation Structure
 The project contains multiple README.md files throughout the directory structure, providing specific documentation for different components:
 - Root README.md: Overall project description, installation and setup
-- src/README.md: Source code organization and development guidelines
 - server/README.md: Server component implementation details
 - server/core/fulltext/README.md: Documentation for the storage subsystem and Pebble DB usage
 - server/indexer/README.md: Explanation of the indexing mechanism
