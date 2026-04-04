@@ -31,7 +31,7 @@ var (
 )
 
 // mcpInit initializes and sets up the Model Context Protocol (MCP) server
-func mcpInit(addr string) {
+func mcpInit(addr string, mux *http.ServeMux) {
 	hooks := &server.Hooks{}
 
 	// Create a new MCP server instance
@@ -57,7 +57,7 @@ func mcpInit(addr string) {
 		server.WithHeartbeatInterval(20*time.Second),
 	)
 
-	http.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/mcp/sse" || r.URL.Path == "/mcp/message" {
 			sse.ServeHTTP(w, r)
 		} else {
