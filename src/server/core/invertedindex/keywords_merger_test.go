@@ -875,26 +875,72 @@ func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
 	km.Wait()
 }
 
-// TestKeywordsMerger_RunMergeLoop exercises the main merge loop body
-// (lines 93-127) by using a short InitialDelay so the timer fires quickly.
-func TestKeywordsMerger_RunMergeLoop(t *testing.T) {
+// TestKeywordsMerger_RunMergeWithData exercises the merge log path
+// (lines 105-111) by providing mock DB data that triggers actual row merging.
+func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
+	// Save and mock writeInvertedIndex + NewBatch so mergeKeywordsIndex works.
+	origWrite := writeInvertedIndex
+	origBatch := NewBatch
+	defer func() {
+		writeInvertedIndex = origWrite
+		NewBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+		// no-op: we don't need to persist data
+	}
+	NewBatch = func(db pebble.DB) pebble.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	// Provide mergeable data: two rows for "keyword1" that will be merged.
+	scanCalled := false
+	origDB := db
+	db = &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			if scanCalled {
+				return // second call returns nothing (end of DB)
+			}
+			scanCalled = true
+			keys := [][]byte{
+				encodeInvertedKey(testTable1, "keyword1", 2),
+				encodeInvertedKey(testTable1, "keyword1", 3),
+			}
+			values := []string{
+				MakeDocsForKeyword("doc1", "doc2"),
+				MakeDocsForKeyword("doc3", "doc4", "doc5"),
+			}
+			for i, key := range keys {
+				if !fn(key, []byte(values[i])) {
+					return
+				}
+			}
+		},
+	}
+	defer func() { db = origDB }()
+
 	km := &KeywordsMerger{
-		InitialDelay: 10 * time.Millisecond, // fire immediately
+		InitialDelay: 10 * time.Millisecond,
 	}
 	km.Start()
 
-	// Let the timer fire and the merge loop execute at least once.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the merge loop to run at least once.
+	time.Sleep(200 * time.Millisecond)
 
 	km.Shutdown()
 	km.Wait()
 
-	// After the loop ran, NextIter should be empty (scan completed on empty DB).
-	if km.merging.NextIter != "" {
-		t.Logf("NextIter=%q (may be non-empty if there was data)", km.merging.NextIter)
+	// After merging, TotalRowsBefore should be 2 and TotalRowsAfter 1
+	// (two rows merged into one), so MergedRowCount() > 0.
+	if km.merging.MergedRowCount() <= 0 {
+		t.Errorf("expected MergedRowCount > 0, got %d", km.merging.MergedRowCount())
 	}
 }
 

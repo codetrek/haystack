@@ -25,6 +25,10 @@ const (
 	MaxBatchSize = 1000
 )
 
+// SymbolParserFlushInterval controls how often the symbol parser
+// flushes its file cache. Tests can lower this for faster execution.
+var SymbolParserFlushInterval = 5 * time.Second
+
 // ParseBatch represents a batch of files to be parsed
 type ParseBatch struct {
 	Workspace *workspace.Workspace
@@ -211,7 +215,7 @@ func NewSymbolParser() *SymbolParser {
 		done:     make(chan struct{}),
 		cacheMap: make(map[*workspace.Workspace][]string),
 	}
-	p.flushTimer = time.NewTimer(5 * time.Second)
+	p.flushTimer = time.NewTimer(SymbolParserFlushInterval)
 	return p
 }
 
@@ -245,7 +249,7 @@ func (p *SymbolParser) Start(wg *sync.WaitGroup) {
 				return
 			case <-p.flushTimer.C:
 				p.flushCache()
-				p.flushTimer.Reset(5 * time.Second)
+				p.flushTimer.Reset(SymbolParserFlushInterval)
 			}
 		}
 	}()

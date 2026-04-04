@@ -1,6 +1,7 @@
 package running
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -174,14 +175,13 @@ func TestStartNewServer_GetwdFails(t *testing.T) {
 		t.Skip("child process – skip to prevent cascade")
 	}
 
-	os.Setenv("HAYSTACK_SKIP_STARTNEW", "1")
-	defer os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
-
 	savedArgs := os.Args
 	defer func() { os.Args = savedArgs }()
 	os.Args = []string{"test-binary", "--daemon"}
 
-	// Create a temp dir, chdir to it, then remove it to break os.Getwd()
+	// Create a temp dir, chdir to it, then remove it to break os.Getwd().
+	// NOTE: do NOT set HAYSTACK_SKIP_STARTNEW here — that would cause
+	// an early return before reaching the os.Getwd() call.
 	tmpDir, err := os.MkdirTemp("", "startnew-test-*")
 	assert.NoError(t, err)
 
@@ -196,6 +196,7 @@ func TestStartNewServer_GetwdFails(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Should hit the os.Getwd error path and return early
+	// (no child is spawned because the error occurs before os.StartProcess)
 	StartNewServer()
 }
 
@@ -230,7 +231,59 @@ func TestStartNewServer_EmptyArgs_Panics(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// runtime.go – UserHomeDir error path cannot be tested (log.Fatalf exits).
-// runtime.go – Executable error path cannot be tested (log.Fatalf exits).
-// These remain at ~71% due to untestable fatal error branches.
+// runtime.go – StartNewServer early return when HAYSTACK_SKIP_STARTNEW is set
 // ---------------------------------------------------------------------------
+
+func TestStartNewServer_SkipEnvVar(t *testing.T) {
+	// Verify that setting the guard env var causes an immediate return
+	// without spawning a child process or touching os.Args.
+	t.Setenv("HAYSTACK_SKIP_STARTNEW", "1")
+
+	// Intentionally do NOT set os.Args — if StartNewServer tried to
+	// access os.Args[1:] it would work but hit os.StartProcess; the
+	// point is it should return before any of that.
+	StartNewServer()
+}
+
+// ---------------------------------------------------------------------------
+// runtime.go – StartNewServer with os.Executable() failure (lines 82-85)
+// ---------------------------------------------------------------------------
+
+func TestStartNewServer_ExecutableFails(t *testing.T) {
+	saved := os.Getenv("HAYSTACK_SKIP_STARTNEW")
+	os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
+	defer os.Setenv("HAYSTACK_SKIP_STARTNEW", saved)
+
+	origExe := osExecutable
+	osExecutable = func() (string, error) {
+		return "", fmt.Errorf("injected executable error")
+	}
+	defer func() { osExecutable = origExe }()
+
+	// Should log error and return without crashing
+	StartNewServer()
+}
+
+// ---------------------------------------------------------------------------
+// runtime.go – StartNewServer with os.StartProcess failure (lines 112-115)
+// ---------------------------------------------------------------------------
+
+func TestStartNewServer_StartProcessFails(t *testing.T) {
+	saved := os.Getenv("HAYSTACK_SKIP_STARTNEW")
+	os.Unsetenv("HAYSTACK_SKIP_STARTNEW")
+	defer os.Setenv("HAYSTACK_SKIP_STARTNEW", saved)
+
+	savedArgs := os.Args
+	defer func() { os.Args = savedArgs }()
+	os.Args = []string{"test-binary", "--daemon"}
+
+	// Point osExecutable to a non-existent file so StartProcess fails
+	origExe := osExecutable
+	osExecutable = func() (string, error) {
+		return "/nonexistent/path/to/binary", nil
+	}
+	defer func() { osExecutable = origExe }()
+
+	// Should log "Failed to start new process" and return
+	StartNewServer()
+}

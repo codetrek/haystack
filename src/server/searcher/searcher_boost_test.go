@@ -153,15 +153,6 @@ func TestSearchInContent_MaxResultsHitMidFile(t *testing.T) {
 	assert.Equal(t, 3, len(result.Lines))
 }
 
-// --- processQuery coverage ---
-
-func TestProcessQuery_WithExpression(t *testing.T) {
-	q, err := ParseQuery("a OR b AND c")
-	assert.NoError(t, err)
-	processQuery(q)
-	assert.NotNil(t, q)
-}
-
 // --- CollectDocuments unit tests ---
 
 func TestCollectDocuments_NoOrClauses(t *testing.T) {

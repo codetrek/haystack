@@ -11,7 +11,10 @@ import (
 
 	"github.com/codetrek/haystack/conf"
 	"github.com/codetrek/haystack/server/core/idtable"
+	"github.com/codetrek/haystack/server/core/pebble"
 	"github.com/codetrek/haystack/server/core/storage"
+	"github.com/codetrek/haystack/shared/running"
+	"github.com/codetrek/haystack/utils/queue"
 )
 
 // TestInitLog_Stdout verifies initLog configures stdout logging.
@@ -112,4 +115,43 @@ func TestRun_IdTableInitError(t *testing.T) {
 	// Clean up
 	idtable.Close()
 	helperDb.Close()
+}
+
+// TestRun_LockError tests Run() when CheckAndLockServer fails (line 36-38).
+func TestRun_LockError(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a blocker file so MkdirAll fails inside CheckAndLockServer.
+	blocker := filepath.Join(tmpDir, "blocker")
+	err := os.WriteFile(blocker, []byte("x"), 0644)
+	assert.NoError(t, err)
+
+	running.ResetLockFileForTest()
+	running.RegisterLockFile(filepath.Join(blocker, "sub", "lock.pid"))
+
+	// Run() should log the error and return without crashing.
+	Run()
+}
+
+// TestRun_RunError tests Run() when run() returns an error (line 47-48).
+func TestRun_RunError(t *testing.T) {
+	restore := saveAndMockInits()
+	defer restore()
+
+	// Make invertedindexInit fail so run() returns an error.
+	invertedindexInit = func(_ pebble.DB, _ *queue.Mpsc) error {
+		return errFake
+	}
+
+	setupRunEnv(t)
+
+	// Ensure CheckAndLockServer succeeds by using a valid lock path.
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	running.ResetLockFileForTest()
+	running.RegisterLockFile(lockPath)
+
+	// Run() should log the error from run() and return without crashing.
+	Run()
+
+	idtable.Close()
 }

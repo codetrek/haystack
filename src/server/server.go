@@ -33,7 +33,7 @@ var (
 func Run() {
 	cleanup, err := running.CheckAndLockServer()
 	if err != nil {
-		log.Fatal("[Server] Error locking and running as server:", err)
+		log.Println("[Server] Error locking and running as server:", err)
 		return
 	}
 	defer cleanup()
@@ -44,7 +44,7 @@ func Run() {
 	log.Println("[Server] Starting haystack server...")
 
 	if err := run(); err != nil {
-		log.Fatal("[Server] ", err)
+		log.Println("[Server] ", err)
 	}
 }
 

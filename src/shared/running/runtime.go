@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	userHomeDir string
-	daemonMode  = flag.Bool("daemon", false, "Run in daemon mode")
-	version     string
+	userHomeDir  string
+	daemonMode   = flag.Bool("daemon", false, "Run in daemon mode")
+	version      string
+	osExecutable = os.Executable // for test injection
 )
 
 func SetVersion(ver string) {
@@ -37,8 +38,7 @@ func UserHomeDir() string {
 	initHomeDir.Do(func() {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("[Running] Failed to get user's home directory: %v", err)
-			os.Exit(1)
+			panic("[Running] Failed to get user's home directory: " + err.Error())
 		}
 		userHomeDir = homeDir
 	})
@@ -60,8 +60,7 @@ func Executable() string {
 	once.Do(func() {
 		path, err := os.Executable()
 		if err != nil {
-			log.Fatalf("[Running] Failed to get executable path: %v", err)
-			return
+			panic("[Running] Failed to get executable path: " + err.Error())
 		}
 		executable = utils.NormalizePath(path)
 	})
@@ -80,7 +79,7 @@ func StartNewServer() {
 		return
 	}
 
-	executable, err := os.Executable()
+	executable, err := osExecutable()
 	if err != nil {
 		log.Printf("[Running] Failed to get executable path: %v", err)
 		return
