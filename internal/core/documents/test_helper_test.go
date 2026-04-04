@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/internal/testutil"
 )
 
 // testEnv holds all resources created during test setup so they can

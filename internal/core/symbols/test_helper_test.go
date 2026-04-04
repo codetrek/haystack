@@ -6,9 +6,9 @@ import (
 	"testing"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/internal/utils/queue"
 )
 
