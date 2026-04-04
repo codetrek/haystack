@@ -14,4 +14,4 @@ node_modules/
 
 .cache/
 .haystack/
-haystack
+/haystack
