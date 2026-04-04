@@ -53,4 +53,4 @@ test-safe: test-docker-build
 
 test-safe-race: test-docker-build
 	@echo "Running tests with race detector in Docker (isolated)..."
-	@docker run --rm --cpus=2 --memory=4g --pids-limit=256 --network=none $(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && cd /app/src && go test -race ./... -count=1 -timeout 5m"
+	@docker run --rm --cpus=2 --memory=4g --pids-limit=256 --network=none $(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && go test -race ./... -count=1 -timeout 5m"
