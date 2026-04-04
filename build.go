@@ -50,7 +50,7 @@ func main() {
 			"-ldflags", ldflags,
 			"-gcflags=all=-l",
 			"-o", binPath,
-			"main.go",
+			"./cmd/haystack/",
 		}
 
 		cmd := exec.Command("go", args...)
@@ -68,7 +68,7 @@ func main() {
 		}
 
 		pwd, _ := os.Getwd()
-		deps := filepath.Join(pwd, "..", "deps", fmt.Sprintf("%s-%s", t.GOOS, t.GOARCH))
+		deps := filepath.Join(pwd, "deps", fmt.Sprintf("%s-%s", t.GOOS, t.GOARCH))
 
 		zipName := fmt.Sprintf("%s-%s-%s-v%s.zip", appName, t.GOOS, t.GOARCH, version)
 		zipPath := filepath.Join(outputDir, zipName)

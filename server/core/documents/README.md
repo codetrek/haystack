@@ -35,7 +35,7 @@ The storage system is built on top of PebbleDB, a high-performance key-value sto
 
 ## Key-Value Schema
 
-The storage system uses byte-prefixed keys for different data types. These prefixes are constants defined in `src/server/core/storage/types.go`.
+The storage system uses byte-prefixed keys for different data types. These prefixes are constants defined in `server/core/storage/types.go`.
 
 * `KeyTypeDocWorkspace` (byte `10`): Document-related workspace metadata.
 * `KeyTypeDocMeta` (byte `12`): Document metadata.
