@@ -35,10 +35,7 @@ func GetAll() []types.Workspace {
 	for _, workspace := range workspaces {
 		indexing := workspace.GetIndexingStatus()
 
-		totalFiles := workspace.TotalFiles
-		if totalFiles == 0 && indexing != nil {
-			totalFiles = indexing.TotalFiles
-		}
+		totalFiles := workspace.GetTotalFiles()
 
 		result = append(result, types.Workspace{
 			Id:               workspace.Id,
@@ -48,8 +45,8 @@ func GetAll() []types.Workspace {
 			UseGlobalFilters: workspace.UseGlobalFilters,
 			Filters:          workspace.Filters,
 			LastAccessed:     workspace.LastAccessed,
-			LastFullSync:     workspace.LastFullSync,
-			Indexing:         workspace.indexingStatus != nil,
+			LastFullSync:     workspace.GetLastFullSync(),
+			Indexing:         indexing != nil,
 		})
 	}
 

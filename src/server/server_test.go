@@ -105,7 +105,7 @@ func waitForIndexingDone(t *testing.T, wsPath string, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		ws, err := workspace.GetByPath(wsPath)
-		if err == nil && !ws.LastFullSync.IsZero() && ws.GetIndexingStatus() == nil {
+		if err == nil && !ws.GetLastFullSync().IsZero() && ws.GetIndexingStatus() == nil {
 			// Wait for inverted index flush ticker + cooldown to commit.
 			time.Sleep(200 * time.Millisecond)
 			return

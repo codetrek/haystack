@@ -130,7 +130,7 @@ This is a test project.`,
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			ws, wsErr := workspace.GetByPath(testWorkspacePath)
-			if wsErr == nil && !ws.LastFullSync.IsZero() && ws.GetIndexingStatus() == nil {
+			if wsErr == nil && !ws.GetLastFullSync().IsZero() && ws.GetIndexingStatus() == nil {
 				break
 			}
 			time.Sleep(15 * time.Millisecond)

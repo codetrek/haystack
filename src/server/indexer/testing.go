@@ -6,6 +6,8 @@ package indexer
 // This is required because Stop() closes channels that cannot be
 // reopened, and Go does not allow sending on a closed channel.
 func ResetForTest() {
+	mu.Lock()
+	defer mu.Unlock()
 	scanner = NewScanner()
 	parser = NewParser()
 	writer = NewWriter()

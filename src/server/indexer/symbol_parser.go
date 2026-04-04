@@ -201,6 +201,12 @@ type SymbolParser struct {
 	done  chan struct{}
 	ctags string
 
+	// started is true only if Start() successfully launched workers.
+	// Stop() checks this instead of re-reading config to avoid deadlocks
+	// when the config changes between Start() and Stop().
+	started     bool
+	workerCount int
+
 	// cache files for each workspace
 	cacheMap   map[*workspace.Workspace][]string
 	cacheMutex sync.Mutex
@@ -234,7 +240,8 @@ func (p *SymbolParser) Start(wg *sync.WaitGroup) {
 	p.ctags = ctagsPath
 	log.Printf("[SymbolParser] Using ctags at %s", p.ctags)
 
-	for i := 0; i < conf.Get().Server.SymbolParserWorkers; i++ {
+	workers := conf.Get().Server.SymbolParserWorkers
+	for i := 0; i < workers; i++ {
 		wg.Add(1)
 		go p.run(i, wg)
 	}
@@ -253,15 +260,18 @@ func (p *SymbolParser) Start(wg *sync.WaitGroup) {
 			}
 		}
 	}()
+
+	p.workerCount = workers
+	p.started = true
 }
 
 func (p *SymbolParser) Stop() {
-	if !conf.Get().Symbols.EnableFeature {
+	if !p.started {
 		return
 	}
 
 	close(p.stop)
-	for range conf.Get().Server.SymbolParserWorkers {
+	for range p.workerCount {
 		<-p.done
 	}
 	close(p.done)

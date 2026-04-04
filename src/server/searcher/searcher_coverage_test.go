@@ -647,12 +647,12 @@ func TestFullIntegration(t *testing.T) {
 	indexer.Sync(sharedWS, false)
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		if !sharedWS.LastFullSync.IsZero() {
+		if !sharedWS.GetLastFullSync().IsZero() {
 			break
 		}
 		time.Sleep(15 * time.Millisecond)
 	}
-	if sharedWS.LastFullSync.IsZero() {
+	if sharedWS.GetLastFullSync().IsZero() {
 		t.Fatal("shared workspace indexing did not complete within timeout")
 	}
 	// Wait for symbol parsing: poll until GetDocFunctions returns non-empty
@@ -703,12 +703,12 @@ func TestFullIntegration(t *testing.T) {
 		indexer.Sync(ws, false)
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
-			if !ws.LastFullSync.IsZero() {
+			if !ws.GetLastFullSync().IsZero() {
 				break
 			}
 			time.Sleep(15 * time.Millisecond)
 		}
-		if ws.LastFullSync.IsZero() {
+		if ws.GetLastFullSync().IsZero() {
 			t.Fatal("indexing did not complete within timeout")
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -1815,7 +1815,7 @@ func TestFullIntegration(t *testing.T) {
 		indexer.Sync(delWS, false)
 		dl := time.Now().Add(10 * time.Second)
 		for time.Now().Before(dl) {
-			if !delWS.LastFullSync.IsZero() {
+			if !delWS.GetLastFullSync().IsZero() {
 				break
 			}
 			time.Sleep(15 * time.Millisecond)

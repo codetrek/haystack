@@ -115,6 +115,13 @@ func (w *Workspace) Save() error {
 	return internal.Save(w.Id, string(json))
 }
 
+func (w *Workspace) GetLastFullSync() time.Time {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	return w.LastFullSync
+}
+
 func (w *Workspace) UpdateLastFullSync() {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()

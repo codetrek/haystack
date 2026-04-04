@@ -264,7 +264,7 @@ func TestUpdateLastFullSync_NoIndexingStatus(t *testing.T) {
 	if ws.TotalFiles != before {
 		t.Errorf("TotalFiles changed from %d to %d without indexing status", before, ws.TotalFiles)
 	}
-	if ws.LastFullSync.IsZero() {
+	if ws.GetLastFullSync().IsZero() {
 		t.Error("LastFullSync should be set after UpdateLastFullSync")
 	}
 }
