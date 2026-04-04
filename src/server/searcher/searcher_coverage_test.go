@@ -1070,6 +1070,29 @@ func TestFullIntegration(t *testing.T) {
 		assert.Equal(t, 0, len(result))
 	})
 
+	// --- sortDocuments: large DocIds triggers ScanFiles path (line 50-55) ---
+	t.Run("sortDocuments large docids uses ScanFiles", func(t *testing.T) {
+		// Build a SearchResult with >10000 fake DocIds to trigger the ScanFiles branch.
+		largeDocIds := make(map[string]struct{}, 10001)
+		for i := 0; i < 10001; i++ {
+			largeDocIds[fmt.Sprintf("fake-doc-%d", i)] = struct{}{}
+		}
+		// Also insert real indexed doc IDs so ScanFiles finds matches.
+		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+			largeDocIds[id] = struct{}{}
+			return true
+		})
+
+		sr := &invertedindex.SearchResult{
+			DocIds:     largeDocIds,
+			WildDocIds: map[string]struct{}{},
+		}
+		result := sortDocuments(sharedWS.Id, nil, sr, func(_ string) bool { return true })
+		assert.NotNil(t, result)
+		// Should contain at least the real indexed files
+		assert.True(t, len(result) > 0, "ScanFiles path should find real indexed documents")
+	})
+
 	// --- sortDocuments: editor same dir / parent dir ---
 	t.Run("sortDocuments editor same dir", func(t *testing.T) {
 		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
