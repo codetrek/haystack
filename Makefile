@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt clean
+.PHONY: build test coverage fmt clean test-docker-build test-safe test-safe-race
 
 APP_NAME=haystack
 BUILD_DIR=build
@@ -40,3 +40,16 @@ fmt:
 clean:
 	@echo "Cleaning..."
 	@$(RM_RF)
+
+DOCKER_TEST_IMAGE=haystack-test
+
+test-docker-build:
+	@docker build -f Dockerfile.test -t $(DOCKER_TEST_IMAGE) .
+
+test-safe: test-docker-build
+	@echo "Running tests in Docker (isolated)..."
+	@docker run --rm --cpus=2 --memory=2g --pids-limit=256 --network=none $(DOCKER_TEST_IMAGE)
+
+test-safe-race: test-docker-build
+	@echo "Running tests with race detector in Docker (isolated)..."
+	@docker run --rm --cpus=2 --memory=4g --pids-limit=256 --network=none $(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && cd /app/src && go test -race ./... -count=1 -timeout 5m"
