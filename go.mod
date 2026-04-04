@@ -6,7 +6,6 @@ toolchain go1.24.2
 
 require (
 	github.com/AntoineAugusti/wordsegmentation v0.0.0-20190117104728-17d202823a3d
-	github.com/alecthomas/participle/v2 v2.1.4
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gabriel-vasile/mimetype v1.4.9
