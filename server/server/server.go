@@ -20,30 +20,32 @@ func StartServer(wg *sync.WaitGroup, addr string, socketPath string) {
 
 	var shuttingDown atomic.Bool
 
-	http.HandleFunc("/", http.NotFound)
-	http.HandleFunc("/health", handleHealth)
-	http.HandleFunc("/api/v1/server/restart", handleRestart)
-	http.HandleFunc("/api/v1/server/stop", handleStop)
-	http.HandleFunc("/api/v1/server/status", handleStatus)
+	mux := http.NewServeMux()
 
-	http.HandleFunc("/api/v1/document/update", handleUpdateDocument)
-	http.HandleFunc("/api/v1/document/delete", handleDeleteDocument)
+	mux.HandleFunc("/", http.NotFound)
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/api/v1/server/restart", handleRestart)
+	mux.HandleFunc("/api/v1/server/stop", handleStop)
+	mux.HandleFunc("/api/v1/server/status", handleStatus)
 
-	http.HandleFunc("/api/v1/workspace/create", handleCreateWorkspace)
-	http.HandleFunc("/api/v1/workspace/delete", handleDeleteWorkspace)
-	http.HandleFunc("/api/v1/workspace/list", handleListWorkspace)
-	http.HandleFunc("/api/v1/workspace/get", handleGetWorkspace)
-	http.HandleFunc("/api/v1/workspace/sync-all", handleSyncAllWorkspaces)
-	http.HandleFunc("/api/v1/workspace/sync", handleSyncWorkspace)
-	http.HandleFunc("/api/v1/workspace/update", handleUpdateWorkspace)
-	http.HandleFunc("/api/v1/workspace/move", handleMoveWorkspace)
+	mux.HandleFunc("/api/v1/document/update", handleUpdateDocument)
+	mux.HandleFunc("/api/v1/document/delete", handleDeleteDocument)
 
-	http.HandleFunc("/api/v1/search/content", handleSearchContent)
-	http.HandleFunc("/api/v1/search/files", handleSearchFiles)
-	http.HandleFunc("/api/v1/search/symbols", handleSearchSymbols)
+	mux.HandleFunc("/api/v1/workspace/create", handleCreateWorkspace)
+	mux.HandleFunc("/api/v1/workspace/delete", handleDeleteWorkspace)
+	mux.HandleFunc("/api/v1/workspace/list", handleListWorkspace)
+	mux.HandleFunc("/api/v1/workspace/get", handleGetWorkspace)
+	mux.HandleFunc("/api/v1/workspace/sync-all", handleSyncAllWorkspaces)
+	mux.HandleFunc("/api/v1/workspace/sync", handleSyncWorkspace)
+	mux.HandleFunc("/api/v1/workspace/update", handleUpdateWorkspace)
+	mux.HandleFunc("/api/v1/workspace/move", handleMoveWorkspace)
+
+	mux.HandleFunc("/api/v1/search/content", handleSearchContent)
+	mux.HandleFunc("/api/v1/search/files", handleSearchFiles)
+	mux.HandleFunc("/api/v1/search/symbols", handleSearchSymbols)
 
 	if addr != "" {
-		mcpInit(addr)
+		mcpInit(addr, mux)
 	} else {
 		log.Println("[HTTP] No TCP address provided, skipping MCP server initialization")
 	}
@@ -52,7 +54,8 @@ func StartServer(wg *sync.WaitGroup, addr string, socketPath string) {
 	var tcpServer *http.Server
 	if addr != "" {
 		tcpServer = &http.Server{
-			Addr: addr,
+			Addr:    addr,
+			Handler: mux,
 		}
 		go func() {
 			log.Printf("[HTTP] Server starting on %s", addr)
@@ -76,7 +79,7 @@ func StartServer(wg *sync.WaitGroup, addr string, socketPath string) {
 		if err != nil {
 			log.Fatalf("[HTTP] Error: Listen on unix socket %s failed: %v", socketPath, err)
 		}
-		unixSocketServer = &http.Server{}
+		unixSocketServer = &http.Server{Handler: mux}
 		go func() {
 			log.Printf("[HTTP] Unix socket server starting on %s", socketPath)
 			err := unixSocketServer.Serve(unixSocketListener)

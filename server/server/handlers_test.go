@@ -1324,7 +1324,8 @@ var mcpInitOnce sync.Once
 
 func TestMcpInit(t *testing.T) {
 	mcpInitOnce.Do(func() {
-		mcpInit("127.0.0.1:19999")
+		mux := http.NewServeMux()
+		mcpInit("127.0.0.1:19999", mux)
 	})
 	// If we get here without panic, the init succeeded.
 }
@@ -1579,10 +1580,6 @@ var startServerUnixOnce sync.Once
 
 func TestStartServer_UnixSocket(t *testing.T) {
 	startServerUnixOnce.Do(func() {
-		// Reset the default mux to avoid duplicate route panic from the
-		// previous TestStartServer_NoAddrNoSocket call.
-		http.DefaultServeMux = http.NewServeMux()
-
 		socketPath := filepath.Join(t.TempDir(), "haystack-test.sock")
 
 		// Initialize shutdown for this test.
@@ -1619,9 +1616,6 @@ var startServerTCPAndUnixOnce sync.Once
 
 func TestStartServer_TCPAndUnix(t *testing.T) {
 	startServerTCPAndUnixOnce.Do(func() {
-		// Reset the default mux again.
-		http.DefaultServeMux = http.NewServeMux()
-
 		socketPath := filepath.Join(t.TempDir(), "haystack-test-both.sock")
 		// Use port 0 style — pick a high ephemeral port to reduce collision risk.
 		tcpAddr := "127.0.0.1:0"
@@ -1670,8 +1664,6 @@ var startServerRemoveOnce sync.Once
 
 func TestStartServer_UnixSocketRemovesExisting(t *testing.T) {
 	startServerRemoveOnce.Do(func() {
-		http.DefaultServeMux = http.NewServeMux()
-
 		socketPath := filepath.Join(t.TempDir(), "haystack-test-existing.sock")
 
 		// Create a stale socket file.
@@ -1709,10 +1701,7 @@ func setupMCPHandler(t *testing.T) http.HandlerFunc {
 	t.Helper()
 	mcpHandlerOnce.Do(func() {
 		captureMux := http.NewServeMux()
-		origMux := http.DefaultServeMux
-		http.DefaultServeMux = captureMux
-		mcpInit("127.0.0.1:29999")
-		http.DefaultServeMux = origMux
+		mcpInit("127.0.0.1:29999", captureMux)
 
 		// Extract the concrete handler registered for "/mcp".
 		h, _ := captureMux.Handler(httptest.NewRequest("GET", "/mcp", nil))
