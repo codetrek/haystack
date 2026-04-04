@@ -1,0 +1,12 @@
+FROM golang:1.23
+
+WORKDIR /app
+
+# Copy dependency files first for better caching
+COPY src/go.mod src/go.sum ./src/
+RUN cd src && go mod download
+
+# Copy everything
+COPY . .
+
+CMD ["bash", "-c", "ulimit -u 256 && cd /app/src && go test ./... -count=1 -timeout 5m"]
