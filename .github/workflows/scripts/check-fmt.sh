@@ -10,7 +10,7 @@ unformatted=$(find . -name "*.go" -not -path "./vendor/*" | xargs gofmt -l)
 if [ -n "$unformatted" ]; then
     echo "Error: The following files are not formatted correctly:"
     echo "$unformatted"
-    echo "Please run 'gofmt -w .' to format your code."
+    echo "Please run 'gofmt -w \$(find . -name \"*.go\" -not -path \"./vendor/*\")' to format your code."
     exit 1
 fi
 
