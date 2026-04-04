@@ -7,9 +7,9 @@ import (
 // TestSimpleFilterCaseInsensitiveIntegration performs integration tests for case-insensitive matching
 func TestSimpleFilterCaseInsensitiveIntegration(t *testing.T) {
 	tests := []struct {
-		name        string
-		patterns    []string
-		testCases   []struct {
+		name      string
+		patterns  []string
+		testCases []struct {
 			path     string
 			isDir    bool
 			expected bool
@@ -88,13 +88,13 @@ func TestSimpleFilterCaseInsensitiveIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			filter := NewSimpleFilter(tt.patterns)
-			
+
 			for _, tc := range tt.testCases {
 				t.Run(tc.path, func(t *testing.T) {
 					result := filter.Match(tc.path, tc.isDir)
-					
+
 					if result != tc.expected {
-						t.Errorf("Test failed for path '%s': %s. Expected %v, got %v", 
+						t.Errorf("Test failed for path '%s': %s. Expected %v, got %v",
 							tc.path, tt.description, tc.expected, result)
 						t.Logf("Patterns: %v", tt.patterns)
 					}
@@ -107,9 +107,9 @@ func TestSimpleFilterCaseInsensitiveIntegration(t *testing.T) {
 // TestSimpleFilterExcludeCaseInsensitiveIntegration performs integration tests for case-insensitive exclude matching
 func TestSimpleFilterExcludeCaseInsensitiveIntegration(t *testing.T) {
 	tests := []struct {
-		name        string
-		patterns    []string
-		testCases   []struct {
+		name      string
+		patterns  []string
+		testCases []struct {
 			path     string
 			isDir    bool
 			expected bool
@@ -154,13 +154,13 @@ func TestSimpleFilterExcludeCaseInsensitiveIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			filter := NewSimpleFilterExclude(tt.patterns)
-			
+
 			for _, tc := range tt.testCases {
 				t.Run(tc.path, func(t *testing.T) {
 					result := filter.Match(tc.path, tc.isDir)
-					
+
 					if result != tc.expected {
-						t.Errorf("Test failed for path '%s': %s. Expected %v, got %v", 
+						t.Errorf("Test failed for path '%s': %s. Expected %v, got %v",
 							tc.path, tt.description, tc.expected, result)
 						t.Logf("Patterns: %v", tt.patterns)
 					}

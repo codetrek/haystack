@@ -10,11 +10,18 @@ import (
 )
 
 type KeywordsMerger struct {
-	shutdown   context.Context
-	shutdownFn context.CancelFunc
-	mergerDone chan struct{}
-	merging    Merging
+	shutdown       context.Context
+	shutdownFn     context.CancelFunc
+	mergerDone     chan struct{}
+	merging        Merging
+	InitialDelay   time.Duration // delay before the first merge scan (default 300s)
+	CompletedDelay time.Duration // delay after a full scan completes (default 8h)
 }
+
+const (
+	defaultInitialDelay   = 300 * time.Second
+	defaultCompletedDelay = 8 * 3600 * time.Second
+)
 
 type Merging struct {
 	StartTime            time.Time `json:"start_time"`
@@ -72,7 +79,10 @@ func (km *KeywordsMerger) Start() {
 func (km *KeywordsMerger) run() {
 	log.Printf("[Inverted] Keywords merger: started")
 
-	nextDelay := 300 * time.Second
+	nextDelay := km.InitialDelay
+	if nextDelay == 0 {
+		nextDelay = defaultInitialDelay
+	}
 
 	for {
 		select {
@@ -124,7 +134,10 @@ func (km *KeywordsMerger) run() {
 			// we've reached the end of the database
 			// reset the nextIter to the beginning
 			// and set a longer delay time
-			nextDelay = 8 * 3600 * time.Second
+			nextDelay = km.CompletedDelay
+			if nextDelay == 0 {
+				nextDelay = defaultCompletedDelay
+			}
 		}
 	}
 }

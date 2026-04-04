@@ -42,7 +42,7 @@ func handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 				Path:         ws.Path,
 				CreatedAt:    ws.CreatedAt,
 				LastAccessed: ws.LastAccessed,
-				LastFullSync: ws.LastFullSync,
+				LastFullSync: ws.GetLastFullSync(),
 				Indexing:     true,
 			},
 		})
@@ -68,7 +68,7 @@ func handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 			Path:         ws.Path,
 			CreatedAt:    ws.CreatedAt,
 			LastAccessed: ws.LastAccessed,
-			LastFullSync: ws.LastFullSync,
+			LastFullSync: ws.GetLastFullSync(),
 			Indexing:     true,
 		},
 	})
@@ -182,7 +182,7 @@ func handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 			TotalFiles:   ws.GetTotalFiles(),
 			CreatedAt:    ws.CreatedAt,
 			LastAccessed: ws.LastAccessed,
-			LastFullSync: ws.LastFullSync,
+			LastFullSync: ws.GetLastFullSync(),
 			Indexing:     false,
 		},
 	})
@@ -338,7 +338,7 @@ func handleMoveWorkspace(w http.ResponseWriter, r *http.Request) {
 			TotalFiles:   ws.GetTotalFiles(),
 			CreatedAt:    ws.CreatedAt,
 			LastAccessed: ws.LastAccessed,
-			LastFullSync: ws.LastFullSync,
+			LastFullSync: ws.GetLastFullSync(),
 			Indexing:     false,
 		},
 	})

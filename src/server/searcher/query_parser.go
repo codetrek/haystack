@@ -68,15 +68,7 @@ func ParseQuery(query string) (*Query, error) {
 		return nil, err
 	}
 
-	// Process quoted terms to remove quotes
-	processQuery(result)
-
 	return result, nil
-}
-
-// processQuery post-processes the parsed query
-func processQuery(q *Query) {
-	// Post-processing logic if needed
 }
 
 // SearchFiles searches the files in the workspace

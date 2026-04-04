@@ -12,6 +12,7 @@ import (
 )
 
 var (
+	mu           sync.Mutex
 	shutdown     context.Context
 	cancel       func()
 	shutdownOnce *sync.Once
@@ -23,9 +24,16 @@ var (
 func InitShutdown(wg *sync.WaitGroup) {
 	restart.Store(false)
 
+	mu.Lock()
 	shutdown, cancel = context.WithCancel(context.Background())
-	wg.Add(1)
 	shutdownOnce = &sync.Once{}
+	// Capture local copies so the goroutine doesn't race on package-level vars.
+	localShutdown := shutdown
+	localOnce := shutdownOnce
+	localCancel := cancel
+	mu.Unlock()
+
+	wg.Add(1)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
@@ -36,8 +44,10 @@ func InitShutdown(wg *sync.WaitGroup) {
 		select {
 		case <-c:
 			log.Println("[Running] Received interrupt signal, shutting down...")
-			Shutdown()
-		case <-shutdown.Done():
+			localOnce.Do(func() {
+				localCancel()
+			})
+		case <-localShutdown.Done():
 		}
 	}()
 }
@@ -52,22 +62,36 @@ func IsRestart() bool {
 }
 
 func Shutdown() {
-	shutdownOnce.Do(func() {
-		cancel()
+	mu.Lock()
+	once := shutdownOnce
+	fn := cancel
+	mu.Unlock()
+
+	once.Do(func() {
+		fn()
 	})
 }
 
 func GetShutdown() context.Context {
+	mu.Lock()
+	defer mu.Unlock()
 	return shutdown
 }
 
 func WaitingForShutdown() {
-	<-shutdown.Done()
+	mu.Lock()
+	ctx := shutdown
+	mu.Unlock()
+	<-ctx.Done()
 }
 
 func IsShuttingDown() bool {
+	mu.Lock()
+	ctx := shutdown
+	mu.Unlock()
+
 	select {
-	case <-shutdown.Done():
+	case <-ctx.Done():
 		return true
 	default:
 		return false

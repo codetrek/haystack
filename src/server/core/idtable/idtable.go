@@ -16,6 +16,10 @@ import (
 const LRUCacheSize = 20_0000
 const BatchSize = 100
 
+// CommitInterval controls how often the background goroutine flushes the batch.
+// Tests may override this to a smaller value to avoid long sleeps.
+var CommitInterval = 5 * time.Second
+
 var (
 	mu    sync.Mutex
 	db    pebble.DB
@@ -81,7 +85,7 @@ func Init(database pebble.DB) error {
 	go func() {
 		for {
 			select {
-			case <-time.After(5 * time.Second):
+			case <-time.After(CommitInterval):
 				mu.Lock()
 				tryCommit()
 				mu.Unlock()

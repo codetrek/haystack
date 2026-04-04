@@ -82,6 +82,7 @@ func (m *Mpsc) Start() {
 	m.done = make(chan struct{})
 
 	go func() {
+		defer close(m.done)
 		for {
 			task, ok := <-m.q
 			if !ok {
@@ -90,8 +91,6 @@ func (m *Mpsc) Start() {
 			task.Run()
 		}
 	}()
-
-	close(m.done)
 }
 
 func (m *Mpsc) Stop() {
@@ -102,9 +101,9 @@ func (m *Mpsc) Stop() {
 
 	// Stop the queue
 	close(m.q)
+	<-m.done
 	m.q = nil
 
-	<-m.done
 	log.Printf("[%s] Queue stopped", m.name)
 }
 

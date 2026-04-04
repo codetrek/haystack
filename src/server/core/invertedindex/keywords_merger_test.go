@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/server/core/pebble"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -327,15 +328,17 @@ func (d *mockDB) GetIncrementalId(key []byte) (int, error) {
 
 // TestMergeKeywordsIndexEmptyInput tests merging with an empty initial state
 func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
-	// Create a mock database for testing
+	// Save and defer-restore original functions
 	originalDB := db
+	defer func() { db = originalDB }()
+
+	// Create a mock database for testing
 	mockDB := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Empty database, no keys to scan
 		},
 	}
 	db = mockDB
-	defer func() { db = originalDB }()
 
 	// Set up test data
 	input := Merging{
@@ -365,9 +368,15 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 
 // TestMergeKeywordsIndexSingleTable tests merging keywords from a single table
 func TestMergeKeywordsIndexSingleTable(t *testing.T) {
-	// Save original functions
+	// Save and defer-restore original functions
 	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := NewBatch
+	defer func() {
+		db = originalDB
+		writeInvertedIndex = originalWriteKeywordIndex
+		NewBatch = originalNewBatch
+	}()
 
 	writtenTables := []int{}
 	writtenKeywords := []string{}
@@ -415,10 +424,6 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 	// Run function
 	result := mergeKeywordsIndex(input, 6)
-
-	// Restore original functions
-	db = originalDB
-	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Validate results
 	if result.NextIter != "" {
@@ -475,9 +480,15 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 // TestMergeKeywordsIndexMultipleTables tests merging keywords from multiple tables
 func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
-	// Save original functions
+	// Save and defer-restore original functions
 	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := NewBatch
+	defer func() {
+		db = originalDB
+		writeInvertedIndex = originalWriteKeywordIndex
+		NewBatch = originalNewBatch
+	}()
 
 	// Track writes by table
 	writtenData := make(map[int]map[string][]string) // tableId -> keyword -> docIDs
@@ -548,10 +559,6 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 
 	// Run function
 	result := mergeKeywordsIndex(input, 6)
-
-	// Restore original functions
-	db = originalDB
-	writeInvertedIndex = originalWriteKeywordIndex
 
 	// Validate results
 	if result.NextIter != "" {
@@ -681,9 +688,15 @@ func (m *mockBatchWriteWithFuncs) DeletePrefix(prefix []byte) error {
 
 // TestMergeKeywordsIndexTimeout tests the timeout behavior of mergeKeywordsIndex
 func TestMergeKeywordsIndexTimeout(t *testing.T) {
-	// Save original functions
+	// Save and defer-restore original functions
 	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := NewBatch
+	defer func() {
+		db = originalDB
+		writeInvertedIndex = originalWriteKeywordIndex
+		NewBatch = originalNewBatch
+	}()
 
 	// Create a lot of entries with properly formatted keys to trigger timeout
 	keyCount := 1000
@@ -744,10 +757,6 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 
 	result := mergeKeywordsIndex(input, 5)
 
-	// Restore original functions
-	db = originalDB
-	writeInvertedIndex = originalWriteKeywordIndex
-
 	// Verify we hit the timeout (NextIter should be non-empty)
 	if result.NextIter == "" {
 		t.Errorf("Expected timeout with non-empty NextIter, but got empty NextIter")
@@ -764,4 +773,321 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// ---------------------------------------------------------------------------
+// mergeKeywordTask.Run – cover both branches (pendingWrites empty / non-empty)
+// ---------------------------------------------------------------------------
+
+func TestMergeKeywordTask_Run_NoPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// pendingWrites is reset to empty in setupTestEnv
+	task := &mergeKeywordTask{
+		merging: Merging{
+			NextIter: string(KeyTypeRow),
+		},
+	}
+
+	err := task.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be false")
+	}
+}
+
+func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Add a pending write to trigger the waiting path
+	pendingWrites[1] = &PendingTableWrites{}
+
+	task := &mergeKeywordTask{
+		merging: Merging{
+			NextIter: string(KeyTypeRow),
+		},
+	}
+
+	err := task.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be true")
+	}
+
+	// Clean up
+	pendingWrites = map[int]*PendingTableWrites{}
+}
+
+// ---------------------------------------------------------------------------
+// KeywordsMerger.GetWait – verify it returns the mergerDone channel
+// ---------------------------------------------------------------------------
+
+func TestKeywordsMerger_GetWait(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &KeywordsMerger{}
+	km.Start()
+
+	ch := km.GetWait()
+	if ch == nil {
+		t.Fatal("expected non-nil channel from GetWait")
+	}
+
+	km.Shutdown()
+
+	select {
+	case <-ch:
+		// success — channel closed after shutdown
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetWait channel not closed after shutdown")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// KeywordsMerger.run – exercise the merge loop via mpsc queue
+// This test creates a KeywordsMerger, immediately shuts it down,
+// and verifies the shutdown path. The 300s initial timer makes it
+// impractical to test the merge-loop path without modifying prod code.
+// ---------------------------------------------------------------------------
+
+func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &KeywordsMerger{}
+	km.Start()
+
+	// Verify mergerDone is not closed yet
+	select {
+	case <-km.mergerDone:
+		t.Fatal("mergerDone should not be closed before shutdown")
+	default:
+		// expected
+	}
+
+	km.Shutdown()
+	km.Wait()
+}
+
+// TestKeywordsMerger_RunMergeWithData exercises the merge log path
+// (lines 105-111) by providing mock DB data that triggers actual row merging.
+func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Save and mock writeInvertedIndex + NewBatch so mergeKeywordsIndex works.
+	origWrite := writeInvertedIndex
+	origBatch := NewBatch
+	defer func() {
+		writeInvertedIndex = origWrite
+		NewBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+		// no-op: we don't need to persist data
+	}
+	NewBatch = func(db pebble.DB) pebble.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	// Provide mergeable data: two rows for "keyword1" that will be merged.
+	scanCalled := false
+	origDB := db
+	db = &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			if scanCalled {
+				return // second call returns nothing (end of DB)
+			}
+			scanCalled = true
+			keys := [][]byte{
+				encodeInvertedKey(testTable1, "keyword1", 2),
+				encodeInvertedKey(testTable1, "keyword1", 3),
+			}
+			values := []string{
+				MakeDocsForKeyword("doc1", "doc2"),
+				MakeDocsForKeyword("doc3", "doc4", "doc5"),
+			}
+			for i, key := range keys {
+				if !fn(key, []byte(values[i])) {
+					return
+				}
+			}
+		},
+	}
+	defer func() { db = origDB }()
+
+	km := &KeywordsMerger{InitialDelay: 10 * time.Millisecond}
+	km.Start()
+
+	// Wait for the merge loop to run at least once.
+	time.Sleep(200 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// After merging, TotalRowsBefore should be 2 and TotalRowsAfter 1
+	// (two rows merged into one), so MergedRowCount() > 0.
+	if km.merging.MergedRowCount() <= 0 {
+		t.Errorf("expected MergedRowCount > 0, got %d", km.merging.MergedRowCount())
+	}
+}
+
+// TestKeywordsMerger_NewScanAfterComplete exercises lines 88-94:
+// after a full scan completes (NextIter=""), the next timer tick
+// resets NextIter and starts a new scan.
+func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	origWrite := writeInvertedIndex
+	origBatch := NewBatch
+	defer func() {
+		writeInvertedIndex = origWrite
+		NewBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
+	NewBatch = func(db pebble.DB) pebble.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	// Empty DB: first scan completes immediately (NextIter becomes "").
+	// With CompletedDelay=10ms, the second timer tick fires quickly and
+	// enters the NextIter=="" branch (lines 88-94), resetting for a new scan.
+	scanCount := 0
+	origDB := db
+	db = &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			scanCount++
+		},
+	}
+	defer func() { db = origDB }()
+
+	km := &KeywordsMerger{
+		InitialDelay:   10 * time.Millisecond,
+		CompletedDelay: 10 * time.Millisecond,
+	}
+	km.Start()
+
+	// Wait enough for at least two full scan cycles.
+	time.Sleep(300 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// scanCount >= 2 means the merger re-entered the loop and started
+	// a new scan (lines 88-94 executed).
+	assert.True(t, scanCount >= 2,
+		"expected at least 2 scan cycles (new scan after complete), got %d", scanCount)
+}
+
+// TestMergeKeywordsIndex_WellBatchedSkip exercises lines 210-215:
+// when a keyword row has doccount > maxKeywordIndexSize/2, it is
+// considered "well batched" and skipped without merging.
+func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
+	origDB := db
+	origWrite := writeInvertedIndex
+	origBatch := NewBatch
+	defer func() {
+		db = origDB
+		writeInvertedIndex = origWrite
+		NewBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
+	NewBatch = func(db pebble.DB) pebble.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	maxSize := 10 // maxKeywordIndexSize = 10, so threshold = 10/2 = 5
+
+	// Create a row with doccount=6 (> maxSize/2=5) → well batched, should be skipped.
+	db = &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			key := encodeInvertedKey(testTable1, "keyword1", 6) // doccount=6 > 5
+			value := MakeDocsForKeyword("d1", "d2", "d3", "d4", "d5", "d6")
+			fn(key, []byte(value))
+		},
+	}
+
+	input := Merging{
+		NextIter: string(KeyTypeRow),
+	}
+
+	result := mergeKeywordsIndex(input, maxSize)
+
+	// The row should be counted but NOT merged (skipped as well-batched).
+	// TotalRowsBefore and TotalRowsAfter should be equal (no reduction).
+	assert.Equal(t, result.TotalRowsBefore, result.TotalRowsAfter,
+		"well-batched rows should not be merged, row counts should be equal")
+	assert.Equal(t, 0, result.MergedRowCount(), "no rows should be merged")
+}
+
+// TestKeywordsMerger_RunWithPendingWrites exercises the WaitingForFlushCache
+// branch inside run() by having pending writes when the merge task runs.
+func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Insert pending writes so the merge task sees them and sets WaitingForFlushCache.
+	pw := getPendingWrite(1)
+	pw.InvertedIndex["testword"] = RelatedDocs{
+		DocIds:    []string{"doc1"},
+		UpdatedAt: time.Now(),
+	}
+
+	km := &KeywordsMerger{InitialDelay: 10 * time.Millisecond}
+	km.Start()
+
+	// Let the timer fire. The merge task should see pending writes and
+	// set WaitingForFlushCache, causing nextDelay = 5s.
+	time.Sleep(100 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// Clean up
+	delete(pendingWrites, 1)
+}
+
+// ---------------------------------------------------------------------------
+// mergeKeywordTask.Run via mpscQueue – exercises Run through the queue
+// ---------------------------------------------------------------------------
+
+func TestMergeKeywordTask_RunViaQueue(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	task := &mergeKeywordTask{
+		merging: Merging{
+			NextIter: string(KeyTypeRow),
+		},
+	}
+
+	err := mpscQueue.RunTask(task)
+	if err != nil {
+		t.Fatalf("unexpected error from RunTask: %v", err)
+	}
+	if task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be false with empty pendingWrites")
+	}
 }

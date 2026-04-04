@@ -27,6 +27,7 @@ type Config struct {
 	CIMode          bool   // Enable CI mode (GitHub Actions error format, fail on CRITICAL)
 	RaceDetection   bool   // Enable -race flag
 	ExcludePackages string // Packages to exclude (comma-separated)
+	ExcludeFiles    string // File path substrings to exclude from function/block reports (comma-separated)
 	CoverProfile    string // Coverage profile path
 	UncoveredLimit  int    // Max uncovered blocks to show
 	ShowTestCounts  bool   // Show TESTS column in package summary
@@ -135,7 +136,8 @@ func parseConfig() Config {
 		ThresholdTotal:   90.0,
 		CIMode:           os.Getenv("CI") == "true",
 		RaceDetection:    false,
-		ExcludePackages:  "haystack/scripts/",
+		ExcludePackages:  "haystack/scripts/,haystack/cmd",
+		ExcludeFiles:     "internal/testutil/,indexer/testing.go,main.go",
 		CoverProfile:     "/tmp/coverage.out",
 		UncoveredLimit:   10,
 		ShowTestCounts:   true,
@@ -456,6 +458,7 @@ func getFunctionCoverage() []FuncCoverage {
 
 	var funcs []FuncCoverage
 	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	excludeFiles := strings.Split(cfg.ExcludeFiles, ",")
 	for scanner.Scan() {
 		line := scanner.Text()
 		line = strings.TrimPrefix(line, ModulePrefix)
@@ -466,6 +469,22 @@ func getFunctionCoverage() []FuncCoverage {
 		}
 
 		if fields[0] == "total:" {
+			continue
+		}
+
+		// Skip excluded files/functions
+		excluded := false
+		for _, ex := range excludeFiles {
+			if ex != "" && strings.Contains(fields[0], ex) {
+				excluded = true
+				break
+			}
+		}
+		// Also skip functions ending in "ForTest" — test helpers in non-test files
+		if strings.HasSuffix(fields[1], "ForTest") {
+			excluded = true
+		}
+		if excluded {
 			continue
 		}
 

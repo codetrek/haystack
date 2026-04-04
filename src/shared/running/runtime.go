@@ -11,9 +11,10 @@ import (
 )
 
 var (
-	userHomeDir string
-	daemonMode  = flag.Bool("daemon", false, "Run in daemon mode")
-	version     string
+	userHomeDir  string
+	daemonMode   = flag.Bool("daemon", false, "Run in daemon mode")
+	version      string
+	osExecutable = os.Executable // for test injection
 )
 
 func SetVersion(ver string) {
@@ -37,8 +38,7 @@ func UserHomeDir() string {
 	initHomeDir.Do(func() {
 		homeDir, err := os.UserHomeDir()
 		if err != nil {
-			log.Fatalf("[Running] Failed to get user's home directory: %v", err)
-			os.Exit(1)
+			panic("[Running] Failed to get user's home directory: " + err.Error())
 		}
 		userHomeDir = homeDir
 	})
@@ -60,8 +60,7 @@ func Executable() string {
 	once.Do(func() {
 		path, err := os.Executable()
 		if err != nil {
-			log.Fatalf("[Running] Failed to get executable path: %v", err)
-			return
+			panic("[Running] Failed to get executable path: " + err.Error())
 		}
 		executable = utils.NormalizePath(path)
 	})
@@ -73,7 +72,14 @@ func ExecutablePath() string {
 }
 
 func StartNewServer() {
-	executable, err := os.Executable()
+	// Guard against infinite fork when the test binary spawns itself.
+	// Child processes inherit this env var and bail out immediately.
+	if os.Getenv("HAYSTACK_SKIP_STARTNEW") != "" {
+		log.Println("[Running] Skipping StartNewServer (HAYSTACK_SKIP_STARTNEW is set)")
+		return
+	}
+
+	executable, err := osExecutable()
 	if err != nil {
 		log.Printf("[Running] Failed to get executable path: %v", err)
 		return
@@ -86,10 +92,15 @@ func StartNewServer() {
 	}
 
 	args := os.Args[1:]
+	env := os.Environ()
+	// Propagate the guard to the child so it won't re-spawn itself
+	// when it is a test binary that runs all tests again.
+	env = append(env, "HAYSTACK_SKIP_STARTNEW=1")
+
 	procAttr := &os.ProcAttr{
 		Dir:   wd,
 		Files: []*os.File{nil, os.Stdout, os.Stderr},
-		Env:   os.Environ(),
+		Env:   env,
 	}
 
 	if args[0] != "--daemon" {

@@ -11,6 +11,7 @@ import (
 	"github.com/codetrek/haystack/server/core/documents"
 	"github.com/codetrek/haystack/server/core/idtable"
 	"github.com/codetrek/haystack/server/core/invertedindex"
+	"github.com/codetrek/haystack/server/core/pebble"
 	"github.com/codetrek/haystack/server/core/storage"
 	"github.com/codetrek/haystack/server/core/symbols"
 	"github.com/codetrek/haystack/server/core/workspace"
@@ -21,10 +22,18 @@ import (
 	"github.com/codetrek/haystack/utils/queue"
 )
 
+// Function variables for Init calls, enabling test overrides.
+var (
+	invertedindexInit = func(db pebble.DB, mpsc *queue.Mpsc) error { return invertedindex.Init(db, mpsc) }
+	documentsInit     = func(db pebble.DB, mpsc *queue.Mpsc) error { return documents.Init(db, mpsc) }
+	workspaceInit     = func(db pebble.DB) error { return workspace.Init(db) }
+	symbolsInit       = func(db pebble.DB, mpsc *queue.Mpsc) error { return symbols.Init(db, mpsc) }
+)
+
 func Run() {
 	cleanup, err := running.CheckAndLockServer()
 	if err != nil {
-		log.Fatal("[Server] Error locking and running as server:", err)
+		log.Println("[Server] Error locking and running as server:", err)
 		return
 	}
 	defer cleanup()
@@ -34,54 +43,53 @@ func Run() {
 	log.Println(strings.Repeat("=", 64))
 	log.Println("[Server] Starting haystack server...")
 
+	if err := run(); err != nil {
+		log.Println("[Server] ", err)
+	}
+}
+
+func run() error {
 	wg := &sync.WaitGroup{}
 	running.InitShutdown(wg)
 
 	db, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "data"), conf.Get().Server.CacheSize)
 	if err != nil {
-		log.Fatal("[Server] Error initializing data storage:", err)
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing data storage: %w", err)
 	}
 
 	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
 	if err != nil {
-		log.Fatal("[Server] Error initializing index storage:", err)
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing index storage: %w", err)
 	}
 
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
 	if err := idtable.Init(db); err != nil {
-		log.Fatal("[Server] Error initializing id table:", err)
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing id table: %w", err)
 	}
 
-	if err := invertedindex.Init(indexdb, mpsc); err != nil {
-		log.Fatal("[Server] Error initializing inverted index:", err)
+	if err := invertedindexInit(indexdb, mpsc); err != nil {
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing inverted index: %w", err)
 	}
 
-	if err := documents.Init(db, mpsc); err != nil {
-		log.Fatal("[Server] Error initializing storage:", err)
+	if err := documentsInit(db, mpsc); err != nil {
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing storage: %w", err)
 	}
 
-	if err := workspace.Init(db); err != nil {
-		log.Fatal("[Server] Error initializing workspace:", err)
+	if err := workspaceInit(db); err != nil {
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing workspace: %w", err)
 	}
 
-	if err := symbols.Init(db, mpsc); err != nil {
-		log.Fatal("[Server] Error initializing symbols:", err)
+	if err := symbolsInit(db, mpsc); err != nil {
 		running.Shutdown()
-		return
+		return fmt.Errorf("error initializing symbols: %w", err)
 	}
 
 	indexer.Run(wg)
@@ -116,4 +124,5 @@ func Run() {
 	log.Println("[Server] Storage closed")
 
 	log.Println("[Server] Haystack server stopped")
+	return nil
 }

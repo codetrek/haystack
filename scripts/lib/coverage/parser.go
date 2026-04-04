@@ -7,6 +7,16 @@ import (
 
 const MAX_GAP_LINES = 20
 
+// isFileExcluded checks whether a file path matches any entry in cfg.ExcludeFiles.
+func isFileExcluded(filePath string) bool {
+	for _, ex := range strings.Split(cfg.ExcludeFiles, ",") {
+		if ex != "" && strings.Contains(filePath, ex) {
+			return true
+		}
+	}
+	return false
+}
+
 // parseLine parses a single coverage file line into a Block
 // Format: file:startLine.startCol,endLine.endCol numStmt count
 func parseLine(line string) (Block, bool) {
@@ -23,6 +33,11 @@ func parseLine(line string) (Block, bool) {
 
 	// Filter out prefix
 	filePath = strings.TrimPrefix(filePath, "github.com/codetrek/haystack/")
+
+	// Skip excluded files
+	if isFileExcluded(filePath) {
+		return Block{}, false
+	}
 
 	rangeParts := strings.Split(locParts[1], ",")
 	if len(rangeParts) != 2 {

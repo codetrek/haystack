@@ -59,9 +59,9 @@ func TestSimpleFilterCaseSensitivity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			filter := NewSimpleFilter(tt.patterns)
 			result := filter.Match(tt.testPath, tt.isDir)
-			
+
 			if result != tt.expected {
-				t.Errorf("Test %s failed: %s. Expected %v, got %v", 
+				t.Errorf("Test %s failed: %s. Expected %v, got %v",
 					tt.name, tt.description, tt.expected, result)
 				t.Logf("Patterns: %v", tt.patterns)
 				t.Logf("Test path: %s", tt.testPath)
@@ -101,9 +101,9 @@ func TestSimpleFilterExcludeCaseSensitivity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			filter := NewSimpleFilterExclude(tt.patterns)
 			result := filter.Match(tt.testPath, tt.isDir)
-			
+
 			if result != tt.expected {
-				t.Errorf("Test %s failed: %s. Expected %v, got %v", 
+				t.Errorf("Test %s failed: %s. Expected %v, got %v",
 					tt.name, tt.description, tt.expected, result)
 				t.Logf("Patterns: %v", tt.patterns)
 				t.Logf("Test path: %s", tt.testPath)

@@ -19,9 +19,20 @@ type Batch interface {
 	Count() int32
 }
 
+// pebbleBatchWriter is an internal interface satisfied by *pebble.Batch,
+// enabling substitution in tests.
+type pebbleBatchWriter interface {
+	Set(key, value []byte, opts *pebble.WriteOptions) error
+	Delete(key []byte, opts *pebble.WriteOptions) error
+	DeleteRange(start, end []byte, opts *pebble.WriteOptions) error
+	Commit(o *pebble.WriteOptions) error
+	Reset()
+	Close() error
+}
+
 type PebbleBatch struct {
 	db    *PebbleDB
-	batch *pebble.Batch
+	batch pebbleBatchWriter
 
 	// maxBatchSize is the maximum number of operations in the batch, count is the number of operations in the batch
 	// The batch will be committed silently when the count reaches maxBatchSize, and a new batch will be created

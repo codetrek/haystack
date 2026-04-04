@@ -15,29 +15,43 @@ import (
 )
 
 var (
+	mu           sync.Mutex
 	scanner      = NewScanner()
 	parser       = NewParser()
 	writer       = NewWriter()
 	symbolParser = NewSymbolParser()
 )
 
+// snapshotComponents returns a snapshot of the package-level components under the lock.
+func snapshotComponents() (*Scanner, *Parser, *Writer, *SymbolParser) {
+	mu.Lock()
+	defer mu.Unlock()
+	return scanner, parser, writer, symbolParser
+}
+
 // Run starts the indexer components in separate goroutines.
 func Run(wg *sync.WaitGroup) {
 	log.Println("[Indexer] Starting...")
 
-	scanner.Start(wg)
-	parser.Start(wg)
-	writer.Start(wg)
-	symbolParser.Start(wg)
+	// Capture local copies under the lock so the goroutine below is not
+	// affected by a concurrent ResetForTest() call in another test.
+	sc, pa, wr, sp := snapshotComponents()
+
+	sc.Start(wg)
+	pa.Start(wg)
+	wr.Start(wg)
+	sp.Start(wg)
 	log.Println("[Indexer] Started.")
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		<-running.GetShutdown().Done()
 		log.Println("[Indexer] Stopping...")
-		scanner.Stop()
-		parser.Stop()
-		writer.Stop()
-		symbolParser.Stop()
+		sc.Stop()
+		pa.Stop()
+		wr.Stop()
+		sp.Stop()
 		log.Println("[Indexer] Stopped.")
 	}()
 }
@@ -65,7 +79,7 @@ func SyncIfNeeded(workspacePath string) error {
 		return fmt.Errorf("workspace not found")
 	}
 
-	if workspace.LastFullSync.IsZero() {
+	if workspace.GetLastFullSync().IsZero() {
 		return Sync(workspace, false)
 	} else {
 		log.Printf("[Indexer] Workspace %s is up to date, skipping", workspacePath)
@@ -74,10 +88,17 @@ func SyncIfNeeded(workspacePath string) error {
 }
 
 func Sync(workspace *workspace.Workspace, forceRefresh bool) error {
-	return scanner.Add(workspace, forceRefresh)
+	mu.Lock()
+	sc := scanner
+	mu.Unlock()
+	return sc.Add(workspace, forceRefresh)
 }
 
 func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
+	mu.Lock()
+	pa := parser
+	mu.Unlock()
+
 	fullPath := filepath.Join(workspace.Path, relPath)
 	docid, err := GetDocumentId(relPath)
 	if err != nil {
@@ -97,7 +118,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 		}
 
 		// Add new file to the parser queue
-		parser.Add(workspace, relPath)
+		pa.Add(workspace, relPath)
 	} else {
 		// log.Printf("[Indexer] Syncing existing file `%s` in workspace `%s`", relPath, workspace.Path)
 		stat, err := os.Stat(fullPath)
@@ -106,7 +127,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 			RemoveFile(workspace, relPath)
 		} else {
 			// Sync existing file to the parser queue
-			parser.Add(workspace, relPath)
+			pa.Add(workspace, relPath)
 		}
 	}
 
@@ -155,6 +176,10 @@ func RefreshFilesIfNeeded(workspaceId int, docs map[string]*documents.Document) 
 }
 
 func RefreshFileIfNeeded(workspace *workspace.Workspace, doc *documents.Document) (removed bool, err error) {
+	mu.Lock()
+	pa := parser
+	mu.Unlock()
+
 	fullPath := filepath.Join(workspace.Path, doc.RelPath)
 
 	stat, err := os.Stat(fullPath)
@@ -166,7 +191,7 @@ func RefreshFileIfNeeded(workspace *workspace.Workspace, doc *documents.Document
 
 	// If the file has been modified, add it to the parser queue
 	if stat.ModTime().UnixNano() != doc.ModifiedTime {
-		parser.Add(workspace, doc.RelPath)
+		pa.Add(workspace, doc.RelPath)
 	}
 
 	return false, nil
