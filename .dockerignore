@@ -1,0 +1,9 @@
+.git
+build
+.vscode
+.idea
+*.md
+LICENSE
+docs
+scripts
+deps
