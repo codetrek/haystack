@@ -2,6 +2,7 @@ package pebble
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"path/filepath"
 	"strconv"
@@ -27,9 +28,21 @@ type DB interface {
 	ScanRange(begin []byte, end []byte, cb func(key, value []byte) bool) error
 }
 
+// pebbleStore is an internal interface satisfied by *pebble.DB, enabling
+// substitution in tests to exercise error paths.
+type pebbleStore interface {
+	Set(key, value []byte, opts *pebble.WriteOptions) error
+	Get(key []byte) ([]byte, io.Closer, error)
+	Delete(key []byte, opts *pebble.WriteOptions) error
+	NewBatch() *pebble.Batch
+	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+	Compact(start, end []byte, parallelize bool) error
+	Close() error
+}
+
 type PebbleDB struct {
 	path   string
-	db     *pebble.DB
+	db     pebbleStore
 	closed atomic.Bool
 }
 

@@ -23,6 +23,41 @@ func TestGetDocument_Missing(t *testing.T) {
 	assert.Nil(t, doc, "missing doc should return nil")
 }
 
+func TestGetDocument_DbGetError(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	mustCreateWorkspace(t, 1)
+
+	// Swap in a closed DB stub so db.Get() returns an error
+	restore := simulateClosedDB()
+	defer restore()
+
+	doc, err := GetDocument(1, "any-doc", false)
+	assert.Error(t, err, "GetDocument should propagate db.Get error")
+	assert.Nil(t, doc)
+}
+
+func TestGetDocument_DecodeError(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	mustCreateWorkspace(t, 1)
+
+	// Write invalid (non-JSON) data directly to the document meta key
+	// so DecodeDocumentMetaValue will fail.
+	docid := "corrupt-doc"
+	key := EncodeDocumentMetaKey(1, docid)
+	err := db.Put(key, []byte("this is not valid json"))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	doc, err := GetDocument(1, docid, false)
+	assert.Error(t, err, "GetDocument should propagate decode error")
+	assert.Nil(t, doc)
+}
+
 func TestGetDocument_RoundTrip_WithoutWords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()

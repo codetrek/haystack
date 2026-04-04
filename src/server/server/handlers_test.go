@@ -310,6 +310,55 @@ func TestHandleUpdateWorkspace_Success(t *testing.T) {
 	assert.Equal(t, "Ok", resp.Message)
 }
 
+func TestHandleUpdateWorkspace_SaveFailure(t *testing.T) {
+	// Create a workspace, then mark it as deleted so that Save() fails
+	// (Serialize returns an error for deleted workspaces).
+	wsPath := filepath.Join(testEnv.tempDir, "ws-update-save-fail")
+	os.MkdirAll(wsPath, 0755)
+
+	createReq := types.CreateWorkspaceRequest{
+		Workspace:        wsPath,
+		UseGlobalFilters: true,
+	}
+	createBody, _ := json.Marshal(createReq)
+	r1 := httptest.NewRequest("POST", "/api/v1/workspace/create", bytes.NewReader(createBody))
+	w1 := httptest.NewRecorder()
+	handleCreateWorkspace(w1, r1)
+
+	var createResp types.CreateWorkspaceResponse
+	json.NewDecoder(w1.Body).Decode(&createResp)
+	assert.Equal(t, 0, createResp.Code)
+
+	// Get the workspace object and mark it as deleted, so Save() will fail
+	// when Serialize() returns "workspace is deleted" error.
+	ws, err := workspace.GetByPath(wsPath)
+	assert.NoError(t, err)
+	ws.SetDeleted()
+
+	// Now call the update handler — GetByPath will still find it in the map,
+	// but ws.Save() will fail because Serialize() rejects deleted workspaces.
+	updateReq := types.UpdateWorkspaceRequest{
+		Workspace:        wsPath,
+		UseGlobalFilters: false,
+		Filters: &types.Filters{
+			Include: []string{"*.go"},
+		},
+	}
+	updateBody, _ := json.Marshal(updateReq)
+	r2 := httptest.NewRequest("POST", "/api/v1/workspace/update", bytes.NewReader(updateBody))
+	w2 := httptest.NewRecorder()
+
+	handleUpdateWorkspace(w2, r2)
+
+	assert.Equal(t, http.StatusOK, w2.Code)
+
+	var resp types.CommonResponse
+	json.NewDecoder(w2.Body).Decode(&resp)
+	assert.Equal(t, 1, resp.Code, "response code should indicate failure")
+	assert.Contains(t, resp.Message, "Failed to update workspace",
+		"response message should indicate save failure")
+}
+
 func TestHandleDeleteWorkspace_NotFound(t *testing.T) {
 	request := types.DeleteWorkspaceRequest{
 		Workspace: "/nonexistent/workspace/abs",

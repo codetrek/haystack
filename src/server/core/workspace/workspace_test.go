@@ -2,12 +2,15 @@ package workspace
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/codetrek/haystack/conf"
+	"github.com/codetrek/haystack/server/core/storage"
+	"github.com/codetrek/haystack/server/core/workspace/internal"
 	"github.com/codetrek/haystack/shared/types"
 )
 
@@ -352,5 +355,54 @@ func TestGetFilters_CustomFilters_BothPopulated(t *testing.T) {
 	}
 	if filters.Exclude.Customized[0] != "target/" {
 		t.Errorf("Exclude.Customized should be custom, got %v", filters.Exclude.Customized)
+	}
+}
+
+func TestSave_Deleted(t *testing.T) {
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test/save-deleted",
+		UseGlobalFilters: true,
+	}
+	ws.SetDeleted()
+
+	err := ws.Save()
+	if err == nil {
+		t.Fatal("Save should fail for deleted workspace")
+	}
+}
+
+func TestSave_DbPutError(t *testing.T) {
+	// Set up a temporary directory and open a real DB.
+	tempDir, err := os.MkdirTemp("", "haystack-test-save-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	conf.Get().Global.DataPath = tempDir
+
+	db, err := storage.Open(filepath.Join(tempDir, "data"), 0)
+	if err != nil {
+		t.Fatalf("Failed to open storage: %v", err)
+	}
+
+	// Initialize the internal package with this DB.
+	internal.Init(db)
+
+	ws := &Workspace{
+		Id:               1,
+		Path:             "/test/save-dbput",
+		UseGlobalFilters: true,
+		CreatedAt:        time.Now(),
+		LastAccessed:     time.Now(),
+	}
+
+	// Close the DB so that db.Put() returns an error.
+	db.Close()
+
+	err = ws.Save()
+	if err == nil {
+		t.Fatal("Save should return error when db.Put fails on closed database")
 	}
 }

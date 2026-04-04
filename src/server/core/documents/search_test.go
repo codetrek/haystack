@@ -140,3 +140,44 @@ func TestScanFiles_EmptyWorkspace(t *testing.T) {
 	})
 	assert.Equal(t, 0, count, "empty workspace should yield no scan results")
 }
+
+// ---------------------------------------------------------------------------
+// ScanFiles – empty docid branch (DecodeDocumentPathKey returns "")
+// ---------------------------------------------------------------------------
+
+func TestScanFiles_EmptyDocIdSkipped(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	mustCreateWorkspace(t, 1)
+
+	// Save a normal document so we have something to scan
+	docs := []*Document{
+		{ID: "real", RelPath: "real.go", Words: []string{"w"}},
+	}
+	err := SaveNewDocuments(1, docs)
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	// Insert a key with the right prefix but an empty docid.
+	// EncodeDocumentPathKey(1, "") produces the prefix "\x0d1|", which
+	// is also a valid key with an empty docid after the pipe separator.
+	// DecodeDocumentPathKey will return docid="" for this key, triggering
+	// the `if docid == ""` branch that should skip the entry.
+	badKey := EncodeDocumentPathKey(1, "")
+	err = db.Put(badKey, []byte("phantom.go"))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	collected := map[string]string{}
+	ScanFiles(1, func(docid, relPath string) bool {
+		collected[docid] = relPath
+		return true
+	})
+
+	// Only the real document should appear; the empty-docid entry should be skipped
+	assert.Len(t, collected, 1, "empty-docid entry should be skipped by ScanFiles")
+	assert.Equal(t, "real.go", collected["real"])
+}

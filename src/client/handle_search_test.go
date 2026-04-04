@@ -358,6 +358,32 @@ func TestHandleSearch_EmptyQueryAfterParse(t *testing.T) {
 	}
 }
 
+func TestSendSearchRequest_UnmarshalError(t *testing.T) {
+	// Server returns a valid CommonResponse but with Data that cannot be
+	// unmarshalled into SearchContentResults (a JSON string instead of object).
+	startMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		// Build a CommonResponse where Data is a JSON string literal, which
+		// will fail json.Unmarshal into a struct.
+		raw := json.RawMessage(`"not a valid struct"`)
+		resp := types.CommonResponse{
+			Code:    0,
+			Message: "ok",
+			Data:    &raw,
+		}
+		b, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		w.Write(b)
+	})
+
+	_, err := sendSearchRequest(types.SearchContentRequest{Query: "test"})
+	if err == nil {
+		t.Fatal("expected error from sendSearchRequest when response data is invalid")
+	}
+	if !strings.Contains(err.Error(), "failed to parse response") {
+		t.Errorf("expected 'failed to parse response' error, got: %v", err)
+	}
+}
+
 func TestSendSearchFilesRequest_Success(t *testing.T) {
 	expected := types.SearchFilesResult{
 		Files: []string{"a.go"},
@@ -377,5 +403,29 @@ func TestSendSearchFilesRequest_Success(t *testing.T) {
 	}
 	if len(result.Files) != 1 {
 		t.Errorf("expected 1 file, got %d", len(result.Files))
+	}
+}
+
+func TestSendSearchFilesRequest_UnmarshalError(t *testing.T) {
+	// Server returns a valid CommonResponse but with Data that cannot be
+	// unmarshalled into SearchFilesResult (a JSON string instead of object).
+	startMockServer(t, func(w http.ResponseWriter, r *http.Request) {
+		raw := json.RawMessage(`"not a valid struct"`)
+		resp := types.CommonResponse{
+			Code:    0,
+			Message: "ok",
+			Data:    &raw,
+		}
+		b, _ := json.Marshal(resp)
+		w.WriteHeader(http.StatusOK)
+		w.Write(b)
+	})
+
+	_, err := sendSearchFilesRequest(types.SearchFilesRequest{Query: "test"})
+	if err == nil {
+		t.Fatal("expected error from sendSearchFilesRequest when response data is invalid")
+	}
+	if !strings.Contains(err.Error(), "failed to parse response") {
+		t.Errorf("expected 'failed to parse response' error, got: %v", err)
 	}
 }

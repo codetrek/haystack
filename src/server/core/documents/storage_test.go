@@ -107,6 +107,46 @@ func TestCloseAndWait(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Create – error paths
+// ---------------------------------------------------------------------------
+
+func TestCreate_InvertedIndexCreateTableError(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Write non-numeric data to the inverted-index next-table-id key.
+	// invertedindex.CreateTable calls db.GetIncrementalId which does
+	// strconv.Atoi on the stored value — corrupting it makes Atoi fail,
+	// which propagates as an error from CreateTable.
+	nextTableIdKey := []byte{storage.KeyTypeInvertedNextTableId}
+	err := env.DB.Put(nextTableIdKey, []byte("not-a-number"))
+	if !assert.NoError(t, err) {
+		return
+	}
+
+	err = Create(100, "should-fail")
+	assert.Error(t, err, "Create should fail when invertedindex.CreateTable returns error")
+	assert.Contains(t, err.Error(), "failed to create inverted index table")
+
+	// Restore the key so other operations work normally during teardown
+	env.DB.Delete(nextTableIdKey)
+}
+
+func TestCreate_DbPutError(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// simulateClosedDB replaces only the documents package's db with a stub
+	// that always returns errors. invertedindex.CreateTable() still uses the
+	// real DB and will succeed, but db.Put() in Create() will fail.
+	restore := simulateClosedDB()
+	defer restore()
+
+	err := Create(200, "put-should-fail")
+	assert.Error(t, err, "Create should fail when db.Put returns error")
+}
+
+// ---------------------------------------------------------------------------
 // Create + GetWorkspace (cache behaviour)
 // ---------------------------------------------------------------------------
 

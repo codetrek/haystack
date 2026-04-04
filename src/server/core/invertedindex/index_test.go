@@ -50,6 +50,23 @@ func TestCreateTable(t *testing.T) {
 	}
 }
 
+func TestCreateTable_GetIncrementalIdError(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Swap in a closed DB stub so db.GetIncrementalId() returns an error
+	restore := simulateClosedDB()
+	defer restore()
+
+	tableId, err := CreateTable("should fail")
+	if err == nil {
+		t.Fatal("expected error from CreateTable when db is closed, got nil")
+	}
+	if tableId != -1 {
+		t.Errorf("expected tableId -1 on error, got %d", tableId)
+	}
+}
+
 func TestDeleteTable(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()

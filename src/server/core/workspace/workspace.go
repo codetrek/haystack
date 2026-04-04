@@ -112,8 +112,7 @@ func (w *Workspace) Save() error {
 		return err
 	}
 
-	internal.Save(w.Id, string(json))
-	return nil
+	return internal.Save(w.Id, string(json))
 }
 
 func (w *Workspace) UpdateLastFullSync() {

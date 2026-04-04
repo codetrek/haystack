@@ -3,6 +3,7 @@ package pebble
 import (
 	"errors"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -401,6 +402,52 @@ func TestBatch_DeletePrefixError(t *testing.T) {
 
 	err := batch.DeletePrefix([]byte("pfx:"))
 	assert.ErrorIs(t, err, injectedErr)
+}
+
+// errPebbleStore is a mock pebbleStore that returns errors from Set and Delete,
+// enabling tests for the error paths in PebbleDB.Put and PebbleDB.Delete.
+type errPebbleStore struct {
+	err error
+}
+
+func (e *errPebbleStore) Set(key, value []byte, opts *pebbledb.WriteOptions) error {
+	return e.err
+}
+func (e *errPebbleStore) Get(key []byte) ([]byte, io.Closer, error) {
+	return nil, nil, e.err
+}
+func (e *errPebbleStore) Delete(key []byte, opts *pebbledb.WriteOptions) error {
+	return e.err
+}
+func (e *errPebbleStore) NewBatch() *pebbledb.Batch { return nil }
+func (e *errPebbleStore) NewIter(o *pebbledb.IterOptions) (*pebbledb.Iterator, error) {
+	return nil, e.err
+}
+func (e *errPebbleStore) Compact(start, end []byte, parallelize bool) error { return e.err }
+func (e *errPebbleStore) Close() error                                      { return nil }
+
+func TestDB_PutErrorFromUnderlying(t *testing.T) {
+	injectedErr := errors.New("disk write failed")
+	db := &PebbleDB{
+		db: &errPebbleStore{err: injectedErr},
+	}
+
+	err := db.Put([]byte("key"), []byte("value"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to put data")
+	assert.Contains(t, err.Error(), "disk write failed")
+}
+
+func TestDB_DeleteErrorFromUnderlying(t *testing.T) {
+	injectedErr := errors.New("disk delete failed")
+	db := &PebbleDB{
+		db: &errPebbleStore{err: injectedErr},
+	}
+
+	err := db.Delete([]byte("key"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to delete data")
+	assert.Contains(t, err.Error(), "disk delete failed")
 }
 
 func TestDB_ScanRange_StopEarly(t *testing.T) {
