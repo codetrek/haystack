@@ -231,7 +231,7 @@ func handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	totalFiles := ws.GetTotalFiles()
-	indexing := ws.GetIndexingStatus() != nil
+	indexing := ws.GetIndexingProgress() != nil
 
 	json.NewEncoder(w).Encode(types.GetWorkspaceResponse{
 		Code:    0,

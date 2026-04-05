@@ -25,9 +25,8 @@ const (
 // circular imports.
 var CountByWorkspaceFunc func(wsId int) int
 
-type IndexingStatus struct {
+type IndexingProgress struct {
 	StartedAt         *time.Time
-	TotalFiles        int
 	IndexedFiles      int
 	SymbolParsedFiles int
 }
@@ -43,18 +42,18 @@ type Workspace struct {
 	LastAccessed time.Time `json:"last_accessed_time"`
 	LastFullSync time.Time `json:"last_full_sync_time"`
 
-	deleted        bool            `json:"-"`
-	indexingState  IndexingState   `json:"-"`
-	indexingStatus *IndexingStatus `json:"-"`
-	mutex          sync.Mutex      `json:"-"`
+	deleted          bool              `json:"-"`
+	indexingState    IndexingState     `json:"-"`
+	indexingProgress *IndexingProgress `json:"-"`
+	mutex            sync.Mutex        `json:"-"`
 }
 
 func (w *Workspace) AddIndexingFiles(n int) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if w.indexingStatus != nil {
-		w.indexingStatus.IndexedFiles += n
+	if w.indexingProgress != nil {
+		w.indexingProgress.IndexedFiles += n
 	}
 }
 
@@ -62,8 +61,8 @@ func (w *Workspace) AddSymbolParsedFiles(n int) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if w.indexingStatus != nil {
-		w.indexingStatus.SymbolParsedFiles += n
+	if w.indexingProgress != nil {
+		w.indexingProgress.SymbolParsedFiles += n
 	}
 }
 
@@ -77,11 +76,11 @@ func (w *Workspace) GetTotalFiles() int {
 	return 0
 }
 
-func (w *Workspace) GetIndexingStatus() *IndexingStatus {
+func (w *Workspace) GetIndexingProgress() *IndexingProgress {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	return w.indexingStatus
+	return w.indexingProgress
 }
 
 func (w *Workspace) StartIndexing() error {
@@ -94,9 +93,8 @@ func (w *Workspace) StartIndexing() error {
 
 	now := time.Now()
 	w.indexingState = IndexingScanning
-	w.indexingStatus = &IndexingStatus{
+	w.indexingProgress = &IndexingProgress{
 		StartedAt:         &now,
-		TotalFiles:        0,
 		IndexedFiles:      0,
 		SymbolParsedFiles: 0,
 	}
@@ -124,8 +122,8 @@ func (w *Workspace) UpdateLastFullSync() {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if w.indexingStatus != nil {
-		w.indexingStatus = nil
+	if w.indexingProgress != nil {
+		w.indexingProgress = nil
 	}
 
 	w.indexingState = IndexingDone
@@ -156,7 +154,7 @@ func (w *Workspace) SetIndexingFailed() {
 	defer w.mutex.Unlock()
 
 	w.indexingState = IndexingFailed
-	w.indexingStatus = nil
+	w.indexingProgress = nil
 }
 
 func (w *Workspace) ResetIndexingState() {
@@ -164,7 +162,7 @@ func (w *Workspace) ResetIndexingState() {
 	defer w.mutex.Unlock()
 
 	w.indexingState = IndexingIdle
-	w.indexingStatus = nil
+	w.indexingProgress = nil
 }
 
 func (w *Workspace) GetIndexingState() IndexingState {
