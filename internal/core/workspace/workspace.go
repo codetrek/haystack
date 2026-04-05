@@ -11,6 +11,15 @@ import (
 	"github.com/codetrek/haystack/internal/shared/types"
 )
 
+type IndexingState int
+
+const (
+	IndexingIdle IndexingState = iota
+	IndexingScanning
+	IndexingDone
+	IndexingFailed
+)
+
 type IndexingStatus struct {
 	StartedAt         *time.Time
 	TotalFiles        int
@@ -30,6 +39,7 @@ type Workspace struct {
 	LastFullSync time.Time `json:"last_full_sync_time"`
 
 	deleted        bool            `json:"-"`
+	indexingState  IndexingState   `json:"-"`
 	indexingStatus *IndexingStatus `json:"-"`
 	mutex          sync.Mutex      `json:"-"`
 }
@@ -91,11 +101,12 @@ func (w *Workspace) StartIndexing() error {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if w.indexingStatus != nil {
+	if w.indexingState == IndexingScanning {
 		return fmt.Errorf("workspace is indexing")
 	}
 
 	now := time.Now()
+	w.indexingState = IndexingScanning
 	w.indexingStatus = &IndexingStatus{
 		StartedAt:         &now,
 		TotalFiles:        0,
@@ -131,6 +142,7 @@ func (w *Workspace) UpdateLastFullSync() {
 		w.indexingStatus = nil
 	}
 
+	w.indexingState = IndexingDone
 	w.LastFullSync = time.Now()
 }
 
@@ -151,6 +163,29 @@ func (w *Workspace) GetFilters() types.Filters {
 	}
 
 	return t
+}
+
+func (w *Workspace) SetIndexingFailed() {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	w.indexingState = IndexingFailed
+	w.indexingStatus = nil
+}
+
+func (w *Workspace) ResetIndexingState() {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	w.indexingState = IndexingIdle
+	w.indexingStatus = nil
+}
+
+func (w *Workspace) GetIndexingState() IndexingState {
+	w.mutex.Lock()
+	defer w.mutex.Unlock()
+
+	return w.indexingState
 }
 
 func (w *Workspace) SetDeleted() {
