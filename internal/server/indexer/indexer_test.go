@@ -9,6 +9,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
+	"github.com/codetrek/haystack/internal/core/idtable"
+	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
@@ -891,4 +893,91 @@ func TestAddOrSyncFile_ExistingDocDirectoryReplacedFile(t *testing.T) {
 	// AddOrSyncFile should handle this (directory triggers removal)
 	err = AddOrSyncFile(ws, relPath)
 	_ = err
+}
+
+// ---------------------------------------------------------------------------
+// RemoveFile — error branches
+// ---------------------------------------------------------------------------
+
+func TestRemoveFile_GetDocumentIdError(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	// Close idtable so GetDocumentId → idtable.GetId returns "database is closed"
+	idtable.Close()
+
+	err = RemoveFile(ws, "anyfile.go")
+	if err == nil {
+		t.Error("RemoveFile should return error when idtable is closed")
+	}
+}
+
+func TestRemoveFile_DocumentsDeleteError(t *testing.T) {
+	_, teardown := setupTestEnv(t)
+	defer teardown()
+
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	// workspace.Create already calls documents.Create, so the doc store
+	// exists. Deleting a file that was never indexed causes
+	// documents.DeleteDocument to return "document not found".
+	err = RemoveFile(ws, "never_indexed.go")
+	if err == nil {
+		t.Error("RemoveFile should return error when document is not found")
+	}
+}
+
+func TestRemoveFile_SymbolsDeleteError(t *testing.T) {
+	env, teardown := setupTestEnv(t)
+	defer teardown()
+
+	// Ensure symbols feature is enabled so symbols.DeleteDocument
+	// actually attempts the lookup rather than short-circuiting.
+	origSymbols := conf.Get().Symbols.EnableFeature
+	conf.Get().Symbols.EnableFeature = true
+	defer func() { conf.Get().Symbols.EnableFeature = origSymbols }()
+
+	wsDir := t.TempDir()
+	ws, err := workspace.Create(wsDir)
+	if err != nil {
+		t.Fatalf("workspace.Create: %v", err)
+	}
+
+	// Index a file so documents.DeleteDocument succeeds.
+	relPath := "sym_err.go"
+	fullPath := filepath.Join(wsDir, relPath)
+	if err := os.WriteFile(fullPath, []byte("package main\nfunc main() {}\n"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	pf := ParseFile{Workspace: ws, RelFilePath: relPath}
+	doc, newFile, _, err := parse(pf)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if doc == nil || !newFile {
+		t.Fatal("expected new doc from parse")
+	}
+
+	w := NewWriter()
+	w.processDocs([]*WriteDoc{{Workspace: ws, Document: doc, CreateNew: true}})
+
+	// Delete the symbol table metadata key from the database so that
+	// symbols.DeleteDocument → GetSymbolTable fails with a decode error.
+	env.DB.Delete(symbols.EncodeSymbolTableKey(ws.Id))
+
+	err = RemoveFile(ws, relPath)
+	if err == nil {
+		t.Error("RemoveFile should return error when symbols.DeleteDocument fails")
+	}
 }
