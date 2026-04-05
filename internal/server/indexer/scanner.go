@@ -81,6 +81,7 @@ func (s *Scanner) run(wg *sync.WaitGroup) {
 		s.setCurrent(workspace)
 		if err := s.processWorkspace(workspace, scanTask.forceRefresh); err != nil {
 			log.Printf("[Indexer] Error scanning workspace %s: %v", workspace.Path, err)
+			workspace.SetIndexingFailed()
 		} else {
 			workspace.UpdateLastFullSync()
 			workspace.Save()
