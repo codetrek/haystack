@@ -148,7 +148,6 @@ func RemoveFile(workspace *workspace.Workspace, relPath string) error {
 		return err
 	}
 
-	workspace.AddTotalFiles(-1)
 	workspace.Save()
 	return nil
 }

@@ -157,8 +157,6 @@ func (s *Scanner) processWorkspace(w *workspace.Workspace, forceRefresh bool) er
 		if include.Match(fileInfo.Path, false) {
 			parser.Add(w, fileInfo.Path)
 			fileCount++
-
-			w.AddIndexingTotalFiles(1)
 		}
 
 		if time.Since(lastTime) > 1000*time.Millisecond {

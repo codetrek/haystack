@@ -90,7 +90,6 @@ func TestStartIndexing_AfterDone_Succeeds(t *testing.T) {
 	}
 
 	// Add some files during indexing
-	ws.AddIndexingTotalFiles(10)
 
 	// Complete successfully
 	ws.UpdateLastFullSync()
@@ -100,9 +99,6 @@ func TestStartIndexing_AfterDone_Succeeds(t *testing.T) {
 	}
 	if ws.GetIndexingStatus() != nil {
 		t.Error("indexing status should be nil after UpdateLastFullSync")
-	}
-	if ws.TotalFiles != 10 {
-		t.Errorf("TotalFiles should be 10 after sync, got %d", ws.TotalFiles)
 	}
 
 	// Should be able to start indexing again
@@ -177,7 +173,6 @@ func TestScanInterruptionRecovery(t *testing.T) {
 	}
 
 	// 2. Simulate some work happening
-	ws.AddIndexingTotalFiles(50)
 	ws.AddIndexingFiles(25)
 
 	// 3. Simulate scan failure (error from processWorkspace)
@@ -206,15 +201,12 @@ func TestScanInterruptionRecovery(t *testing.T) {
 	}
 
 	// 6. Complete successfully this time
-	ws.AddIndexingTotalFiles(100)
 	ws.UpdateLastFullSync()
 
 	if ws.GetIndexingState() != IndexingDone {
 		t.Errorf("expected IndexingDone after successful completion, got %d", ws.GetIndexingState())
 	}
-	if ws.TotalFiles != 100 {
-		t.Errorf("TotalFiles should be 100 after successful re-index, got %d", ws.TotalFiles)
-	}
+
 	if ws.GetLastFullSync().IsZero() {
 		t.Error("LastFullSync should be set after successful completion")
 	}

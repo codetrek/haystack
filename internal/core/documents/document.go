@@ -104,9 +104,14 @@ func SaveNewDocuments(workspaceid int, docs []*Document) error {
 		err = batch.Commit()
 		if err != nil {
 			log.Println("[Documents] Error: failed to save new documents:", err)
+			return err
 		}
 
-		return err
+		docCountMu.Lock()
+		docCount[workspaceid] += len(docs)
+		docCountMu.Unlock()
+
+		return nil
 	})
 }
 
@@ -189,8 +194,13 @@ func DeleteDocument(workspaceId int, docId string) error {
 		err = batch.Commit()
 		if err != nil {
 			log.Println("[Documents] Failed to delete document:", err)
+			return err
 		}
 
-		return err
+		docCountMu.Lock()
+		docCount[workspaceId] -= 1
+		docCountMu.Unlock()
+
+		return nil
 	})
 }

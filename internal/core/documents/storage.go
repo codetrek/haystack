@@ -18,6 +18,9 @@ var (
 	mutex             sync.Mutex
 	Workspaces        map[int]*Workspace
 	deletedWorkspaces map[int]struct{}
+
+	docCountMu sync.RWMutex
+	docCount   map[int]int // workspaceId -> document count
 )
 
 type Workspace struct {
@@ -47,6 +50,7 @@ func Init(database pebble.DB, q *queue.Mpsc) error {
 	mpsc = q
 	Workspaces = make(map[int]*Workspace)
 	deletedWorkspaces = make(map[int]struct{})
+	docCount = make(map[int]int)
 
 	log.Println("[Documents] Initialized")
 	return nil
@@ -59,6 +63,10 @@ func CloseAndWait() {
 	mpsc = nil
 	Workspaces = nil
 	deletedWorkspaces = nil
+
+	docCountMu.Lock()
+	docCount = nil
+	docCountMu.Unlock()
 
 	log.Println("[Documents] Closed")
 }
@@ -77,7 +85,24 @@ func Create(workspaceId int, desc string) error {
 
 	// Create a new collection in the database
 	// This is a placeholder function and should be implemented
-	return db.Put(EncodeMetaKey(workspaceId), EncodeFTMetaValue(ft))
+	err = db.Put(EncodeMetaKey(workspaceId), EncodeFTMetaValue(ft))
+	if err != nil {
+		return err
+	}
+
+	// Initialize the in-memory document count by scanning the DB once
+	prefix := EncodeDocumentMetaKey(workspaceId, "")
+	count := 0
+	db.Scan(prefix, func(key, value []byte) bool {
+		count++
+		return true
+	})
+
+	docCountMu.Lock()
+	docCount[workspaceId] = count
+	docCountMu.Unlock()
+
+	return nil
 }
 
 // Delete deletes a workspace and all of its documents and keywords
@@ -95,8 +120,26 @@ func Delete(workspaceId int) error {
 		batch.DeletePrefix(EncodeDocumentMetaKey(workspaceId, ""))
 		batch.DeletePrefix(EncodeDocumentWordsKey(workspaceId, ""))
 
-		return batch.Commit()
+		err = batch.Commit()
+		if err != nil {
+			return err
+		}
+
+		// Clean up in-memory document count for this workspace
+		docCountMu.Lock()
+		delete(docCount, workspaceId)
+		docCountMu.Unlock()
+
+		return nil
 	})
+}
+
+// CountByWorkspace returns the number of documents for a given workspace ID
+// using an in-memory counter maintained by document mutations. O(1).
+func CountByWorkspace(workspaceId int) int {
+	docCountMu.RLock()
+	defer docCountMu.RUnlock()
+	return docCount[workspaceId]
 }
 
 // GetWorkspace retrieves the workspace information for a given workspace ID

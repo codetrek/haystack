@@ -87,6 +87,9 @@ func run() error {
 		return fmt.Errorf("error initializing workspace: %w", err)
 	}
 
+	// Wire up the documents count function for workspace to derive TotalFiles.
+	workspace.CountByWorkspaceFunc = documents.CountByWorkspace
+
 	if err := symbolsInit(db, mpsc); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing symbols: %w", err)
