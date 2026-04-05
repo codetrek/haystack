@@ -20,6 +20,11 @@ const (
 	IndexingFailed
 )
 
+// CountByWorkspaceFunc is a callback to count documents for a workspace.
+// It is set by the documents package during server initialization to avoid
+// circular imports.
+var CountByWorkspaceFunc func(wsId int) int
+
 type IndexingStatus struct {
 	StartedAt         *time.Time
 	TotalFiles        int
@@ -44,13 +49,6 @@ type Workspace struct {
 	mutex          sync.Mutex      `json:"-"`
 }
 
-func (w *Workspace) AddTotalFiles(n int) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	w.TotalFiles += n
-}
-
 func (w *Workspace) AddIndexingFiles(n int) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
@@ -69,25 +67,14 @@ func (w *Workspace) AddSymbolParsedFiles(n int) {
 	}
 }
 
-func (w *Workspace) AddIndexingTotalFiles(n int) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if w.indexingStatus != nil {
-		w.indexingStatus.TotalFiles += n
-	}
-}
-
 func (w *Workspace) GetTotalFiles() int {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	totalFiles := w.TotalFiles
-	if totalFiles == 0 && w.indexingStatus != nil {
-		totalFiles = w.indexingStatus.TotalFiles
+	if CountByWorkspaceFunc != nil {
+		return CountByWorkspaceFunc(w.Id)
 	}
-
-	return totalFiles
+	return 0
 }
 
 func (w *Workspace) GetIndexingStatus() *IndexingStatus {
@@ -138,7 +125,6 @@ func (w *Workspace) UpdateLastFullSync() {
 	defer w.mutex.Unlock()
 
 	if w.indexingStatus != nil {
-		w.TotalFiles = w.indexingStatus.TotalFiles
 		w.indexingStatus = nil
 	}
 

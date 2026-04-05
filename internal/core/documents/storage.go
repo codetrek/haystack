@@ -99,6 +99,18 @@ func Delete(workspaceId int) error {
 	})
 }
 
+// CountByWorkspace counts all document meta keys for a given workspace ID
+// by scanning the DB with the workspace prefix.
+func CountByWorkspace(workspaceId int) int {
+	prefix := EncodeDocumentMetaKey(workspaceId, "")
+	count := 0
+	db.Scan(prefix, func(key, value []byte) bool {
+		count++
+		return true
+	})
+	return count
+}
+
 // GetWorkspace retrieves the workspace information for a given workspace ID
 func GetWorkspace(workspaceid int) (*Workspace, error) {
 	mutex.Lock()

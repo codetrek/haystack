@@ -518,12 +518,20 @@ func TestGetAll_WithIndexingStatus(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	// Start indexing and add total files via indexing
+	// Set up CountByWorkspaceFunc to return a known value
+	CountByWorkspaceFunc = func(wsId int) int {
+		if wsId == ws.Id {
+			return 99
+		}
+		return 0
+	}
+	defer func() { CountByWorkspaceFunc = nil }()
+
+	// Start indexing
 	err = ws.StartIndexing()
 	if err != nil {
 		t.Fatalf("StartIndexing failed: %v", err)
 	}
-	ws.AddIndexingTotalFiles(99)
 
 	all := GetAll()
 	found := false
@@ -534,7 +542,7 @@ func TestGetAll_WithIndexingStatus(t *testing.T) {
 				t.Error("Workspace should be marked as indexing")
 			}
 			if w.TotalFiles != 99 {
-				t.Errorf("TotalFiles = %d, want 99 (from indexing status)", w.TotalFiles)
+				t.Errorf("TotalFiles = %d, want 99 (from CountByWorkspaceFunc)", w.TotalFiles)
 			}
 			break
 		}

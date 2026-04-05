@@ -26,45 +26,34 @@ func TestWorkspaceMethods(t *testing.T) {
 		LastFullSync:     time.Now(),
 	}
 
-	// Test AddTotalFiles
-	ws.AddTotalFiles(5)
-	if ws.TotalFiles != 5 {
-		t.Errorf("AddTotalFiles failed, got %d, want 5", ws.TotalFiles)
-	}
-
 	// Test StartIndexing
 	err := ws.StartIndexing()
 	if err != nil {
 		t.Fatalf("StartIndexing failed: %v", err)
 	}
 
-	// Test AddIndexingFiles and AddIndexingTotalFiles
-	ws.AddIndexingTotalFiles(10)
+	// Test AddIndexingFiles
 	ws.AddIndexingFiles(3)
 	status := ws.GetIndexingStatus()
 	if status == nil {
 		t.Fatal("Indexing status is nil")
 	}
-	if status.TotalFiles != 10 {
-		t.Errorf("AddIndexingTotalFiles failed, got %d, want 10", status.TotalFiles)
-	}
 	if status.IndexedFiles != 3 {
 		t.Errorf("AddIndexingFiles failed, got %d, want 3", status.IndexedFiles)
 	}
 
-	// Test GetTotalFiles
+	// Test GetTotalFiles with CountByWorkspaceFunc set
+	CountByWorkspaceFunc = func(wsId int) int { return 42 }
+	defer func() { CountByWorkspaceFunc = nil }()
 	totalFiles := ws.GetTotalFiles()
-	if totalFiles != 5 {
-		t.Errorf("GetTotalFiles failed, got %d, want 5", totalFiles)
+	if totalFiles != 42 {
+		t.Errorf("GetTotalFiles failed, got %d, want 42", totalFiles)
 	}
 
 	// Test UpdateLastFullSync
 	ws.UpdateLastFullSync()
 	if ws.indexingStatus != nil {
 		t.Error("UpdateLastFullSync failed to clear indexing status")
-	}
-	if ws.TotalFiles != 10 {
-		t.Errorf("UpdateLastFullSync failed to update total files, got %d, want 10", ws.TotalFiles)
 	}
 
 	// Test GetFilters
@@ -86,29 +75,59 @@ func TestWorkspaceMethods(t *testing.T) {
 	}
 }
 
-func TestWorkspaceTotalFilesConcurrency(t *testing.T) {
+func TestGetTotalFiles_WithFunc(t *testing.T) {
+	ws := &Workspace{Id: 7, Path: "/test"}
+
+	CountByWorkspaceFunc = func(wsId int) int {
+		if wsId == 7 {
+			return 100
+		}
+		return 0
+	}
+	defer func() { CountByWorkspaceFunc = nil }()
+
+	total := ws.GetTotalFiles()
+	if total != 100 {
+		t.Errorf("GetTotalFiles = %d, want 100", total)
+	}
+}
+
+func TestGetTotalFiles_WithoutFunc(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+
+	old := CountByWorkspaceFunc
+	CountByWorkspaceFunc = nil
+	defer func() { CountByWorkspaceFunc = old }()
+
+	total := ws.GetTotalFiles()
+	if total != 0 {
+		t.Errorf("GetTotalFiles = %d, want 0 when CountByWorkspaceFunc is nil", total)
+	}
+}
+
+func TestGetTotalFiles_Concurrency(t *testing.T) {
 	ws := &Workspace{
 		Id:               98,
 		Path:             "/test/path",
 		UseGlobalFilters: true,
-		TotalFiles:       0,
 	}
 
-	// Test concurrent access
+	CountByWorkspaceFunc = func(wsId int) int { return 42 }
+	defer func() { CountByWorkspaceFunc = nil }()
+
+	// Test concurrent access to GetTotalFiles
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ws.AddTotalFiles(1)
-			ws.GetTotalFiles()
+			total := ws.GetTotalFiles()
+			if total != 42 {
+				t.Errorf("Concurrent GetTotalFiles = %d, want 42", total)
+			}
 		}()
 	}
 	wg.Wait()
-
-	if ws.TotalFiles != 100 {
-		t.Errorf("Concurrent access failed, got %d, want 100", ws.TotalFiles)
-	}
 }
 
 func TestWorkspaceFilters(t *testing.T) {
@@ -181,14 +200,6 @@ func TestAddIndexingFiles_NoIndexingStatus(t *testing.T) {
 	}
 }
 
-func TestAddIndexingTotalFiles_NoIndexingStatus(t *testing.T) {
-	ws := &Workspace{Id: 1, Path: "/test"}
-	ws.AddIndexingTotalFiles(5)
-	if ws.indexingStatus != nil {
-		t.Error("AddIndexingTotalFiles should not create indexing status")
-	}
-}
-
 func TestStartIndexing_AlreadyIndexing(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test"}
 	if err := ws.StartIndexing(); err != nil {
@@ -197,38 +208,6 @@ func TestStartIndexing_AlreadyIndexing(t *testing.T) {
 	err := ws.StartIndexing()
 	if err == nil {
 		t.Error("StartIndexing should fail when already indexing")
-	}
-}
-
-func TestGetTotalFiles_FallbackToIndexingStatus(t *testing.T) {
-	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 0}
-	if err := ws.StartIndexing(); err != nil {
-		t.Fatalf("StartIndexing failed: %v", err)
-	}
-	ws.AddIndexingTotalFiles(42)
-	total := ws.GetTotalFiles()
-	if total != 42 {
-		t.Errorf("GetTotalFiles = %d, want 42 (fallback to indexing status)", total)
-	}
-}
-
-func TestGetTotalFiles_PrefersTotalFiles(t *testing.T) {
-	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 100}
-	if err := ws.StartIndexing(); err != nil {
-		t.Fatalf("StartIndexing failed: %v", err)
-	}
-	ws.AddIndexingTotalFiles(50)
-	total := ws.GetTotalFiles()
-	if total != 100 {
-		t.Errorf("GetTotalFiles = %d, want 100 (should prefer TotalFiles)", total)
-	}
-}
-
-func TestGetTotalFiles_NoIndexingStatusZero(t *testing.T) {
-	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 0}
-	total := ws.GetTotalFiles()
-	if total != 0 {
-		t.Errorf("GetTotalFiles = %d, want 0", total)
 	}
 }
 
@@ -259,10 +238,24 @@ func TestIsDeleted_Default(t *testing.T) {
 
 func TestUpdateLastFullSync_NoIndexingStatus(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 50}
-	before := ws.TotalFiles
 	ws.UpdateLastFullSync()
-	if ws.TotalFiles != before {
-		t.Errorf("TotalFiles changed from %d to %d without indexing status", before, ws.TotalFiles)
+	// TotalFiles should remain unchanged (it's no longer overwritten)
+	if ws.TotalFiles != 50 {
+		t.Errorf("TotalFiles changed to %d, should stay 50", ws.TotalFiles)
+	}
+	if ws.GetLastFullSync().IsZero() {
+		t.Error("LastFullSync should be set after UpdateLastFullSync")
+	}
+}
+
+func TestUpdateLastFullSync_ClearsIndexingStatus(t *testing.T) {
+	ws := &Workspace{Id: 1, Path: "/test"}
+	if err := ws.StartIndexing(); err != nil {
+		t.Fatalf("StartIndexing failed: %v", err)
+	}
+	ws.UpdateLastFullSync()
+	if ws.indexingStatus != nil {
+		t.Error("UpdateLastFullSync should clear indexing status")
 	}
 	if ws.GetLastFullSync().IsZero() {
 		t.Error("LastFullSync should be set after UpdateLastFullSync")
