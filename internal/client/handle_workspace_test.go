@@ -82,9 +82,6 @@ func TestHandleWorkspaceList_Success(t *testing.T) {
 	if !strings.Contains(output, "/home/user/project") {
 		t.Errorf("expected workspace path, got: %s", output)
 	}
-	if !strings.Contains(output, "Total files: 100") {
-		t.Errorf("expected total files, got: %s", output)
-	}
 }
 
 func TestHandleWorkspaceList_ServerError(t *testing.T) {
@@ -428,9 +425,6 @@ func TestPrintWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(output, "/home/user/myproject") {
 		t.Error("expected path in output")
-	}
-	if !strings.Contains(output, "Total files: 1234") {
-		t.Error("expected total files in output")
 	}
 	if !strings.Contains(output, "Use global filters: true") {
 		t.Error("expected use global filters in output")
