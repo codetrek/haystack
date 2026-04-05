@@ -506,7 +506,7 @@ func TestGet_NotFound(t *testing.T) {
 	}
 }
 
-func TestGetAll_WithIndexingStatus(t *testing.T) {
+func TestGetAll_WithIndexingProgress(t *testing.T) {
 	cleanup, tempDir := setupFullEnv(t)
 	defer cleanup()
 

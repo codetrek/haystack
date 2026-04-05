@@ -34,7 +34,7 @@ func TestWorkspaceMethods(t *testing.T) {
 
 	// Test AddIndexingFiles
 	ws.AddIndexingFiles(3)
-	status := ws.GetIndexingStatus()
+	status := ws.GetIndexingProgress()
 	if status == nil {
 		t.Fatal("Indexing status is nil")
 	}
@@ -52,8 +52,8 @@ func TestWorkspaceMethods(t *testing.T) {
 
 	// Test UpdateLastFullSync
 	ws.UpdateLastFullSync()
-	if ws.indexingStatus != nil {
-		t.Error("UpdateLastFullSync failed to clear indexing status")
+	if ws.indexingProgress != nil {
+		t.Error("UpdateLastFullSync failed to clear indexing progress")
 	}
 
 	// Test GetFilters
@@ -169,10 +169,10 @@ func TestWorkspaceFilters(t *testing.T) {
 func TestAddSymbolParsedFiles(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test"}
 
-	// When no indexing status, should be a no-op
+	// When no indexing progress, should be a no-op
 	ws.AddSymbolParsedFiles(5)
-	if ws.indexingStatus != nil {
-		t.Error("AddSymbolParsedFiles should not create indexing status")
+	if ws.indexingProgress != nil {
+		t.Error("AddSymbolParsedFiles should not create indexing progress")
 	}
 
 	// Start indexing, then add
@@ -183,7 +183,7 @@ func TestAddSymbolParsedFiles(t *testing.T) {
 	ws.AddSymbolParsedFiles(3)
 	ws.AddSymbolParsedFiles(2)
 
-	status := ws.GetIndexingStatus()
+	status := ws.GetIndexingProgress()
 	if status == nil {
 		t.Fatal("Indexing status should not be nil")
 	}
@@ -192,11 +192,11 @@ func TestAddSymbolParsedFiles(t *testing.T) {
 	}
 }
 
-func TestAddIndexingFiles_NoIndexingStatus(t *testing.T) {
+func TestAddIndexingFiles_NoIndexingProgress(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test"}
 	ws.AddIndexingFiles(5)
-	if ws.indexingStatus != nil {
-		t.Error("AddIndexingFiles should not create indexing status")
+	if ws.indexingProgress != nil {
+		t.Error("AddIndexingFiles should not create indexing progress")
 	}
 }
 
@@ -236,7 +236,7 @@ func TestIsDeleted_Default(t *testing.T) {
 	}
 }
 
-func TestUpdateLastFullSync_NoIndexingStatus(t *testing.T) {
+func TestUpdateLastFullSync_NoIndexingProgress(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 50}
 	ws.UpdateLastFullSync()
 	// TotalFiles should remain unchanged (it's no longer overwritten)
@@ -248,14 +248,14 @@ func TestUpdateLastFullSync_NoIndexingStatus(t *testing.T) {
 	}
 }
 
-func TestUpdateLastFullSync_ClearsIndexingStatus(t *testing.T) {
+func TestUpdateLastFullSync_ClearsIndexingProgress(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test"}
 	if err := ws.StartIndexing(); err != nil {
 		t.Fatalf("StartIndexing failed: %v", err)
 	}
 	ws.UpdateLastFullSync()
-	if ws.indexingStatus != nil {
-		t.Error("UpdateLastFullSync should clear indexing status")
+	if ws.indexingProgress != nil {
+		t.Error("UpdateLastFullSync should clear indexing progress")
 	}
 	if ws.GetLastFullSync().IsZero() {
 		t.Error("LastFullSync should be set after UpdateLastFullSync")

@@ -33,7 +33,7 @@ func GetAll() []types.Workspace {
 
 	result := []types.Workspace{}
 	for _, workspace := range workspaces {
-		indexing := workspace.GetIndexingStatus()
+		indexing := workspace.GetIndexingProgress()
 
 		totalFiles := workspace.GetTotalFiles()
 

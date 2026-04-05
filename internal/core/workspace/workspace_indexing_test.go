@@ -21,12 +21,12 @@ func TestStartIndexing_IdleState(t *testing.T) {
 		t.Errorf("state should be IndexingScanning after StartIndexing, got %d", ws.GetIndexingState())
 	}
 
-	status := ws.GetIndexingStatus()
+	status := ws.GetIndexingProgress()
 	if status == nil {
-		t.Fatal("indexing status should not be nil after StartIndexing")
+		t.Fatal("indexing progress should not be nil after StartIndexing")
 	}
 	if status.StartedAt == nil {
-		t.Error("indexing status StartedAt should be set")
+		t.Error("indexing progress StartedAt should be set")
 	}
 }
 
@@ -63,8 +63,8 @@ func TestStartIndexing_AfterFailure_Succeeds(t *testing.T) {
 	if ws.GetIndexingState() != IndexingFailed {
 		t.Fatalf("state should be IndexingFailed, got %d", ws.GetIndexingState())
 	}
-	if ws.GetIndexingStatus() != nil {
-		t.Error("indexing status should be nil after SetIndexingFailed")
+	if ws.GetIndexingProgress() != nil {
+		t.Error("indexing progress should be nil after SetIndexingFailed")
 	}
 
 	// Should be able to start indexing again
@@ -76,8 +76,8 @@ func TestStartIndexing_AfterFailure_Succeeds(t *testing.T) {
 	if ws.GetIndexingState() != IndexingScanning {
 		t.Errorf("state should be IndexingScanning, got %d", ws.GetIndexingState())
 	}
-	if ws.GetIndexingStatus() == nil {
-		t.Error("indexing status should not be nil after restart")
+	if ws.GetIndexingProgress() == nil {
+		t.Error("indexing progress should not be nil after restart")
 	}
 }
 
@@ -97,8 +97,8 @@ func TestStartIndexing_AfterDone_Succeeds(t *testing.T) {
 	if ws.GetIndexingState() != IndexingDone {
 		t.Fatalf("state should be IndexingDone after UpdateLastFullSync, got %d", ws.GetIndexingState())
 	}
-	if ws.GetIndexingStatus() != nil {
-		t.Error("indexing status should be nil after UpdateLastFullSync")
+	if ws.GetIndexingProgress() != nil {
+		t.Error("indexing progress should be nil after UpdateLastFullSync")
 	}
 
 	// Should be able to start indexing again
@@ -127,8 +127,8 @@ func TestResetIndexingState(t *testing.T) {
 	if ws.GetIndexingState() != IndexingIdle {
 		t.Errorf("state should be IndexingIdle after reset, got %d", ws.GetIndexingState())
 	}
-	if ws.GetIndexingStatus() != nil {
-		t.Error("indexing status should be nil after reset")
+	if ws.GetIndexingProgress() != nil {
+		t.Error("indexing progress should be nil after reset")
 	}
 
 	// Test reset from Failed state
@@ -188,13 +188,10 @@ func TestScanInterruptionRecovery(t *testing.T) {
 		t.Fatalf("StartIndexing after failure should succeed: %v", err)
 	}
 
-	// 5. Verify the new indexing status is fresh
-	status := ws.GetIndexingStatus()
+	// 5. Verify the new indexing progress is fresh
+	status := ws.GetIndexingProgress()
 	if status == nil {
-		t.Fatal("indexing status should not be nil after restart")
-	}
-	if status.TotalFiles != 0 {
-		t.Errorf("restarted indexing should have TotalFiles=0, got %d", status.TotalFiles)
+		t.Fatal("indexing progress should not be nil after restart")
 	}
 	if status.IndexedFiles != 0 {
 		t.Errorf("restarted indexing should have IndexedFiles=0, got %d", status.IndexedFiles)
