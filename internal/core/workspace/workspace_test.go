@@ -20,7 +20,6 @@ func TestWorkspaceMethods(t *testing.T) {
 		Id:               99,
 		Path:             "/test/path",
 		UseGlobalFilters: true,
-		TotalFiles:       0,
 		CreatedAt:        time.Now(),
 		LastAccessed:     time.Now(),
 		LastFullSync:     time.Now(),
@@ -216,7 +215,6 @@ func TestSerialize_Success(t *testing.T) {
 		Id:               5,
 		Path:             "/test/serialize",
 		UseGlobalFilters: true,
-		TotalFiles:       10,
 		CreatedAt:        time.Now(),
 		LastAccessed:     time.Now(),
 	}
@@ -237,12 +235,8 @@ func TestIsDeleted_Default(t *testing.T) {
 }
 
 func TestUpdateLastFullSync_NoIndexingProgress(t *testing.T) {
-	ws := &Workspace{Id: 1, Path: "/test", TotalFiles: 50}
+	ws := &Workspace{Id: 1, Path: "/test"}
 	ws.UpdateLastFullSync()
-	// TotalFiles should remain unchanged (it's no longer overwritten)
-	if ws.TotalFiles != 50 {
-		t.Errorf("TotalFiles changed to %d, should stay 50", ws.TotalFiles)
-	}
 	if ws.GetLastFullSync().IsZero() {
 		t.Error("LastFullSync should be set after UpdateLastFullSync")
 	}
