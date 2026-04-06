@@ -27,10 +27,6 @@ func TestCJKTokenizer_TokenizeForIndex(t *testing.T) {
 	t.Run("Single CJK character is valid token", func(t *testing.T) {
 		input := "国"
 		result := cjk.TokenizeForIndex(input)
-		// A single character may or may not be a valid word per gse's dictionary.
-		// The important thing is that min token length is 1 rune, not 3.
-		// gse may or may not produce a token for a single char depending on its dict.
-		// We just verify no panic and the result is valid.
 		assert.NotNil(t, result)
 	})
 
@@ -72,7 +68,6 @@ func TestCJKTokenizer_TokenizeForIndex(t *testing.T) {
 	t.Run("Results are lowercased", func(t *testing.T) {
 		input := "中华人民共和国"
 		result := cjk.TokenizeForIndex(input)
-		// CJK characters don't have case, but we verify the lowering doesn't break anything
 		assert.NotEmpty(t, result)
 	})
 
@@ -85,8 +80,33 @@ func TestCJKTokenizer_TokenizeForIndex(t *testing.T) {
 	t.Run("Korean text", func(t *testing.T) {
 		input := "안녕하세요"
 		result := cjk.TokenizeForIndex(input)
-		// gse is primarily for Chinese; Korean may produce single-char tokens
 		assert.NotNil(t, result)
+	})
+
+	t.Run("Stop words are filtered from index tokens", func(t *testing.T) {
+		result := cjk.TokenizeForIndex("我的世界很大")
+		assert.NotEmpty(t, result)
+		for _, token := range result {
+			assert.False(t, isStopWord(token), "stop word %q should have been filtered from index", token)
+		}
+		assert.Contains(t, result, "世界")
+		assert.Contains(t, result, "很大")
+		assert.NotContains(t, result, "我")
+		assert.NotContains(t, result, "的")
+	})
+
+	t.Run("Stop words filtered but content preserved", func(t *testing.T) {
+		result := cjk.TokenizeForIndex("这是一个测试")
+		assert.NotContains(t, result, "这")
+		assert.NotContains(t, result, "是")
+		assert.Contains(t, result, "测试")
+	})
+
+	t.Run("All stop words sentence results in mostly filtered tokens", func(t *testing.T) {
+		result := cjk.TokenizeForIndex("我在这里")
+		for _, token := range result {
+			assert.False(t, isStopWord(token), "stop word %q should have been filtered", token)
+		}
 	})
 }
 
@@ -122,22 +142,36 @@ func TestCJKTokenizer_TokenizeForSearch(t *testing.T) {
 		assert.NotEmpty(t, result)
 		assert.Nil(t, wildcards)
 	})
+
+	t.Run("Stop words are filtered from search tokens", func(t *testing.T) {
+		result, _ := cjk.TokenizeForSearch("我的世界很大", false)
+		assert.NotEmpty(t, result)
+		for _, token := range result {
+			assert.False(t, isStopWord(token), "stop word %q should have been filtered from search", token)
+		}
+		assert.Contains(t, result, "世界")
+		assert.Contains(t, result, "很大")
+		assert.NotContains(t, result, "我")
+		assert.NotContains(t, result, "的")
+	})
+
+	t.Run("Stop words filtered but content preserved in search", func(t *testing.T) {
+		result, _ := cjk.TokenizeForSearch("这是一个测试", false)
+		assert.NotContains(t, result, "这")
+		assert.NotContains(t, result, "是")
+		assert.Contains(t, result, "测试")
+	})
 }
 
 func TestCJKTokenizer_LazyLoading(t *testing.T) {
 	t.Run("CJKTokenizer can be created without loading dict", func(t *testing.T) {
-		// Creating a CJKTokenizer should NOT load the gse dictionary.
-		// The dictionary is only loaded on first tokenization call.
 		cjk := &CJKTokenizer{}
-		// seg.Dict should be nil before any tokenization call, indicating no loading happened.
 		assert.False(t, cjk.loaded, "gse should not be loaded on struct creation")
 	})
 
 	t.Run("Dictionary is loaded after first call", func(t *testing.T) {
 		cjk := &CJKTokenizer{}
 		assert.False(t, cjk.loaded, "gse should not be loaded before first call")
-
-		// First call triggers loading
 		cjk.TokenizeForIndex("测试")
 		assert.True(t, cjk.loaded, "gse should be loaded after first tokenization")
 	})
