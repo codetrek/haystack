@@ -35,7 +35,7 @@ func TestTokenizeForSearch_CJK(t *testing.T) {
 		// Check that at least one ASCII-ish token is present (lowercased by ASCII tokenizer)
 		hasASCII := false
 		for _, tok := range tokens {
-			if tok == "google" || tok == "Go" {
+			if tok == "Google" {
 				hasASCII = true
 			}
 		}
