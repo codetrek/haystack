@@ -112,6 +112,11 @@ github.com/getsentry/sentry-go/internal/debug
 github.com/getsentry/sentry-go/internal/otel/baggage
 github.com/getsentry/sentry-go/internal/otel/baggage/internal/baggage
 github.com/getsentry/sentry-go/internal/ratelimit
+# github.com/go-ego/gse v1.0.2
+## explicit; go 1.17
+github.com/go-ego/gse
+github.com/go-ego/gse/hmm
+github.com/go-ego/gse/types
 # github.com/gofrs/flock v0.12.1
 ## explicit; go 1.21.0
 github.com/gofrs/flock
@@ -193,6 +198,9 @@ github.com/spf13/cast
 ## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/assert/yaml
+# github.com/vcaesar/cedar v0.30.0
+## explicit; go 1.17
+github.com/vcaesar/cedar
 # github.com/yosida95/uritemplate/v3 v3.0.2
 ## explicit; go 1.14
 github.com/yosida95/uritemplate/v3
