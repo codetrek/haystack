@@ -39,7 +39,7 @@ func isPunctOrSpace(s string) bool {
 
 // TokenizeForIndex tokenizes CJK text for indexing.
 // It uses gse to segment the text, collects unique tokens (min 1 rune),
-// filters out pure whitespace/punctuation, and returns sorted results.
+// filters out pure whitespace/punctuation and CJK stop words, and returns sorted results.
 func (t *CJKTokenizer) TokenizeForIndex(str string) []string {
 	if strings.TrimSpace(str) == "" {
 		return []string{}
@@ -56,6 +56,9 @@ func (t *CJKTokenizer) TokenizeForIndex(str string) []string {
 			continue
 		}
 		if isPunctOrSpace(token) {
+			continue
+		}
+		if isStopWord(token) {
 			continue
 		}
 		uniqueTokens[strings.ToLower(token)] = struct{}{}
@@ -75,7 +78,7 @@ func (t *CJKTokenizer) TokenizeForIndex(str string) []string {
 }
 
 // TokenizeForSearch tokenizes CJK text for searching.
-// It uses gse to segment the text and returns tokens with empty wildcards.
+// It uses gse to segment the text, filters CJK stop words, and returns tokens with empty wildcards.
 func (t *CJKTokenizer) TokenizeForSearch(s string, exactMatching bool) ([]string, []string) {
 	if strings.TrimSpace(s) == "" {
 		return []string{}, nil
@@ -94,6 +97,9 @@ func (t *CJKTokenizer) TokenizeForSearch(s string, exactMatching bool) ([]string
 			continue
 		}
 		if isPunctOrSpace(token) {
+			continue
+		}
+		if isStopWord(token) {
 			continue
 		}
 		if _, ok := exists[token]; ok {

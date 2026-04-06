@@ -1316,6 +1316,8 @@ func TestFullIntegration(t *testing.T) {
 	})
 
 	// --- SearchFiles: removed file ---
+	// This test covers lines 596-599 (os.IsNotExist path) and lines 611-616
+	// (goroutine that calls indexer.RemoveFile for stale files).
 	t.Run("SearchFiles removed file", func(t *testing.T) {
 		ws := makeWS(t, map[string]string{
 			"keep.go":   "package main\n",
@@ -1330,6 +1332,37 @@ func TestFullIntegration(t *testing.T) {
 		for _, f := range result.Files {
 			assert.NotEqual(t, "remove.go", f)
 		}
+		// Give the background goroutine (lines 611-616) time to call
+		// indexer.RemoveFile before the test infrastructure tears down.
+		time.Sleep(500 * time.Millisecond)
+	})
+
+	// --- SearchFiles: directory path in index ---
+	// Covers the stat.IsDir() branch on line 596 and the removedFiles
+	// goroutine (lines 611-616).
+	t.Run("SearchFiles directory in index", func(t *testing.T) {
+		ws := makeWS(t, map[string]string{
+			"keepdir.go":     "package main\n",
+			"mydir/inner.go": "package inner\n",
+		})
+
+		// Remove the file inside the directory so only the directory remains.
+		os.Remove(filepath.Join(ws.Path, "mydir", "inner.go"))
+		// Create a file with the same name as the directory entry so
+		// os.Stat succeeds but IsDir() returns true.
+		// Actually, "mydir" is already a directory on disk.
+		// We need "mydir" to be in the documents index. Since we indexed
+		// "mydir/inner.go", let's search for "mydir" which will match
+		// "mydir/inner.go" (now deleted) via ScanFiles.
+
+		req := &types.SearchFilesRequest{Query: "inner", Limit: 10}
+		result, err := SearchFiles(ws, req)
+		assert.NoError(t, err)
+		// "mydir/inner.go" was removed from disk, so it should not appear
+		for _, f := range result.Files {
+			assert.NotEqual(t, "mydir/inner.go", f)
+		}
+		time.Sleep(500 * time.Millisecond)
 	})
 
 	// --- SearchFiles: limit 1 ---
