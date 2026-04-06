@@ -122,16 +122,18 @@ func TestTokenizeForIndex(t *testing.T) {
 
 	t.Run("Test with Chinese characters", func(t *testing.T) {
 		input := "测试中文字符"
-		expected := []string{}
 		result := TokenizeForIndex(input)
-		assert.Equal(t, expected, result)
+		assert.NotEmpty(t, result, "CJK text should produce tokens")
+		for _, token := range result {
+			assert.GreaterOrEqual(t, len([]rune(token)), 1, "CJK token should be >= 1 rune")
+		}
 	})
 
 	t.Run("Test with mixed characters", func(t *testing.T) {
 		input := "test123测试中文字符"
-		expected := []string{"test123"}
 		result := TokenizeForIndex(input)
-		assert.Equal(t, expected, result)
+		assert.Contains(t, result, "test123", "should contain ASCII token")
+		assert.Greater(t, len(result), 1, "should contain both ASCII and CJK tokens")
 	})
 
 	t.Run("Test real function", func(t *testing.T) {

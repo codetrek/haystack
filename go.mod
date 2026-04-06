@@ -9,6 +9,7 @@ require (
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gabriel-vasile/mimetype v1.4.9
+	github.com/go-ego/gse v1.0.2
 	github.com/gofrs/flock v0.12.1
 	github.com/lithammer/fuzzysearch v1.1.8
 	github.com/mark3labs/mcp-go v0.32.0
@@ -45,6 +46,7 @@ require (
 	github.com/prometheus/procfs v0.16.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/spf13/cast v1.8.0 // indirect
+	github.com/vcaesar/cedar v0.30.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
 	golang.org/x/net v0.40.0 // indirect

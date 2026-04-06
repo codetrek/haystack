@@ -164,23 +164,31 @@ func TestTokenizeForSearch(t *testing.T) {
 
 	t.Run("Test with Chinese characters", func(t *testing.T) {
 		input := "测试中文字符"
-		expected := []string{}
 		result, _ := TokenizeForSearch(input, false)
-		assert.ElementsMatch(t, expected, result)
+		assert.NotEmpty(t, result, "CJK text should produce tokens")
+		for _, token := range result {
+			assert.GreaterOrEqual(t, len([]rune(token)), 1, "CJK token should be >= 1 rune")
+		}
 
 		resultExact, _ := TokenizeForSearch(input, true)
-		assert.ElementsMatch(t, expected, resultExact)
+		assert.NotEmpty(t, resultExact, "CJK text should produce tokens in exact mode")
 	})
 
 	t.Run("Test with mixed characters", func(t *testing.T) {
 		input := "test123测试中文字符"
-		expected := []string{"test123"}
 		result, _ := TokenizeForSearch(input, false)
-		assert.ElementsMatch(t, expected, result)
+		assert.Greater(t, len(result), 1, "should contain both ASCII and CJK tokens")
+		// Should contain the ASCII token
+		hasASCII := false
+		for _, token := range result {
+			if token == "test123" {
+				hasASCII = true
+			}
+		}
+		assert.True(t, hasASCII, "should contain ASCII token test123")
 
-		expectedExact := []string{"test123"}
 		resultExact, _ := TokenizeForSearch(input, true)
-		assert.ElementsMatch(t, expectedExact, resultExact)
+		assert.Greater(t, len(resultExact), 1, "exact mode should also contain both ASCII and CJK tokens")
 	})
 
 	t.Run("Test real function", func(t *testing.T) {
