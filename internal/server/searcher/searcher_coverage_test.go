@@ -532,6 +532,11 @@ func TestFullIntegration(t *testing.T) {
 		"andwildA.go": "package main\nfunc awA() { awfirst awsecond awwildone awwildtwo }\n",
 		"andwildB.go": "package main\nfunc awB() { awfirst awwildone }\n",
 		"andwildC.go": "package main\nfunc awC() { awsecond awwildtwo }\n",
+		// CJK test files (HAY-002 step 4)
+		"cjk_pure.txt":     "中华人民共和国成立于1949年\n这是第二行\n",
+		"cjk_mixed.txt":    "Go语言是Google开发的编程语言\nRust也是一种系统编程语言\n",
+		"说明文档.md":          "这是一个说明文档\n包含中文内容\n",
+		"cjk_stopword.txt": "的了在是有\n这里只有停用词\n",
 	}
 	for relPath, content := range sharedFiles {
 		full := filepath.Join(sharedDir, relPath)
@@ -1962,6 +1967,111 @@ func TestFullIntegration(t *testing.T) {
 		// both terms' keywords (andwildA.go has awfirst + awsecond).
 		// WildDocIds may still contain entries from earlier terms.
 		assert.NotNil(t, result.DocIds)
+	})
+
+	// =========================================================================
+	// CJK end-to-end integration tests (HAY-002 step 4)
+	// These tests exercise the full index → search pipeline with CJK content.
+	// =========================================================================
+
+	t.Run("CJK SearchContent pure Chinese", func(t *testing.T) {
+		// Search for "中华人民" — should find cjk_pure.txt which contains "中华人民共和国成立"
+		req := &types.SearchContentRequest{Query: "中华人民"}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0, "expected search results for '中华人民'")
+		found := false
+		for _, r := range results {
+			if r.File == "cjk_pure.txt" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected cjk_pure.txt in results for '中华人民'")
+	})
+
+	t.Run("CJK SearchContent Chinese word 成立", func(t *testing.T) {
+		req := &types.SearchContentRequest{Query: "成立"}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0, "expected search results for '成立'")
+		found := false
+		for _, r := range results {
+			if r.File == "cjk_pure.txt" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected cjk_pure.txt in results for '成立'")
+	})
+
+	t.Run("CJK SearchContent mixed Chinese-ASCII", func(t *testing.T) {
+		// Search for "编程" — should find cjk_mixed.txt
+		req := &types.SearchContentRequest{Query: "编程"}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0, "expected search results for '编程'")
+		found := false
+		for _, r := range results {
+			if r.File == "cjk_mixed.txt" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected cjk_mixed.txt in results for '编程'")
+	})
+
+	t.Run("CJK SearchContent ASCII in mixed file", func(t *testing.T) {
+		// Search for "Google" — should find cjk_mixed.txt via ASCII tokenizer
+		req := &types.SearchContentRequest{Query: "Google"}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0, "expected search results for 'Google'")
+		found := false
+		for _, r := range results {
+			if r.File == "cjk_mixed.txt" {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected cjk_mixed.txt in results for 'Google'")
+	})
+
+	t.Run("CJK SearchFiles Chinese filename", func(t *testing.T) {
+		// Search for "说明" — should find "说明文档.md" in file search
+		req := &types.SearchFilesRequest{Query: "说明", Limit: 10}
+		result, err := SearchFiles(sharedWS, req)
+		assert.NoError(t, err)
+		found := false
+		for _, f := range result.Files {
+			if strings.Contains(f, "说明文档") {
+				found = true
+				break
+			}
+		}
+		assert.True(t, found, "expected 说明文档.md in file search results for '说明'")
+	})
+
+	t.Run("CJK SearchContent ASCII still works", func(t *testing.T) {
+		// Regression: ensure existing English search is not broken
+		req := &types.SearchContentRequest{Query: "keep_marker"}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0, "ASCII search for 'keep_marker' should still work")
+	})
+
+	t.Run("CJK SearchContent unsaved Chinese file", func(t *testing.T) {
+		// Test unsaved file with Chinese content
+		req := &types.SearchContentRequest{
+			Query:            "人工智能",
+			UnsavedFilesOnly: true,
+			UnsavedFiles: []types.UnsavedFile{
+				{Path: "unsaved_cjk.txt", Content: "人工智能是未来的发展方向\n"},
+			},
+		}
+		ctx := context.Background()
+		results, _ := SearchContent(sharedWS, req, nil, ctx, 10*time.Second)
+		assert.True(t, len(results) > 0, "expected results for unsaved Chinese content")
 	})
 
 	// --- Teardown ---
