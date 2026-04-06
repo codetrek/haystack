@@ -16,4 +16,4 @@ type Tokenizer interface {
 
 // DefaultTokenizer is the package-level tokenizer instance used by the
 // backward-compatible package-level functions (TokenizeForIndex, TokenizeForSearch).
-var DefaultTokenizer Tokenizer = &ASCIITokenizer{}
+var DefaultTokenizer Tokenizer = &MixedTokenizer{}
