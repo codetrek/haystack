@@ -10,16 +10,15 @@
 | HAY-004b | NodeStore + Pebble 持久化 | Dev | #42 | 2026-04-14 |
 | HAY-004c | HNSW 算法核心（内存 mock） | Dev | #42 | 2026-04-14 |
 | HAY-004d | Pebble 替换 mock | Dev | #44 | 2026-04-14 |
+| HAY-004e | 并发安全 | Dev | #46 | 2026-04-14 |
 
 ## In Progress 🔵
 | ID | 任务 | Owner | Branch | 说明 |
 |----|------|-------|--------|------|
-| HAY-004e | 并发安全 | Dev | hay-004e-concurrency | -race 通过 |
+| HAY-004f | 性能验证 & E2E | QA | — | <20ms @100K，Recall@10 > 0.95 |
 
 ## Backlog 📋
-| ID | 任务 | Owner | 说明 |
-|----|------|-------|------|
-| HAY-004f | 性能验证 & E2E | QA | <20ms @100K，Recall@10 > 0.95 |
+（空）
 
 ## 设计文档
 - [HAY-004 HNSW 设计](HAY-004-hnsw/design.md)
