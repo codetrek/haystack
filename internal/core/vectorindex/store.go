@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"sync"
 
 	"github.com/cockroachdb/pebble"
 )
@@ -39,6 +40,7 @@ type NodeStore interface {
 type PebbleNodeStore struct {
 	db      *pebble.DB
 	tableId int
+	idMu    sync.Mutex // protects NextNodeId read-modify-write
 }
 
 // NewPebbleNodeStore creates a new PebbleNodeStore for the given table.
@@ -369,6 +371,9 @@ func (s *PebbleNodeStore) DeleteNodeMapping(docId string) error {
 }
 
 func (s *PebbleNodeStore) NextNodeId() (uint64, error) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
+
 	batch := s.db.NewBatch()
 	defer batch.Close()
 

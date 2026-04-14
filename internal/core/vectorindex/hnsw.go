@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"math"
 	"math/rand"
+	"sync"
 )
 
 // Default HNSW parameters per arXiv:1603.09320.
@@ -17,6 +18,7 @@ const (
 // HNSWIndex is a Hierarchical Navigable Small World graph for approximate
 // nearest-neighbor search. It implements Algorithm 1-5 from the paper.
 type HNSWIndex struct {
+	mu             sync.RWMutex
 	store          NodeStore
 	distance       DistanceFunc
 	M              int
@@ -83,6 +85,9 @@ func (h *HNSWIndex) randomLevel() int {
 
 // Insert adds a document's vector to the index (Algorithm 1).
 func (h *HNSWIndex) Insert(docId string, vector []float32) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	// Allocate a new node ID.
 	nodeId, err := h.store.NextNodeId()
 	if err != nil {
@@ -112,6 +117,11 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 		return h.store.SetEntryPoint(nodeId, l)
 	}
 
+	// Verify entry point node still exists (may have been deleted).
+	if _, err := h.store.GetVector(epId); err != nil {
+		return h.store.SetEntryPoint(nodeId, l)
+	}
+
 	// Phase 1: From top layer down to l+1, greedy search with ef=1.
 	curEp := epId
 	for layer := maxLayer; layer > l; layer-- {
@@ -129,7 +139,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 			for _, nb := range neighbors {
 				nbDist, derr := h.nodeDistance(nb, vector)
 				if derr != nil {
-					return derr
+					continue // node may have been deleted
 				}
 				if nbDist < curDist {
 					curEp = nb
@@ -171,20 +181,20 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 		for _, nb := range selected {
 			nbNeighbors, err := h.store.GetNeighbors(nb.id, layer)
 			if err != nil {
-				return err
+				continue // neighbor may have been deleted
 			}
 			nbNeighbors = append(nbNeighbors, nodeId)
 			if len(nbNeighbors) > mMax {
 				// Shrink using heuristic.
 				nbVec, err := h.store.GetVector(nb.id)
 				if err != nil {
-					return err
+					continue // neighbor may have been deleted
 				}
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
 					cVec, err := h.store.GetVector(cid)
 					if err != nil {
-						return err
+						continue // node may have been deleted
 					}
 					nbCandidates = append(nbCandidates, distItem{
 						id:   cid,
@@ -224,6 +234,9 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
 	epId, maxLayer, err := h.store.GetEntryPoint()
 	if err != nil {
 		// No entry point — empty index.
@@ -291,6 +304,9 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 
 // Delete removes a document from the index.
 func (h *HNSWIndex) Delete(docId string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	nodeId, found, err := h.store.GetNodeId(docId)
 	if err != nil {
 		return err
