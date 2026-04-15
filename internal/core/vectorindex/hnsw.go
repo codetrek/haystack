@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
 )
 
@@ -11,8 +12,8 @@ import (
 const (
 	DefaultM              = 16
 	DefaultMmax0          = 2 * DefaultM // 32
-	DefaultEfConstruction = 128
-	DefaultEfSearch       = 64
+	DefaultEfConstruction = 200
+	DefaultEfSearch       = 400
 )
 
 // HNSWIndex is a Hierarchical Navigable Small World graph for approximate
@@ -218,18 +219,22 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 				if err != nil {
 					continue // neighbor may have been deleted
 				}
+				// Pre-load vectors for all candidates so selectNeighborsHeuristic
+				// can read from its cache without repeating these lookups.
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
+				shrinkVecCache := make(map[uint64][]float32, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
 					cVec, err := h.store.GetVectorRef(cid)
 					if err != nil {
 						continue // node may have been deleted
 					}
+					shrinkVecCache[cid] = cVec
 					nbCandidates = append(nbCandidates, distItem{
 						id:   cid,
 						dist: h.distance(nbVec, cVec),
 					})
 				}
-				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax)
+				shrunk := h.selectNeighborsHeuristicCached(nbVec, nbCandidates, mMax, shrinkVecCache)
 				newNb := make([]uint64, len(shrunk))
 				for i, s := range shrunk {
 					newNb[i] = s.id
@@ -564,6 +569,15 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	// Sort candidates by distance to query.
 	sortDistItems(candidates)
 
+	// Pre-load all candidate vectors so the inner loop avoids repeated store lookups.
+	vecCache := make(map[uint64][]float32, len(candidates))
+	for _, c := range candidates {
+		v, err := h.store.GetVectorRef(c.id)
+		if err == nil {
+			vecCache[c.id] = v
+		}
+	}
+
 	selected := make([]distItem, 0, m)
 	for _, c := range candidates {
 		if len(selected) >= m {
@@ -571,13 +585,13 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 		}
 		// Check if c is closer to query than to any already-selected neighbor.
 		good := true
-		cVec, err := h.store.GetVectorRef(c.id)
-		if err != nil {
+		cVec, ok := vecCache[c.id]
+		if !ok {
 			continue
 		}
 		for _, s := range selected {
-			sVec, err := h.store.GetVectorRef(s.id)
-			if err != nil {
+			sVec, ok := vecCache[s.id]
+			if !ok {
 				continue
 			}
 			if h.distance(cVec, sVec) < c.dist {
@@ -591,6 +605,59 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	}
 
 	// If we didn't get enough from heuristic, fill from remaining by distance.
+	if len(selected) < m {
+		selectedSet := make(map[uint64]bool, len(selected))
+		for _, s := range selected {
+			selectedSet[s.id] = true
+		}
+		for _, c := range candidates {
+			if len(selected) >= m {
+				break
+			}
+			if !selectedSet[c.id] {
+				selected = append(selected, c)
+				selectedSet[c.id] = true
+			}
+		}
+	}
+
+	return selected
+}
+
+// selectNeighborsHeuristicCached is like selectNeighborsHeuristic but uses
+// a pre-built vector cache to avoid redundant store lookups.
+func (h *HNSWIndex) selectNeighborsHeuristicCached(query []float32, candidates []distItem, m int, vecCache map[uint64][]float32) []distItem {
+	if len(candidates) <= m {
+		return candidates
+	}
+
+	sortDistItems(candidates)
+
+	selected := make([]distItem, 0, m)
+	for _, c := range candidates {
+		if len(selected) >= m {
+			break
+		}
+		good := true
+		cVec, ok := vecCache[c.id]
+		if !ok {
+			continue
+		}
+		for _, s := range selected {
+			sVec, ok := vecCache[s.id]
+			if !ok {
+				continue
+			}
+			if h.distance(cVec, sVec) < c.dist {
+				good = false
+				break
+			}
+		}
+		if good {
+			selected = append(selected, c)
+		}
+	}
+
 	if len(selected) < m {
 		selectedSet := make(map[uint64]bool, len(selected))
 		for _, s := range selected {
@@ -668,14 +735,7 @@ func (h *maxDistHeap) Pop() interface{} {
 
 // sortDistItems sorts distItems by distance ascending.
 func sortDistItems(items []distItem) {
-	// Simple insertion sort — fast for small slices typical in HNSW.
-	for i := 1; i < len(items); i++ {
-		key := items[i]
-		j := i - 1
-		for j >= 0 && items[j].dist > key.dist {
-			items[j+1] = items[j]
-			j--
-		}
-		items[j+1] = key
-	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].dist < items[j].dist
+	})
 }
