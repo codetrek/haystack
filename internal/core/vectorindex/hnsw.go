@@ -15,7 +15,7 @@ const (
 	DefaultM              = 16
 	DefaultMmax0          = 2 * DefaultM // 32
 	DefaultEfConstruction = 200
-	DefaultEfSearch       = 400
+	DefaultEfSearch       = 64
 )
 
 // HNSWIndex is a Hierarchical Navigable Small World graph for approximate
@@ -59,6 +59,15 @@ func WithRand(r *rand.Rand) Option {
 	return func(h *HNSWIndex) { h.rng = r }
 }
 
+// WithCosineDistance marks the index as using cosine distance, enabling
+// precomputed norm optimizations. Pass this option when using CosineDistance
+// as the distance function.
+func WithCosineDistance() Option {
+	return func(h *HNSWIndex) {
+		h.isCosine = true
+	}
+}
+
 // NewHNSWIndex creates a new HNSW index.
 func NewHNSWIndex(store NodeStore, distance DistanceFunc, opts ...Option) *HNSWIndex {
 	h := &HNSWIndex{
@@ -74,14 +83,6 @@ func NewHNSWIndex(store NodeStore, distance DistanceFunc, opts ...Option) *HNSWI
 		opt(h)
 	}
 	h.mL = 1.0 / math.Log(float64(h.M))
-	// Detect cosine distance to enable precomputed norm optimization.
-	// CosineDistance normalizes by vector magnitude, so it differs from
-	// DotProductDistance and EuclideanDistance on non-unit vectors.
-	testA := []float32{2, 1}
-	testB := []float32{1, 0}
-	if distance(testA, testB) == CosineDistance(testA, testB) {
-		h.isCosine = true
-	}
 	return h
 }
 
@@ -210,7 +211,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 		if layer == 0 {
 			mMax = h.Mmax0
 		}
-		selected := h.selectNeighborsHeuristic(vector, candidates, mMax)
+		selected := h.selectNeighborsHeuristic(vector, candidates, mMax, nil)
 
 		// Create bidirectional edges.
 		neighborIds := make([]uint64, len(selected))
@@ -235,7 +236,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 					continue // neighbor may have been deleted
 				}
 				// Pre-load vectors for all candidates so selectNeighborsHeuristic
-				// can read from its cache without repeating these lookups.
+				// can read from the cache without repeating these lookups.
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
 				shrinkVecCache := make(map[uint64][]float32, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
@@ -249,7 +250,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 						dist: h.distance(nbVec, cVec),
 					})
 				}
-				shrunk := h.selectNeighborsHeuristicCached(nbVec, nbCandidates, mMax, shrinkVecCache)
+				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax, shrinkVecCache)
 				newNb := make([]uint64, len(shrunk))
 				for i, s := range shrunk {
 					newNb[i] = s.id
@@ -461,7 +462,7 @@ func (h *HNSWIndex) Delete(docId string) error {
 			if layer == 0 {
 				mMax = h.Mmax0
 			}
-			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax)
+			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax, nil)
 			newNb := make([]uint64, len(selected))
 			for i, s := range selected {
 				newNb[i] = s.id
@@ -586,7 +587,8 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 // selectNeighborsHeuristic selects up to M neighbors using the heuristic
 // from the paper. It ensures diversity by only adding a candidate if it
 // is closer to the query than to any already-selected neighbor.
-func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int) []distItem {
+// If vecCache is non-nil, vectors are read from it instead of the store.
+func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int, vecCache map[uint64][]float32) []distItem {
 	if len(candidates) <= m {
 		return candidates
 	}
@@ -594,18 +596,22 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	// Sort candidates by distance to query.
 	sortDistItems(candidates)
 
-	// Pre-load all candidate vectors and norms so the inner loop avoids repeated store lookups.
-	vecCache := make(map[uint64][]float32, len(candidates))
+	// Build vector cache from store if not provided.
+	if vecCache == nil {
+		vecCache = make(map[uint64][]float32, len(candidates))
+		for _, c := range candidates {
+			v, err := h.store.GetVectorRef(c.id)
+			if err == nil {
+				vecCache[c.id] = v
+			}
+		}
+	}
+
+	// Pre-load norms for cosine distance optimization.
 	var normCache map[uint64]float32
 	if h.isCosine {
 		normCache = make(map[uint64]float32, len(candidates))
-	}
-	for _, c := range candidates {
-		v, err := h.store.GetVectorRef(c.id)
-		if err == nil {
-			vecCache[c.id] = v
-		}
-		if h.isCosine {
+		for _, c := range candidates {
 			if n, err := h.store.GetNorm(c.id); err == nil {
 				normCache[c.id] = n
 			}
@@ -651,82 +657,6 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	}
 
 	// If we didn't get enough from heuristic, fill from remaining by distance.
-	if len(selected) < m {
-		selectedSet := make(map[uint64]bool, len(selected))
-		for _, s := range selected {
-			selectedSet[s.id] = true
-		}
-		for _, c := range candidates {
-			if len(selected) >= m {
-				break
-			}
-			if !selectedSet[c.id] {
-				selected = append(selected, c)
-				selectedSet[c.id] = true
-			}
-		}
-	}
-
-	return selected
-}
-
-// selectNeighborsHeuristicCached is like selectNeighborsHeuristic but uses
-// a pre-built vector cache to avoid redundant store lookups.
-func (h *HNSWIndex) selectNeighborsHeuristicCached(query []float32, candidates []distItem, m int, vecCache map[uint64][]float32) []distItem {
-	if len(candidates) <= m {
-		return candidates
-	}
-
-	sortDistItems(candidates)
-
-	// Pre-load norms for cosine distance optimization.
-	var normCache map[uint64]float32
-	if h.isCosine {
-		normCache = make(map[uint64]float32, len(candidates))
-		for _, c := range candidates {
-			if n, err := h.store.GetNorm(c.id); err == nil {
-				normCache[c.id] = n
-			}
-		}
-	}
-
-	selected := make([]distItem, 0, m)
-	for _, c := range candidates {
-		if len(selected) >= m {
-			break
-		}
-		good := true
-		cVec, ok := vecCache[c.id]
-		if !ok {
-			continue
-		}
-		for _, s := range selected {
-			sVec, ok := vecCache[s.id]
-			if !ok {
-				continue
-			}
-			var dist float32
-			if h.isCosine {
-				cNorm, cOk := normCache[c.id]
-				sNorm, sOk := normCache[s.id]
-				if cOk && sOk {
-					dist = CosineDistanceWithNorms(cVec, sVec, cNorm, sNorm)
-				} else {
-					dist = h.distance(cVec, sVec)
-				}
-			} else {
-				dist = h.distance(cVec, sVec)
-			}
-			if dist < c.dist {
-				good = false
-				break
-			}
-		}
-		if good {
-			selected = append(selected, c)
-		}
-	}
-
 	if len(selected) < m {
 		selectedSet := make(map[uint64]bool, len(selected))
 		for _, s := range selected {

@@ -35,9 +35,8 @@ func NewMemNodeStore() *MemNodeStore {
 	}
 }
 
-// GetVector returns the vector for the given node.
-// WARNING: The returned slice is a direct reference to internal storage.
-// Callers MUST NOT modify the returned slice.
+// GetVector returns a copy of the vector for the given node.
+// The returned slice is safe to modify.
 func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -45,7 +44,9 @@ func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	if !ok {
 		return nil, fmt.Errorf("node %d not found", id)
 	}
-	return v, nil
+	cp := make([]float32, len(v))
+	copy(cp, v)
+	return cp, nil
 }
 
 // GetVectorRef returns the internal vector slice directly without copying.

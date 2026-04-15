@@ -62,6 +62,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 	defer db.Close()
 	store := NewPebbleNodeStore(db, 1)
 	idx := NewHNSWIndex(store, CosineDistance,
+		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
 	)
@@ -164,6 +165,7 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, CosineDistance,
+		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
 	)
@@ -254,7 +256,7 @@ func BenchmarkHNSWInsert(b *testing.B) {
 	vecs := randomVectors(rng, b.N, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -277,7 +279,7 @@ func BenchmarkHNSWSearch(b *testing.B) {
 	vecs := randomVectors(rng, n, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	for i, v := range vecs {
 		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -315,7 +317,7 @@ func BenchmarkHNSWInsertPebble(b *testing.B) {
 	db := openBenchDB(b)
 	defer db.Close()
 	store := NewPebbleNodeStore(db, 1)
-	idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -335,7 +337,7 @@ func BenchmarkHNSWInsertBatchPebble(b *testing.B) {
 	db := openBenchDB(b)
 	defer db.Close()
 	store := NewPebbleNodeStore(db, 1)
-	idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	items := make([]InsertItem, b.N)
 	for i := range items {
@@ -368,6 +370,7 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, CosineDistance,
+		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
 		WithRand(rand.New(rand.NewSource(seed))),
@@ -461,6 +464,7 @@ func TestPersistenceRecall(t *testing.T) {
 
 	store2 := NewPebbleNodeStore(db2, 1)
 	idx2 := NewHNSWIndex(store2, CosineDistance,
+		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
 	)
@@ -513,7 +517,7 @@ func TestEdgeCases(t *testing.T) {
 		vecs := randomVectors(rng, n, dim)
 
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(42))))
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
 			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -529,7 +533,7 @@ func TestEdgeCases(t *testing.T) {
 
 	t.Run("empty_graph_search", func(t *testing.T) {
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance)
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
 
 		query := make([]float32, 128)
 		for i := range query {
@@ -554,7 +558,7 @@ func TestEdgeCases(t *testing.T) {
 		vecs := randomVectors(rng, n, dim)
 
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(42))))
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
 			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
