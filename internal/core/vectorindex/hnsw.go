@@ -730,9 +730,9 @@ type distItem struct {
 type minDistHeap []distItem
 
 func (h minDistHeap) Len() int            { return len(h) }
-func (h minDistHeap) Less(i, j int) bool   { return h[i].dist < h[j].dist }
-func (h minDistHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *minDistHeap) Push(x interface{})  { *h = append(*h, x.(distItem)) }
+func (h minDistHeap) Less(i, j int) bool  { return h[i].dist < h[j].dist }
+func (h minDistHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *minDistHeap) Push(x interface{}) { *h = append(*h, x.(distItem)) }
 func (h *minDistHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
@@ -745,9 +745,9 @@ func (h *minDistHeap) Pop() interface{} {
 type maxDistHeap []distItem
 
 func (h maxDistHeap) Len() int            { return len(h) }
-func (h maxDistHeap) Less(i, j int) bool   { return h[i].dist > h[j].dist }
-func (h maxDistHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *maxDistHeap) Push(x interface{})  { *h = append(*h, x.(distItem)) }
+func (h maxDistHeap) Less(i, j int) bool  { return h[i].dist > h[j].dist }
+func (h maxDistHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *maxDistHeap) Push(x interface{}) { *h = append(*h, x.(distItem)) }
 func (h *maxDistHeap) Pop() interface{} {
 	old := *h
 	n := len(old)

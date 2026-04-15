@@ -15,13 +15,13 @@ import (
 )
 
 const (
-	fixtureDir        = "testdata"
-	vectorsFile       = "vectors_100k_384d.bin"
-	queriesFile       = "queries_50_384d.bin"
-	groundTruthFile   = "ground_truth_top10.bin"
-	benchmarkK        = 10
-	minRecallAt10     = 0.95
-	maxP99LatencyMs   = 20.0
+	fixtureDir      = "testdata"
+	vectorsFile     = "vectors_100k_384d.bin"
+	queriesFile     = "queries_50_384d.bin"
+	groundTruthFile = "ground_truth_top10.bin"
+	benchmarkK      = 10
+	minRecallAt10   = 0.95
+	maxP99LatencyMs = 20.0
 )
 
 // TestBenchmarkSearchLatency loads pre-generated fixtures, builds an HNSW index

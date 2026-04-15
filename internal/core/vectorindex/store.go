@@ -14,13 +14,13 @@ import (
 
 // Key type prefixes for vector index data in Pebble.
 const (
-	prefixMeta   = byte(40)
-	prefixVec    = byte(41)
-	prefixNode   = byte(42)
-	prefixNb     = byte(43)
-	prefixMap    = byte(44)
-	prefixIDSeq  = byte(45)
-	prefixNorm   = byte(46)
+	prefixMeta  = byte(40)
+	prefixVec   = byte(41)
+	prefixNode  = byte(42)
+	prefixNb    = byte(43)
+	prefixMap   = byte(44)
+	prefixIDSeq = byte(45)
+	prefixNorm  = byte(46)
 )
 
 // NodeStore defines the persistence interface for HNSW graph nodes.
