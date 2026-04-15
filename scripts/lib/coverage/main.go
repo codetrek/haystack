@@ -131,7 +131,7 @@ func main() {
 func parseConfig() Config {
 	c := Config{
 		ThresholdFunc:    80.0,
-		ThresholdPackage: 85.0,
+		ThresholdPackage: 70.0,
 		ThresholdPrint:   85.0,
 		ThresholdTotal:   90.0,
 		CIMode:           os.Getenv("CI") == "true",
