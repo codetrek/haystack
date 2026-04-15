@@ -62,24 +62,44 @@ func TestCosineDistance(t *testing.T) {
 }
 
 func TestCosineDistanceWithNormsEquivalence(t *testing.T) {
-	rng := rand.New(rand.NewSource(42))
-	dims := []int{2, 8, 128, 384}
-	for _, dim := range dims {
-		for trial := 0; trial < 50; trial++ {
-			a := make([]float32, dim)
-			b := make([]float32, dim)
-			for i := range a {
-				a[i] = rng.Float32()*2 - 1
-				b[i] = rng.Float32()*2 - 1
+	t.Run("random_vectors", func(t *testing.T) {
+		rng := rand.New(rand.NewSource(42))
+		dims := []int{2, 8, 128, 384}
+		for _, dim := range dims {
+			for trial := 0; trial < 50; trial++ {
+				a := make([]float32, dim)
+				b := make([]float32, dim)
+				for i := range a {
+					a[i] = rng.Float32()*2 - 1
+					b[i] = rng.Float32()*2 - 1
+				}
+				expected := CosineDistance(a, b)
+				normA := vek32.Norm(a)
+				normB := vek32.Norm(b)
+				got := CosineDistanceWithNorms(a, b, normA, normB)
+				assert.InDelta(t, float64(expected), float64(got), 1e-6,
+					"dim=%d trial=%d: CosineDistanceWithNorms != CosineDistance", dim, trial)
 			}
-			expected := CosineDistance(a, b)
-			normA := vek32.Norm(a)
-			normB := vek32.Norm(b)
-			got := CosineDistanceWithNorms(a, b, normA, normB)
-			assert.InDelta(t, float64(expected), float64(got), 1e-6,
-				"dim=%d trial=%d: CosineDistanceWithNorms != CosineDistance", dim, trial)
 		}
-	}
+	})
+
+	t.Run("identical_vectors", func(t *testing.T) {
+		a := []float32{1, 2, 3, 4}
+		normA := vek32.Norm(a)
+		expected := CosineDistance(a, a)
+		got := CosineDistanceWithNorms(a, a, normA, normA)
+		assert.InDelta(t, float64(expected), float64(got), 1e-6)
+	})
+
+	t.Run("zero_vector", func(t *testing.T) {
+		a := []float32{1, 2, 3}
+		zero := []float32{0, 0, 0}
+		expected := CosineDistance(a, zero)
+		normA := vek32.Norm(a)
+		normZ := vek32.Norm(zero)
+		got := CosineDistanceWithNorms(a, zero, normA, normZ)
+		assert.InDelta(t, float64(expected), float64(got), 1e-6)
+	})
 }
 
 func TestEuclideanDistance(t *testing.T) {
