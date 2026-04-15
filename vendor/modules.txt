@@ -15,6 +15,9 @@ github.com/beorn7/perks/quantile
 # github.com/cespare/xxhash/v2 v2.3.0
 ## explicit; go 1.11
 github.com/cespare/xxhash/v2
+# github.com/chewxy/math32 v1.10.1
+## explicit; go 1.13
+github.com/chewxy/math32
 # github.com/cockroachdb/errors v1.12.0
 ## explicit; go 1.23.0
 github.com/cockroachdb/errors
@@ -201,6 +204,14 @@ github.com/stretchr/testify/assert/yaml
 # github.com/vcaesar/cedar v0.30.0
 ## explicit; go 1.17
 github.com/vcaesar/cedar
+# github.com/viterin/partial v1.1.0
+## explicit; go 1.19
+github.com/viterin/partial
+# github.com/viterin/vek v0.4.3
+## explicit; go 1.19
+github.com/viterin/vek
+github.com/viterin/vek/internal/functions
+github.com/viterin/vek/vek32
 # github.com/yosida95/uritemplate/v3 v3.0.2
 ## explicit; go 1.14
 github.com/yosida95/uritemplate/v3
@@ -208,12 +219,14 @@ github.com/yosida95/uritemplate/v3
 ## explicit; go 1.23.0
 golang.org/x/exp/constraints
 golang.org/x/exp/rand
+golang.org/x/exp/slices
 # golang.org/x/net v0.40.0
 ## explicit; go 1.23.0
 golang.org/x/net/html
 golang.org/x/net/html/atom
 # golang.org/x/sys v0.33.0
 ## explicit; go 1.23.0
+golang.org/x/sys/cpu
 golang.org/x/sys/execabs
 golang.org/x/sys/unix
 golang.org/x/sys/windows

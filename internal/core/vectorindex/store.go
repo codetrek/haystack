@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/cockroachdb/pebble"
+	"github.com/viterin/vek/vek32"
 )
 
 // Key type prefixes for vector index data in Pebble.
@@ -19,6 +20,7 @@ const (
 	prefixNb     = byte(43)
 	prefixMap    = byte(44)
 	prefixIDSeq  = byte(45)
+	prefixNorm   = byte(46)
 )
 
 // NodeStore defines the persistence interface for HNSW graph nodes.
@@ -38,6 +40,10 @@ type NodeStore interface {
 	SetNodeMapping(docId string, nodeId uint64) error
 	DeleteNodeMapping(docId string) error
 	NextNodeId() (uint64, error)
+	// GetNorm returns the precomputed L2 norm for a node's vector.
+	GetNorm(id uint64) (float32, error)
+	// SetNorm stores a precomputed L2 norm for a node's vector.
+	SetNorm(id uint64, norm float32) error
 	Close() error
 }
 
@@ -270,6 +276,10 @@ func (s *PebbleNodeStore) idSeqKey() []byte {
 	return []byte(fmt.Sprintf("%c%d:id_seq", prefixIDSeq, s.tableId))
 }
 
+func (s *PebbleNodeStore) normKey(id uint64) []byte {
+	return []byte(fmt.Sprintf("%c%d:norm:%d", prefixNorm, s.tableId, id))
+}
+
 // --- encoding helpers ---
 
 func encodeFloat32s(v []float32) []byte {
@@ -316,6 +326,16 @@ func decodeUint64(data []byte) uint64 {
 	return binary.LittleEndian.Uint64(data)
 }
 
+func encodeFloat32(v float32) []byte {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, math.Float32bits(v))
+	return buf
+}
+
+func decodeFloat32Single(data []byte) float32 {
+	return math.Float32frombits(binary.LittleEndian.Uint32(data))
+}
+
 // --- NodeStore implementation ---
 
 func (s *PebbleNodeStore) GetVector(id uint64) ([]float32, error) {
@@ -360,6 +380,9 @@ func (s *PebbleNodeStore) GetVectorRef(id uint64) ([]float32, error) {
 }
 
 func (s *PebbleNodeStore) PutNode(id uint64, level int, vector []float32) error {
+	// Compute norm upfront for both paths.
+	norm := vek32.Norm(vector)
+
 	if ab := s.activeBatch(); ab != nil {
 		// Write into the active batch — no local batch, no commit.
 		if err := ab.Set(s.vecKey(id), encodeFloat32s(vector), nil); err != nil {
@@ -367,6 +390,9 @@ func (s *PebbleNodeStore) PutNode(id uint64, level int, vector []float32) error 
 		}
 		if err := ab.Set(s.nodeLevelKey(id), []byte{uint8(level)}, nil); err != nil {
 			return fmt.Errorf("failed to put level for node %d: %v", id, err)
+		}
+		if err := ab.Set(s.normKey(id), encodeFloat32(norm), nil); err != nil {
+			return fmt.Errorf("failed to put norm for node %d: %v", id, err)
 		}
 		// Increment count (read through batch).
 		countKey := s.metaCountKey()
@@ -397,6 +423,11 @@ func (s *PebbleNodeStore) PutNode(id uint64, level int, vector []float32) error 
 	// Store level
 	if err := batch.Set(s.nodeLevelKey(id), []byte{uint8(level)}, nil); err != nil {
 		return fmt.Errorf("failed to put level for node %d: %v", id, err)
+	}
+
+	// Store precomputed norm
+	if err := batch.Set(s.normKey(id), encodeFloat32(norm), nil); err != nil {
+		return fmt.Errorf("failed to put norm for node %d: %v", id, err)
 	}
 
 	// Increment count
@@ -441,6 +472,9 @@ func (s *PebbleNodeStore) DeleteNode(id uint64) error {
 		}
 		if err := ab.Delete(s.nodeLevelKey(id), nil); err != nil {
 			return fmt.Errorf("failed to delete level for node %d: %v", id, err)
+		}
+		if err := ab.Delete(s.normKey(id), nil); err != nil {
+			return fmt.Errorf("failed to delete norm for node %d: %v", id, err)
 		}
 		for l := 0; l <= nodeLevel; l++ {
 			if err := ab.Delete(s.neighborsKey(id, l), nil); err != nil {
@@ -492,6 +526,11 @@ func (s *PebbleNodeStore) DeleteNode(id uint64) error {
 	// Delete level
 	if err := batch.Delete(s.nodeLevelKey(id), nil); err != nil {
 		return fmt.Errorf("failed to delete level for node %d: %v", id, err)
+	}
+
+	// Delete norm
+	if err := batch.Delete(s.normKey(id), nil); err != nil {
+		return fmt.Errorf("failed to delete norm for node %d: %v", id, err)
 	}
 
 	// Delete all neighbor layers
@@ -729,6 +768,31 @@ func (s *PebbleNodeStore) NextNodeId() (uint64, error) {
 	}
 
 	return nextId, nil
+}
+
+func (s *PebbleNodeStore) GetNorm(id uint64) (float32, error) {
+	val, closer, err := s.reader().Get(s.normKey(id))
+	if err == pebble.ErrNotFound {
+		return 0, fmt.Errorf("norm for node %d not found", id)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get norm for node %d: %v", id, err)
+	}
+	defer closer.Close()
+	return decodeFloat32Single(val), nil
+}
+
+func (s *PebbleNodeStore) SetNorm(id uint64, norm float32) error {
+	if ab := s.activeBatch(); ab != nil {
+		if err := ab.Set(s.normKey(id), encodeFloat32(norm), nil); err != nil {
+			return fmt.Errorf("failed to set norm for node %d: %v", id, err)
+		}
+		return nil
+	}
+	if err := s.db.Set(s.normKey(id), encodeFloat32(norm), pebble.Sync); err != nil {
+		return fmt.Errorf("failed to set norm for node %d: %v", id, err)
+	}
+	return nil
 }
 
 func (s *PebbleNodeStore) Close() error {

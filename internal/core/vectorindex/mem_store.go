@@ -3,6 +3,8 @@ package vectorindex
 import (
 	"fmt"
 	"sync"
+
+	"github.com/viterin/vek/vek32"
 )
 
 // MemNodeStore is an in-memory implementation of NodeStore for testing.
@@ -10,6 +12,7 @@ type MemNodeStore struct {
 	mu        sync.RWMutex
 	vectors   map[uint64][]float32
 	levels    map[uint64]int
+	norms     map[uint64]float32
 	neighbors map[uint64]map[int][]uint64 // nodeId -> layer -> neighbor ids
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
@@ -24,6 +27,7 @@ func NewMemNodeStore() *MemNodeStore {
 	return &MemNodeStore{
 		vectors:   make(map[uint64][]float32),
 		levels:    make(map[uint64]int),
+		norms:     make(map[uint64]float32),
 		neighbors: make(map[uint64]map[int][]uint64),
 		docToNode: make(map[string]uint64),
 		nodeToDoc: make(map[uint64]string),
@@ -63,6 +67,7 @@ func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32) error {
 	copy(cp, vector)
 	m.vectors[id] = cp
 	m.levels[id] = level
+	m.norms[id] = vek32.Norm(vector)
 	if _, ok := m.neighbors[id]; !ok {
 		m.neighbors[id] = make(map[int][]uint64)
 	}
@@ -77,6 +82,7 @@ func (m *MemNodeStore) DeleteNode(id uint64) error {
 	}
 	delete(m.vectors, id)
 	delete(m.levels, id)
+	delete(m.norms, id)
 	delete(m.neighbors, id)
 	if doc, ok := m.nodeToDoc[id]; ok {
 		delete(m.docToNode, doc)
@@ -171,6 +177,23 @@ func (m *MemNodeStore) NextNodeId() (uint64, error) {
 	defer m.mu.Unlock()
 	m.nextID++
 	return m.nextID, nil
+}
+
+func (m *MemNodeStore) GetNorm(id uint64) (float32, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	norm, ok := m.norms[id]
+	if !ok {
+		return 0, fmt.Errorf("norm for node %d not found", id)
+	}
+	return norm, nil
+}
+
+func (m *MemNodeStore) SetNorm(id uint64, norm float32) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.norms[id] = norm
+	return nil
 }
 
 func (m *MemNodeStore) Close() error {
