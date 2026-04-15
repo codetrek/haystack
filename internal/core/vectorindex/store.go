@@ -24,6 +24,9 @@ const (
 // NodeStore defines the persistence interface for HNSW graph nodes.
 type NodeStore interface {
 	GetVector(id uint64) ([]float32, error)
+	// GetVectorRef returns the vector without copying. The caller MUST NOT
+	// modify the returned slice. Use GetVector when a mutable copy is needed.
+	GetVectorRef(id uint64) ([]float32, error)
 	PutNode(id uint64, level int, vector []float32) error
 	DeleteNode(id uint64) error
 	GetNeighbors(id uint64, layer int) ([]uint64, error)
@@ -185,6 +188,18 @@ func (s *PebbleNodeStore) cacheGet(id uint64) ([]float32, bool) {
 	return cp, true
 }
 
+// cacheGetRef returns the cached vector without copying. The caller MUST NOT
+// modify the returned slice.
+func (s *PebbleNodeStore) cacheGetRef(id uint64) ([]float32, bool) {
+	elem, ok := s.cacheMap[id]
+	if !ok {
+		return nil, false
+	}
+	s.cacheOrder.MoveToFront(elem)
+	entry := elem.Value.(*vectorCacheEntry)
+	return entry.vec, true
+}
+
 func (s *PebbleNodeStore) cachePut(id uint64, vec []float32) {
 	if elem, ok := s.cacheMap[id]; ok {
 		s.cacheOrder.MoveToFront(elem)
@@ -306,6 +321,27 @@ func decodeUint64(data []byte) uint64 {
 func (s *PebbleNodeStore) GetVector(id uint64) ([]float32, error) {
 	// Check LRU cache first.
 	if v, ok := s.cacheGet(id); ok {
+		return v, nil
+	}
+
+	val, closer, err := s.reader().Get(s.vecKey(id))
+	if err == pebble.ErrNotFound {
+		return nil, fmt.Errorf("node %d not found", id)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vector for node %d: %v", id, err)
+	}
+	defer closer.Close()
+
+	vec := decodeFloat32s(val)
+	s.cachePut(id, vec)
+	return vec, nil
+}
+
+// GetVectorRef returns the vector without an extra copy. For PebbleNodeStore
+// this returns the cached reference directly. Caller MUST NOT modify.
+func (s *PebbleNodeStore) GetVectorRef(id uint64) ([]float32, error) {
+	if v, ok := s.cacheGetRef(id); ok {
 		return v, nil
 	}
 

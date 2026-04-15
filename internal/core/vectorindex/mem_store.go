@@ -43,6 +43,18 @@ func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	return cp, nil
 }
 
+// GetVectorRef returns the internal vector slice directly without copying.
+// The caller MUST NOT modify the returned slice.
+func (m *MemNodeStore) GetVectorRef(id uint64) ([]float32, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.vectors[id]
+	if !ok {
+		return nil, fmt.Errorf("node %d not found", id)
+	}
+	return v, nil
+}
+
 func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

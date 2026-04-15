@@ -11,7 +11,7 @@ import (
 const (
 	DefaultM              = 16
 	DefaultMmax0          = 2 * DefaultM // 32
-	DefaultEfConstruction = 200
+	DefaultEfConstruction = 128
 	DefaultEfSearch       = 64
 )
 
@@ -139,7 +139,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	}
 
 	// Verify entry point node still exists (may have been deleted).
-	if _, err := h.store.GetVector(epId); err != nil {
+	if _, err := h.store.GetVectorRef(epId); err != nil {
 		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
 			return err
 		}
@@ -214,13 +214,13 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 			nbNeighbors = append(nbNeighbors, nodeId)
 			if len(nbNeighbors) > mMax {
 				// Shrink using heuristic.
-				nbVec, err := h.store.GetVector(nb.id)
+				nbVec, err := h.store.GetVectorRef(nb.id)
 				if err != nil {
 					continue // neighbor may have been deleted
 				}
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
-					cVec, err := h.store.GetVector(cid)
+					cVec, err := h.store.GetVectorRef(cid)
 					if err != nil {
 						continue // node may have been deleted
 					}
@@ -305,7 +305,7 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	}
 
 	// Verify entry point node still exists (may have been deleted).
-	if _, err := h.store.GetVector(epId); err != nil {
+	if _, err := h.store.GetVectorRef(epId); err != nil {
 		return nil, nil
 	}
 
@@ -392,7 +392,7 @@ func (h *HNSWIndex) Delete(docId string) error {
 		// Remove nodeId from each neighbor's list.
 		for _, nb := range neighbors {
 			// Skip neighbors that may have been deleted previously.
-			nbVec, err := h.store.GetVector(nb)
+			nbVec, err := h.store.GetVectorRef(nb)
 			if err != nil {
 				continue
 			}
@@ -423,7 +423,7 @@ func (h *HNSWIndex) Delete(docId string) error {
 			// Build candidate list for heuristic selection.
 			candidates := make([]distItem, 0, len(candidateSet))
 			for cid := range candidateSet {
-				cVec, err := h.store.GetVector(cid)
+				cVec, err := h.store.GetVectorRef(cid)
 				if err != nil {
 					continue // node may have been deleted
 				}
@@ -571,12 +571,12 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 		}
 		// Check if c is closer to query than to any already-selected neighbor.
 		good := true
-		cVec, err := h.store.GetVector(c.id)
+		cVec, err := h.store.GetVectorRef(c.id)
 		if err != nil {
 			continue
 		}
 		for _, s := range selected {
-			sVec, err := h.store.GetVector(s.id)
+			sVec, err := h.store.GetVectorRef(s.id)
 			if err != nil {
 				continue
 			}
@@ -612,7 +612,7 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 
 // nodeDistance computes distance between a stored node and a query vector.
 func (h *HNSWIndex) nodeDistance(nodeId uint64, query []float32) (float32, error) {
-	vec, err := h.store.GetVector(nodeId)
+	vec, err := h.store.GetVectorRef(nodeId)
 	if err != nil {
 		return 0, err
 	}
