@@ -88,6 +88,20 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// If the store supports batching, wrap this insert in a batch.
+	// Nested calls (e.g. from InsertBatch) just increment depth.
+	bs, batchable := h.store.(BatchableStore)
+	batchStarted := false
+	if batchable {
+		bs.BeginBatch()
+		batchStarted = true
+		defer func() {
+			if batchStarted {
+				bs.DiscardBatch()
+			}
+		}()
+	}
+
 	// Allocate a new node ID.
 	nodeId, err := h.store.NextNodeId()
 	if err != nil {
@@ -114,12 +128,26 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	epId, maxLayer, err := h.store.GetEntryPoint()
 	if err != nil {
 		// First node — set as entry point and return.
-		return h.store.SetEntryPoint(nodeId, l)
+		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
+			return err
+		}
+		if batchable {
+			batchStarted = false
+			return bs.CommitBatch(true)
+		}
+		return nil
 	}
 
 	// Verify entry point node still exists (may have been deleted).
 	if _, err := h.store.GetVector(epId); err != nil {
-		return h.store.SetEntryPoint(nodeId, l)
+		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
+			return err
+		}
+		if batchable {
+			batchStarted = false
+			return bs.CommitBatch(true)
+		}
+		return nil
 	}
 
 	// Phase 1: From top layer down to l+1, greedy search with ef=1.
@@ -227,7 +255,40 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 
 	// If new node's level is higher than current max, update entry point.
 	if l > maxLayer {
-		return h.store.SetEntryPoint(nodeId, l)
+		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
+			return err
+		}
+	}
+
+	if batchable {
+		batchStarted = false
+		return bs.CommitBatch(true)
+	}
+	return nil
+}
+
+// InsertItem holds a document ID and its vector for batch insertion.
+type InsertItem struct {
+	DocId  string
+	Vector []float32
+}
+
+// InsertBatch inserts multiple items in a single Pebble batch. Individual
+// Insert calls nest inside the outer batch (depth 2) so they accumulate
+// writes without committing. The outer batch commits once at the end.
+func (h *HNSWIndex) InsertBatch(items []InsertItem) error {
+	bs, batchable := h.store.(BatchableStore)
+	if batchable {
+		bs.BeginBatch()
+		defer bs.DiscardBatch()
+	}
+	for _, item := range items {
+		if err := h.Insert(item.DocId, item.Vector); err != nil {
+			return err
+		}
+	}
+	if batchable {
+		return bs.CommitBatch(true)
 	}
 	return nil
 }

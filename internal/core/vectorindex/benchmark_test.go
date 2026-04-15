@@ -296,6 +296,58 @@ func BenchmarkHNSWSearch(b *testing.B) {
 	}
 }
 
+func openBenchDB(b *testing.B) *pebble.DB {
+	dir := b.TempDir()
+	db, err := pebble.Open(filepath.Join(dir, "bench.db"), &pebble.Options{})
+	if err != nil {
+		b.Fatal(err)
+	}
+	return db
+}
+
+// BenchmarkHNSWInsertPebble measures the throughput of inserting 128-dim vectors
+// into an HNSW index backed by PebbleNodeStore (one-at-a-time).
+func BenchmarkHNSWInsertPebble(b *testing.B) {
+	const dim = 128
+	rng := rand.New(rand.NewSource(42))
+	vecs := randomVectors(rng, b.N, dim)
+
+	db := openBenchDB(b)
+	defer db.Close()
+	store := NewPebbleNodeStore(db, 1)
+	idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(99))))
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := idx.Insert(fmt.Sprintf("%d", i), vecs[i]); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkHNSWInsertBatchPebble measures the throughput of batched insertion
+// of 128-dim vectors into an HNSW index backed by PebbleNodeStore.
+func BenchmarkHNSWInsertBatchPebble(b *testing.B) {
+	const dim = 128
+	rng := rand.New(rand.NewSource(42))
+	vecs := randomVectors(rng, b.N, dim)
+
+	db := openBenchDB(b)
+	defer db.Close()
+	store := NewPebbleNodeStore(db, 1)
+	idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(99))))
+
+	items := make([]InsertItem, b.N)
+	for i := range items {
+		items[i] = InsertItem{DocId: fmt.Sprintf("%d", i), Vector: vecs[i]}
+	}
+
+	b.ResetTimer()
+	if err := idx.InsertBatch(items); err != nil {
+		b.Fatal(err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Recall@10 test with 1000 vectors
 // ---------------------------------------------------------------------------
