@@ -31,7 +31,7 @@ func TestIntegrationResultConsistency(t *testing.T) {
 	db := openTestDB(t)
 	defer db.Close()
 	pebbleStore := NewPebbleNodeStore(db, 1)
-	pebbleIdx := NewHNSWIndex(pebbleStore, CosineDistance, WithRand(rand.New(rand.NewSource(hnswSeed))))
+	pebbleIdx := NewHNSWIndex(pebbleStore, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 	for i, v := range vecs {
 		requireNoError(t, pebbleIdx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -47,7 +47,7 @@ func TestIntegrationResultConsistency(t *testing.T) {
 
 	// --- Mem path ---
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, CosineDistance, WithRand(rand.New(rand.NewSource(hnswSeed))))
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 	for i, v := range vecs {
 		requireNoError(t, memIdx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -94,7 +94,7 @@ func TestIntegrationRestartPersistence(t *testing.T) {
 		requireNoError(t, err)
 
 		store := NewPebbleNodeStore(db, 1)
-		idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(hnswSeed))))
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i, v := range vecs {
 			requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -118,7 +118,7 @@ func TestIntegrationRestartPersistence(t *testing.T) {
 		defer db.Close()
 
 		store := NewPebbleNodeStore(db, 1)
-		idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(hnswSeed))))
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i, q := range queries {
 			res, err := idx.Search(q, k)
@@ -167,7 +167,7 @@ func TestIntegrationDeleteRestart(t *testing.T) {
 		requireNoError(t, err)
 
 		store := NewPebbleNodeStore(db, 1)
-		idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(hnswSeed))))
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i, v := range vecs {
 			requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -194,7 +194,7 @@ func TestIntegrationDeleteRestart(t *testing.T) {
 		defer db.Close()
 
 		store := NewPebbleNodeStore(db, 1)
-		idx := NewHNSWIndex(store, CosineDistance, WithRand(rand.New(rand.NewSource(hnswSeed))))
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		res, err := idx.Search(query, k)
 		requireNoError(t, err)
@@ -218,7 +218,7 @@ func TestIntegrationCRUD(t *testing.T) {
 	defer db.Close()
 
 	store := NewPebbleNodeStore(db, 1)
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
 
 	// Insert 3 known vectors.
 	requireNoError(t, idx.Insert("alpha", []float32{1, 0, 0}))

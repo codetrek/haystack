@@ -26,6 +26,7 @@ type MergedBlock struct {
 	EffectiveLines int
 	Level          string
 	FixAction      string
+	NoCov          bool // true if any line in the block contains // nocov
 }
 
 // ShouldPrint returns true if the block should be printed (non-LOW level)

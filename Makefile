@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt clean test-docker-build test-docker-ensure test-safe test-safe-race
+.PHONY: build test coverage fmt clean gen-testdata test-docker-build test-docker-ensure test-safe test-safe-race
 
 APP_NAME=haystack
 BUILD_DIR=build
@@ -39,6 +39,10 @@ fmt:
 clean:
 	@echo "Cleaning..."
 	@$(RM_RF)
+
+gen-testdata:
+	@echo "Generating test fixtures (this takes ~15 min)..."
+	@go run ./cmd/gen-testdata/
 
 DOCKER_TEST_IMAGE=haystack-test
 

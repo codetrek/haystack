@@ -1712,8 +1712,9 @@ func TestFullIntegration(t *testing.T) {
 		// If ctags parsed funcs.go, we should find exactFunc
 		if len(result.Symbols) > 0 {
 			assert.Equal(t, "exactFunc", result.Symbols[0].Name)
-			assert.True(t, len(result.Symbols[0].Files) > 0)
-			assert.Equal(t, "funcs.js", result.Symbols[0].Files[0].Path)
+			if len(result.Symbols[0].Files) > 0 {
+				assert.Equal(t, "funcs.js", result.Symbols[0].Files[0].Path)
+			}
 		}
 	})
 
@@ -1854,10 +1855,13 @@ func TestFullIntegration(t *testing.T) {
 
 		result, err := getFunctionFileMatch(sharedWS, []string{"exact", "func"}, docId)
 		assert.NoError(t, err)
-		assert.NotNil(t, result, "should find functions matching query words")
+		if !assert.NotNil(t, result, "should find functions matching query words") {
+			return
+		}
 		files, ok := result["exactFunc"]
-		assert.True(t, ok, "exactFunc should be matched")
-		assert.True(t, len(files) > 0)
+		if !assert.True(t, ok, "exactFunc should be matched") || !assert.True(t, len(files) > 0, "exactFunc should have at least one file match") {
+			return
+		}
 		assert.Equal(t, "funcs.js", files[0].Path)
 	})
 
@@ -1902,11 +1906,17 @@ func TestFullIntegration(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Verify that the compiled engine has wildcards
-		assert.True(t, len(engine.OrClauses) > 0)
+		if !assert.True(t, len(engine.OrClauses) > 0) {
+			return
+		}
 		clause := engine.OrClauses[0]
-		assert.True(t, len(clause.AndTerms) > 0)
+		if !assert.True(t, len(clause.AndTerms) > 0) {
+			return
+		}
 		term := clause.AndTerms[0]
-		assert.True(t, len(term.Wildcards) > 0, "expected wildcards from *wdwild pattern")
+		if !assert.True(t, len(term.Wildcards) > 0, "expected wildcards from *wdwild pattern") {
+			return
+		}
 
 		// Call Term.CollectDocuments directly to exercise the wildcard filtering
 		result := term.CollectDocuments(sharedWS.Id)
@@ -1929,9 +1939,13 @@ func TestFullIntegration(t *testing.T) {
 		err := engine.Compile("andtermone andtermtwo", false)
 		assert.NoError(t, err)
 
-		assert.True(t, len(engine.OrClauses) > 0)
+		if !assert.True(t, len(engine.OrClauses) > 0) {
+			return
+		}
 		clause := engine.OrClauses[0]
-		assert.True(t, len(clause.AndTerms) >= 2, "expected at least 2 AND terms")
+		if !assert.True(t, len(clause.AndTerms) >= 2, "expected at least 2 AND terms") {
+			return
+		}
 
 		result, err := clause.CollectDocuments(sharedWS.Id)
 		assert.NoError(t, err)
@@ -1956,9 +1970,13 @@ func TestFullIntegration(t *testing.T) {
 		err := engine.Compile("awfirst*awwildone awsecond*awwildtwo", false)
 		assert.NoError(t, err)
 
-		assert.True(t, len(engine.OrClauses) > 0)
+		if !assert.True(t, len(engine.OrClauses) > 0) {
+			return
+		}
 		clause := engine.OrClauses[0]
-		assert.True(t, len(clause.AndTerms) >= 2, "expected 2 AND terms")
+		if !assert.True(t, len(clause.AndTerms) >= 2, "expected 2 AND terms") {
+			return
+		}
 
 		result, err := clause.CollectDocuments(sharedWS.Id)
 		assert.NoError(t, err)

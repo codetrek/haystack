@@ -4,7 +4,10 @@ import (
 	"container/heap"
 	"math"
 	"math/rand"
+	"sort"
 	"sync"
+
+	"github.com/viterin/vek/vek32"
 )
 
 // Default HNSW parameters per arXiv:1603.09320.
@@ -21,6 +24,7 @@ type HNSWIndex struct {
 	mu             sync.RWMutex
 	store          NodeStore
 	distance       DistanceFunc
+	isCosine       bool // true when distance == CosineDistance, enables norm caching
 	M              int
 	Mmax0          int
 	efConstruction int
@@ -53,6 +57,15 @@ func WithEfSearch(ef int) Option {
 // WithRand sets the random source for level generation (useful for tests).
 func WithRand(r *rand.Rand) Option {
 	return func(h *HNSWIndex) { h.rng = r }
+}
+
+// WithCosineDistance marks the index as using cosine distance, enabling
+// precomputed norm optimizations. Pass this option when using CosineDistance
+// as the distance function.
+func WithCosineDistance() Option {
+	return func(h *HNSWIndex) {
+		h.isCosine = true
+	}
 }
 
 // NewHNSWIndex creates a new HNSW index.
@@ -88,6 +101,20 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	// If the store supports batching, wrap this insert in a batch.
+	// Nested calls (e.g. from InsertBatch) just increment depth.
+	bs, batchable := h.store.(BatchableStore)
+	batchStarted := false
+	if batchable {
+		bs.BeginBatch()
+		batchStarted = true
+		defer func() {
+			if batchStarted {
+				bs.DiscardBatch()
+			}
+		}()
+	}
+
 	// Allocate a new node ID.
 	nodeId, err := h.store.NextNodeId()
 	if err != nil {
@@ -114,16 +141,34 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	epId, maxLayer, err := h.store.GetEntryPoint()
 	if err != nil {
 		// First node — set as entry point and return.
-		return h.store.SetEntryPoint(nodeId, l)
+		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
+			return err
+		}
+		if batchable {
+			batchStarted = false
+			return bs.CommitBatch(true)
+		}
+		return nil
 	}
 
 	// Verify entry point node still exists (may have been deleted).
-	if _, err := h.store.GetVector(epId); err != nil {
-		return h.store.SetEntryPoint(nodeId, l)
+	if _, err := h.store.GetVectorRef(epId); err != nil {
+		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
+			return err
+		}
+		if batchable {
+			batchStarted = false
+			return bs.CommitBatch(true)
+		}
+		return nil
 	}
 
 	// Phase 1: From top layer down to l+1, greedy search with ef=1.
 	curEp := epId
+	var queryNorm float32
+	if h.isCosine {
+		queryNorm = vek32.Norm(vector)
+	}
 	for layer := maxLayer; layer > l; layer-- {
 		changed := true
 		for changed {
@@ -132,12 +177,12 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 			if nerr != nil {
 				return nerr
 			}
-			curDist, derr := h.nodeDistance(curEp, vector)
+			curDist, derr := h.nodeDistCalc(curEp, vector, queryNorm)
 			if derr != nil {
 				return derr
 			}
 			for _, nb := range neighbors {
-				nbDist, derr := h.nodeDistance(nb, vector)
+				nbDist, derr := h.nodeDistCalc(nb, vector, queryNorm)
 				if derr != nil {
 					continue // node may have been deleted
 				}
@@ -166,7 +211,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 		if layer == 0 {
 			mMax = h.Mmax0
 		}
-		selected := h.selectNeighborsHeuristic(vector, candidates, mMax)
+		selected := h.selectNeighborsHeuristic(vector, candidates, mMax, nil)
 
 		// Create bidirectional edges.
 		neighborIds := make([]uint64, len(selected))
@@ -186,22 +231,26 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 			nbNeighbors = append(nbNeighbors, nodeId)
 			if len(nbNeighbors) > mMax {
 				// Shrink using heuristic.
-				nbVec, err := h.store.GetVector(nb.id)
+				nbVec, err := h.store.GetVectorRef(nb.id)
 				if err != nil {
 					continue // neighbor may have been deleted
 				}
+				// Pre-load vectors for all candidates so selectNeighborsHeuristic
+				// can read from the cache without repeating these lookups.
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
+				shrinkVecCache := make(map[uint64][]float32, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
-					cVec, err := h.store.GetVector(cid)
+					cVec, err := h.store.GetVectorRef(cid)
 					if err != nil {
 						continue // node may have been deleted
 					}
+					shrinkVecCache[cid] = cVec
 					nbCandidates = append(nbCandidates, distItem{
 						id:   cid,
 						dist: h.distance(nbVec, cVec),
 					})
 				}
-				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax)
+				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax, shrinkVecCache)
 				newNb := make([]uint64, len(shrunk))
 				for i, s := range shrunk {
 					newNb[i] = s.id
@@ -227,7 +276,40 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 
 	// If new node's level is higher than current max, update entry point.
 	if l > maxLayer {
-		return h.store.SetEntryPoint(nodeId, l)
+		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
+			return err
+		}
+	}
+
+	if batchable {
+		batchStarted = false
+		return bs.CommitBatch(true)
+	}
+	return nil
+}
+
+// InsertItem holds a document ID and its vector for batch insertion.
+type InsertItem struct {
+	DocId  string
+	Vector []float32
+}
+
+// InsertBatch inserts multiple items in a single Pebble batch. Individual
+// Insert calls nest inside the outer batch (depth 2) so they accumulate
+// writes without committing. The outer batch commits once at the end.
+func (h *HNSWIndex) InsertBatch(items []InsertItem) error {
+	bs, batchable := h.store.(BatchableStore)
+	if batchable {
+		bs.BeginBatch()
+		defer bs.DiscardBatch()
+	}
+	for _, item := range items {
+		if err := h.Insert(item.DocId, item.Vector); err != nil {
+			return err
+		}
+	}
+	if batchable {
+		return bs.CommitBatch(true)
 	}
 	return nil
 }
@@ -244,12 +326,16 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	}
 
 	// Verify entry point node still exists (may have been deleted).
-	if _, err := h.store.GetVector(epId); err != nil {
+	if _, err := h.store.GetVectorRef(epId); err != nil {
 		return nil, nil
 	}
 
 	// Phase 1: From top layer down to 1, greedy search with ef=1.
 	curEp := epId
+	var queryNorm float32
+	if h.isCosine {
+		queryNorm = vek32.Norm(query)
+	}
 	for layer := maxLayer; layer >= 1; layer-- {
 		changed := true
 		for changed {
@@ -258,12 +344,12 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 			if nerr != nil {
 				return nil, nerr
 			}
-			curDist, derr := h.nodeDistance(curEp, query)
+			curDist, derr := h.nodeDistCalc(curEp, query, queryNorm)
 			if derr != nil {
 				return nil, derr
 			}
 			for _, nb := range neighbors {
-				nbDist, derr := h.nodeDistance(nb, query)
+				nbDist, derr := h.nodeDistCalc(nb, query, queryNorm)
 				if derr != nil {
 					continue // node may have been deleted
 				}
@@ -331,7 +417,7 @@ func (h *HNSWIndex) Delete(docId string) error {
 		// Remove nodeId from each neighbor's list.
 		for _, nb := range neighbors {
 			// Skip neighbors that may have been deleted previously.
-			nbVec, err := h.store.GetVector(nb)
+			nbVec, err := h.store.GetVectorRef(nb)
 			if err != nil {
 				continue
 			}
@@ -362,7 +448,7 @@ func (h *HNSWIndex) Delete(docId string) error {
 			// Build candidate list for heuristic selection.
 			candidates := make([]distItem, 0, len(candidateSet))
 			for cid := range candidateSet {
-				cVec, err := h.store.GetVector(cid)
+				cVec, err := h.store.GetVectorRef(cid)
 				if err != nil {
 					continue // node may have been deleted
 				}
@@ -376,7 +462,7 @@ func (h *HNSWIndex) Delete(docId string) error {
 			if layer == 0 {
 				mMax = h.Mmax0
 			}
-			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax)
+			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax, nil)
 			newNb := make([]uint64, len(selected))
 			for i, s := range selected {
 				newNb[i] = s.id
@@ -431,7 +517,13 @@ func (h *HNSWIndex) Delete(docId string) error {
 // searchLayer performs a beam search on a single layer with given ef width.
 // Uses a min-heap for candidates and a max-heap for the result set.
 func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer int) ([]distItem, error) {
-	entryDist, err := h.nodeDistance(entryId, query)
+	// Precompute query norm for cosine distance optimization.
+	var queryNorm float32
+	if h.isCosine {
+		queryNorm = vek32.Norm(query)
+	}
+
+	entryDist, err := h.nodeDistCalc(entryId, query, queryNorm)
 	if err != nil {
 		return nil, err
 	}
@@ -466,7 +558,7 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 			}
 			visited[nbId] = true
 
-			nbDist, err := h.nodeDistance(nbId, query)
+			nbDist, err := h.nodeDistCalc(nbId, query, queryNorm)
 			if err != nil {
 				continue // node may have been deleted
 			}
@@ -495,13 +587,36 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 // selectNeighborsHeuristic selects up to M neighbors using the heuristic
 // from the paper. It ensures diversity by only adding a candidate if it
 // is closer to the query than to any already-selected neighbor.
-func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int) []distItem {
+// If vecCache is non-nil, vectors are read from it instead of the store.
+func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int, vecCache map[uint64][]float32) []distItem {
 	if len(candidates) <= m {
 		return candidates
 	}
 
 	// Sort candidates by distance to query.
 	sortDistItems(candidates)
+
+	// Build vector cache from store if not provided.
+	if vecCache == nil {
+		vecCache = make(map[uint64][]float32, len(candidates))
+		for _, c := range candidates {
+			v, err := h.store.GetVectorRef(c.id)
+			if err == nil {
+				vecCache[c.id] = v
+			}
+		}
+	}
+
+	// Pre-load norms for cosine distance optimization.
+	var normCache map[uint64]float32
+	if h.isCosine {
+		normCache = make(map[uint64]float32, len(candidates))
+		for _, c := range candidates {
+			if n, err := h.store.GetNorm(c.id); err == nil {
+				normCache[c.id] = n
+			}
+		}
+	}
 
 	selected := make([]distItem, 0, m)
 	for _, c := range candidates {
@@ -510,16 +625,28 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 		}
 		// Check if c is closer to query than to any already-selected neighbor.
 		good := true
-		cVec, err := h.store.GetVector(c.id)
-		if err != nil {
+		cVec, ok := vecCache[c.id]
+		if !ok {
 			continue
 		}
 		for _, s := range selected {
-			sVec, err := h.store.GetVector(s.id)
-			if err != nil {
+			sVec, ok := vecCache[s.id]
+			if !ok {
 				continue
 			}
-			if h.distance(cVec, sVec) < c.dist {
+			var dist float32
+			if h.isCosine {
+				cNorm, cOk := normCache[c.id]
+				sNorm, sOk := normCache[s.id]
+				if cOk && sOk {
+					dist = CosineDistanceWithNorms(cVec, sVec, cNorm, sNorm)
+				} else {
+					dist = h.distance(cVec, sVec)
+				}
+			} else {
+				dist = h.distance(cVec, sVec)
+			}
+			if dist < c.dist {
 				good = false
 				break
 			}
@@ -551,11 +678,35 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 
 // nodeDistance computes distance between a stored node and a query vector.
 func (h *HNSWIndex) nodeDistance(nodeId uint64, query []float32) (float32, error) {
-	vec, err := h.store.GetVector(nodeId)
+	vec, err := h.store.GetVectorRef(nodeId)
 	if err != nil {
 		return 0, err
 	}
 	return h.distance(vec, query), nil
+}
+
+// nodeDistanceWithNorm computes cosine distance between a stored node and a
+// query vector, using precomputed norms to avoid redundant norm calculations.
+// queryNorm is the precomputed L2 norm of the query vector.
+func (h *HNSWIndex) nodeDistanceWithNorm(nodeId uint64, query []float32, queryNorm float32) (float32, error) {
+	vec, err := h.store.GetVectorRef(nodeId)
+	if err != nil {
+		return 0, err
+	}
+	nodeNorm, err := h.store.GetNorm(nodeId)
+	if err != nil {
+		// Fallback to standard distance if norm not available.
+		return h.distance(vec, query), nil
+	}
+	return CosineDistanceWithNorms(vec, query, nodeNorm, queryNorm), nil
+}
+
+// nodeDistCalc computes distance, using precomputed norms when available.
+func (h *HNSWIndex) nodeDistCalc(nodeId uint64, query []float32, queryNorm float32) (float32, error) {
+	if h.isCosine {
+		return h.nodeDistanceWithNorm(nodeId, query, queryNorm)
+	}
+	return h.nodeDistance(nodeId, query)
 }
 
 func removeId(ids []uint64, target uint64) []uint64 {
@@ -579,9 +730,9 @@ type distItem struct {
 type minDistHeap []distItem
 
 func (h minDistHeap) Len() int            { return len(h) }
-func (h minDistHeap) Less(i, j int) bool   { return h[i].dist < h[j].dist }
-func (h minDistHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *minDistHeap) Push(x interface{})  { *h = append(*h, x.(distItem)) }
+func (h minDistHeap) Less(i, j int) bool  { return h[i].dist < h[j].dist }
+func (h minDistHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *minDistHeap) Push(x interface{}) { *h = append(*h, x.(distItem)) }
 func (h *minDistHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
@@ -594,9 +745,9 @@ func (h *minDistHeap) Pop() interface{} {
 type maxDistHeap []distItem
 
 func (h maxDistHeap) Len() int            { return len(h) }
-func (h maxDistHeap) Less(i, j int) bool   { return h[i].dist > h[j].dist }
-func (h maxDistHeap) Swap(i, j int)        { h[i], h[j] = h[j], h[i] }
-func (h *maxDistHeap) Push(x interface{})  { *h = append(*h, x.(distItem)) }
+func (h maxDistHeap) Less(i, j int) bool  { return h[i].dist > h[j].dist }
+func (h maxDistHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *maxDistHeap) Push(x interface{}) { *h = append(*h, x.(distItem)) }
 func (h *maxDistHeap) Pop() interface{} {
 	old := *h
 	n := len(old)
@@ -607,14 +758,7 @@ func (h *maxDistHeap) Pop() interface{} {
 
 // sortDistItems sorts distItems by distance ascending.
 func sortDistItems(items []distItem) {
-	// Simple insertion sort — fast for small slices typical in HNSW.
-	for i := 1; i < len(items); i++ {
-		key := items[i]
-		j := i - 1
-		for j >= 0 && items[j].dist > key.dist {
-			items[j+1] = items[j]
-			j--
-		}
-		items[j+1] = key
-	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].dist < items[j].dist
+	})
 }

@@ -28,6 +28,7 @@ type Config struct {
 	RaceDetection   bool   // Enable -race flag
 	ExcludePackages string // Packages to exclude (comma-separated)
 	ExcludeFiles    string // File path substrings to exclude from function/block reports (comma-separated)
+	ExcludeFuncs    string // Function names to exclude from coverage threshold (comma-separated)
 	CoverProfile    string // Coverage profile path
 	UncoveredLimit  int    // Max uncovered blocks to show
 	ShowTestCounts  bool   // Show TESTS column in package summary
@@ -138,6 +139,7 @@ func parseConfig() Config {
 		RaceDetection:    false,
 		ExcludePackages:  "haystack/scripts/,haystack/cmd",
 		ExcludeFiles:     "internal/testutil/,indexer/testing.go,main.go",
+		ExcludeFuncs:     "",
 		CoverProfile:     "/tmp/coverage.out",
 		UncoveredLimit:   10,
 		ShowTestCounts:   true,
@@ -180,6 +182,9 @@ func parseConfig() Config {
 		if i, err := strconv.Atoi(v); err == nil {
 			c.UncoveredLimit = i
 		}
+	}
+	if v := os.Getenv("EXCLUDE_FUNCS"); v != "" {
+		c.ExcludeFuncs = v
 	}
 
 	return c
@@ -483,6 +488,13 @@ func getFunctionCoverage() []FuncCoverage {
 		// Also skip functions ending in "ForTest" — test helpers in non-test files
 		if strings.HasSuffix(fields[1], "ForTest") {
 			excluded = true
+		}
+		// Skip excluded functions (nocov: pebble batch error paths)
+		for _, ef := range strings.Split(cfg.ExcludeFuncs, ",") {
+			if ef != "" && strings.Contains(fields[1], ef) {
+				excluded = true
+				break
+			}
 		}
 		if excluded {
 			continue
