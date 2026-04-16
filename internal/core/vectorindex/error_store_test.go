@@ -13,25 +13,25 @@ import (
 // inject configurable errors into any method. Set the corresponding Err
 // field to a non-nil error to make that method fail. Thread-safe.
 type errorStore struct {
-	mu sync.RWMutex
+	mu    sync.RWMutex
 	inner *MemNodeStore
 
-	GetVectorErr        error
-	GetVectorRefErr     error
-	PutNodeErr          error
-	DeleteNodeErr       error
-	GetNeighborsErr     error
-	SetNeighborsErr     error
-	GetEntryPointErr    error
-	SetEntryPointErr    error
-	GetNodeLevelErr     error
-	GetNodeIdErr        error
-	SetNodeMappingErr   error
+	GetVectorErr         error
+	GetVectorRefErr      error
+	PutNodeErr           error
+	DeleteNodeErr        error
+	GetNeighborsErr      error
+	SetNeighborsErr      error
+	GetEntryPointErr     error
+	SetEntryPointErr     error
+	GetNodeLevelErr      error
+	GetNodeIdErr         error
+	SetNodeMappingErr    error
 	DeleteNodeMappingErr error
-	NextNodeIdErr       error
-	GetNormErr          error
-	SetNormErr          error
-	CloseErr            error
+	NextNodeIdErr        error
+	GetNormErr           error
+	SetNormErr           error
+	CloseErr             error
 }
 
 func newErrorStore() *errorStore {
