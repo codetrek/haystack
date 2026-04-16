@@ -125,6 +125,18 @@ func AnalyzeBlockWithAST(b *MergedBlock, astCache *ASTCache, fileCache *FileCach
 	}
 	b.EffectiveLines = effectiveCount
 
+	// Check for // nocov annotation in block lines
+	for i := b.StartLine; i <= b.EndLine; i++ {
+		if i >= 1 && i <= len(lines) {
+			if strings.Contains(lines[i-1], "// nocov") {
+				b.NoCov = true
+				b.Level = "EXCLUDED"
+				b.FixAction = "nocov"
+				return
+			}
+		}
+	}
+
 	// Parse AST and analyze
 	fileAST, fset, err := astCache.GetAST(b.File)
 	if err != nil {

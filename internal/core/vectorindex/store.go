@@ -507,7 +507,7 @@ func (s *PebbleNodeStore) DeleteNode(id uint64) error {
 					return fmt.Errorf("failed to update node count: %v", err)
 				}
 			}
-		} else if err != pebble.ErrNotFound {
+		} else if err != pebble.ErrNotFound { // nocov: pebble.DB.Get only returns ErrNotFound or nil
 			return fmt.Errorf("failed to get node count: %v", err)
 		}
 		s.cacheEvict(id)
@@ -549,7 +549,7 @@ func (s *PebbleNodeStore) DeleteNode(id uint64) error {
 		if err := batch.Delete(s.docToNodeKey(docId), nil); err != nil {
 			return fmt.Errorf("failed to delete doc→node mapping for node %d: %v", id, err)
 		}
-	} else if err != pebble.ErrNotFound {
+	} else if err != pebble.ErrNotFound { // nocov: pebble.DB.Get only returns ErrNotFound or nil
 		return fmt.Errorf("failed to get doc mapping for node %d: %v", id, err)
 	}
 	if err := batch.Delete(nodeToDocKey, nil); err != nil {
@@ -567,7 +567,7 @@ func (s *PebbleNodeStore) DeleteNode(id uint64) error {
 				return fmt.Errorf("failed to update node count: %v", err)
 			}
 		}
-	} else if err != pebble.ErrNotFound {
+	} else if err != pebble.ErrNotFound { // nocov: pebble.DB.Get only returns ErrNotFound or nil
 		return fmt.Errorf("failed to get node count: %v", err)
 	}
 

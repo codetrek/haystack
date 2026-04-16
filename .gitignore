@@ -18,3 +18,6 @@ node_modules/
 
 # Generated test fixtures (large binary files)
 internal/core/vectorindex/testdata/*.bin
+*.out
+cover.html
+scripts/lib/coverage/coverage
