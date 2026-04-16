@@ -491,7 +491,7 @@ func getFunctionCoverage() []FuncCoverage {
 		}
 		// Skip excluded functions (nocov: pebble batch error paths)
 		for _, ef := range strings.Split(cfg.ExcludeFuncs, ",") {
-			if ef != "" && strings.Contains(fields[0]+":"+fields[1], ef) {
+			if ef != "" && strings.Contains(fields[1], ef) {
 				excluded = true
 				break
 			}
