@@ -600,3 +600,53 @@ func TestHNSWSearchKGreaterThanN(t *testing.T) {
 	requireNoError(t, err)
 	assert.Len(t, results, 3, "should return all 3 vectors when k > n")
 }
+
+func TestHNSWInsertUpsert(t *testing.T) {
+	store := NewMemNodeStore()
+	idx := NewHNSWIndex(store, CosineDistance)
+
+	// Insert a vector
+	err := idx.Insert("doc1", []float32{1, 0, 0})
+	assert.NoError(t, err)
+
+	// Insert same docId with different vector (upsert)
+	err = idx.Insert("doc1", []float32{0, 1, 0})
+	assert.NoError(t, err)
+
+	// Search for the updated vector — should find it with near-zero distance
+	results, err := idx.Search([]float32{0, 1, 0}, 1)
+	assert.NoError(t, err)
+	assert.Len(t, results, 1)
+	assert.InDelta(t, 0.0, results[0].Distance, 0.01)
+
+	// Search broadly — should only have 1 node total (no orphan from old insert)
+	results2, err := idx.Search([]float32{1, 0, 0}, 10)
+	assert.NoError(t, err)
+	assert.Len(t, results2, 1, "should have exactly 1 node after upsert, no orphans")
+}
+
+func TestHNSWInsertUpsertMultiple(t *testing.T) {
+	store := NewMemNodeStore()
+	idx := NewHNSWIndex(store, CosineDistance)
+
+	// Insert 5 vectors
+	for i := 0; i < 5; i++ {
+		v := make([]float32, 3)
+		v[i%3] = 1.0
+		err := idx.Insert(fmt.Sprintf("doc%d", i), v)
+		assert.NoError(t, err)
+	}
+
+	// Update doc0 three times
+	for j := 0; j < 3; j++ {
+		v := make([]float32, 3)
+		v[j] = float32(j + 1)
+		err := idx.Insert("doc0", v)
+		assert.NoError(t, err)
+	}
+
+	// Search for all — should get exactly 5 results, no orphans from repeated upserts
+	results, err := idx.Search([]float32{1, 1, 1}, 10)
+	assert.NoError(t, err)
+	assert.Equal(t, 5, len(results), "should have exactly 5 nodes, no orphans from upsert")
+}
