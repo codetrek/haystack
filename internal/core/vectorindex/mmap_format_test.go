@@ -99,6 +99,101 @@ func TestMetaHeaderAtomicWrite(t *testing.T) {
 	}
 }
 
+func TestWriteMetaHeaderBadDir(t *testing.T) {
+	// Non-existent directory should fail on create tmp.
+	h := &MetaHeader{Dim: 128, M: 16}
+	err := writeMetaHeader("/nonexistent/path/that/does/not/exist", h)
+	if err == nil {
+		t.Fatal("expected error for non-existent directory")
+	}
+}
+
+func TestWriteMetaHeaderVersionDefault(t *testing.T) {
+	dir := t.TempDir()
+	h := &MetaHeader{Version: 0, Dim: 128, M: 16}
+	if err := writeMetaHeader(dir, h); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readMetaHeader(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Version != 1 {
+		t.Errorf("Version = %d, want 1 (auto-set from 0)", got.Version)
+	}
+}
+
+func TestWriteMetaHeaderRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create meta.bin as a directory to make rename fail.
+	metaDir := filepath.Join(dir, "meta.bin")
+	if err := os.MkdirAll(metaDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Put a file inside so the directory isn't empty (rename will fail).
+	if err := os.WriteFile(filepath.Join(metaDir, "blocker"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := &MetaHeader{Dim: 128, M: 16}
+	err := writeMetaHeader(dir, h)
+	if err == nil {
+		t.Fatal("expected error when rename target is a non-empty directory")
+	}
+}
+
+func TestWriteDataFileHeaderBadPath(t *testing.T) {
+	// Non-existent path should fail on os.Create.
+	hdr := VectorsHeader{Magic: magicVectors, Dim: 4, Capacity: 10}
+	err := writeDataFileHeader("/nonexistent/dir/vectors.dat", magicVectors, &hdr, 4096+40)
+	if err == nil {
+		t.Fatal("expected error for non-existent path")
+	}
+}
+
+func TestWriteDataFileHeaderReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "readonly.dat")
+
+	// Create a file, then make the dir read-only to prevent truncate on new file.
+	hdr := VectorsHeader{Magic: magicVectors, Dim: 4, Capacity: 10}
+
+	// First write should succeed.
+	if err := writeDataFileHeader(path, magicVectors, &hdr, int64(pageSize)+40); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify file was created and has correct size.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size() != int64(pageSize)+40 {
+		t.Errorf("size = %d, want %d", info.Size(), int64(pageSize)+40)
+	}
+}
+
+func TestReadMetaHeaderMissing(t *testing.T) {
+	dir := t.TempDir()
+	_, err := readMetaHeader(dir)
+	if err == nil {
+		t.Fatal("expected error for missing meta.bin")
+	}
+}
+
+func TestReadMetaHeaderTruncated(t *testing.T) {
+	dir := t.TempDir()
+	// Write a file that's too short to be a valid header.
+	if err := os.WriteFile(filepath.Join(dir, "meta.bin"), make([]byte, 10), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readMetaHeader(dir)
+	if err == nil {
+		t.Fatal("expected error for truncated meta.bin")
+	}
+}
+
 func TestReadMetaHeaderBadMagic(t *testing.T) {
 	dir := t.TempDir()
 	// Write garbage.

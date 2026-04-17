@@ -207,6 +207,143 @@ func TestMmapStoreGetNodeId(t *testing.T) {
 	}
 }
 
+func TestMmapStoreReadUpperSlotOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	s.muNodes.RLock()
+	_, err = s.readUpperSlot(s.nodeCapacity)
+	s.muNodes.RUnlock()
+	if err == nil {
+		t.Fatal("expected error for out-of-range node id")
+	}
+
+	// Also test with nodeCapacity+1.
+	s.muNodes.RLock()
+	_, err = s.readUpperSlot(s.nodeCapacity + 1)
+	s.muNodes.RUnlock()
+	if err == nil {
+		t.Fatal("expected error for node id beyond capacity")
+	}
+}
+
+func TestMmapStoreGetNeighborsL0OutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, err = s.GetNeighbors(s.l0Capacity, 0)
+	if err == nil {
+		t.Fatal("expected error for out-of-range L0 id")
+	}
+}
+
+func TestMmapStoreGetNeighborsUpperOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Node id out of range for readUpperSlot.
+	_, err = s.GetNeighbors(s.nodeCapacity, 1)
+	if err == nil {
+		t.Fatal("expected error for out-of-range node id in upper path")
+	}
+}
+
+func TestMmapStoreGetNeighborsUpperSlotZero(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Node 0 has UpperSlot=0 by default (no upper allocation).
+	got, err := s.GetNeighbors(0, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("expected nil for upper slot 0, got %v", got)
+	}
+}
+
+func TestMmapStoreGetNeighborsUpperBadLayer(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Set node 0's UpperSlot to 1.
+	writeNodeSlot(s, 0, 2, 0, 1.0, 1)
+
+	// Layer beyond maxLayers should return nil.
+	got, err := s.GetNeighbors(0, s.maxLayers+1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Errorf("expected nil for layer beyond maxLayers, got %v", got)
+	}
+}
+
+func TestMmapStoreGetNeighborsUpperSlotOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Point node 0's UpperSlot to a value beyond upperCapacity.
+	writeNodeSlot(s, 0, 2, 0, 1.0, uint32(s.upperCapacity))
+
+	_, err = s.GetNeighbors(0, 1)
+	if err == nil {
+		t.Fatal("expected error for upper slot out of range")
+	}
+}
+
+func TestMmapStoreGetNormOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, err = s.GetNorm(s.nodeCapacity)
+	if err == nil {
+		t.Fatal("expected error for out-of-range id")
+	}
+}
+
+func TestMmapStoreGetNodeLevelOutOfRange(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	_, err = s.GetNodeLevel(s.nodeCapacity)
+	if err == nil {
+		t.Fatal("expected error for out-of-range id")
+	}
+}
+
 // --- Test helpers: write directly into mmap regions ---
 
 func writeVecSlot(s *MmapStore, id uint64, vec []float32) {
