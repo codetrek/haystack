@@ -707,3 +707,222 @@ func TestBenchmarkParametric(t *testing.T) {
 		}
 	}
 }
+
+// TestBenchmarkEfConstructionCompare compares different efConstruction values at 40K scale.
+func TestBenchmarkEfConstructionCompare(t *testing.T) {
+	n := 40000
+	dim := 128
+	k := 10
+	efSearchValues := []int{200, 400}
+	efConstructionValues := []int{128, 200, 256}
+
+	rng := rand.New(rand.NewSource(42))
+
+	// Generate vectors
+	vectors := make([][]float32, n)
+	for i := range vectors {
+		v := make([]float32, dim)
+		for j := range v {
+			v[j] = rng.Float32()*2 - 1
+		}
+		vectors[i] = v
+	}
+
+	// Generate queries
+	nQueries := 50
+	queries := make([][]float32, nQueries)
+	for i := range queries {
+		q := make([]float32, dim)
+		for j := range q {
+			q[j] = rng.Float32()*2 - 1
+		}
+		queries[i] = q
+	}
+
+	// Brute-force ground truth
+	groundTruth := make([][]int, nQueries)
+	for qi, q := range queries {
+		type distIdx struct {
+			dist float32
+			idx  int
+		}
+		dists := make([]distIdx, n)
+		for vi, v := range vectors {
+			dists[vi] = distIdx{CosineDistance(q, v), vi}
+		}
+		sort.Slice(dists, func(a, b int) bool { return dists[a].dist < dists[b].dist })
+		gt := make([]int, k)
+		for i := 0; i < k && i < len(dists); i++ {
+			gt[i] = dists[i].idx
+		}
+		groundTruth[qi] = gt
+	}
+
+	for _, efc := range efConstructionValues {
+		store := NewMemNodeStore()
+		idx := NewHNSWIndex(store, CosineDistance, WithEfConstruction(efc))
+
+		t.Run(fmt.Sprintf("efC=%d/insert", efc), func(t *testing.T) {
+			start := time.Now()
+			for i, v := range vectors {
+				if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+					t.Fatalf("insert %d: %v", i, err)
+				}
+			}
+			elapsed := time.Since(start)
+			t.Logf("efConstruction=%d insert 40K: %v (%.2fms/op)", efc, elapsed, float64(elapsed.Milliseconds())/float64(n))
+		})
+
+		for _, efs := range efSearchValues {
+			t.Run(fmt.Sprintf("efC=%d/efS=%d", efc, efs), func(t *testing.T) {
+				idx.mu.Lock()
+				idx.efSearch = efs
+				idx.mu.Unlock()
+
+				latencies := make([]time.Duration, len(queries))
+				recalls := make([]float64, len(queries))
+
+				for qi, q := range queries {
+					start := time.Now()
+					results, err := idx.Search(q, k)
+					latencies[qi] = time.Since(start)
+					if err != nil {
+						t.Fatalf("search %d: %v", qi, err)
+					}
+
+					gtSet := make(map[uint64]bool, k)
+					for _, vi := range groundTruth[qi] {
+						gtSet[uint64(vi)+1] = true
+					}
+					hits := 0
+					for _, r := range results {
+						if gtSet[r.ID] {
+							hits++
+						}
+					}
+					recalls[qi] = float64(hits) / float64(k)
+				}
+
+				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+				p50 := percentile(latencies, 0.50)
+				p99 := percentile(latencies, 0.99)
+
+				var totalRecall float64
+				for _, r := range recalls {
+					totalRecall += r
+				}
+				meanRecall := totalRecall / float64(len(recalls))
+
+				t.Logf("efC=%d efS=%d: p50=%v p99=%v recall@10=%.4f", efc, efs, p50, p99, meanRecall)
+			})
+		}
+	}
+}
+
+// TestBenchmarkMCompare compares M=16 vs M=32 at 40K scale.
+func TestBenchmarkMCompare(t *testing.T) {
+	n := 40000
+	dim := 128
+	k := 10
+	efSearchValues := []int{200, 400, 800}
+	mValues := []int{16, 32}
+
+	rng := rand.New(rand.NewSource(42))
+
+	vectors := make([][]float32, n)
+	for i := range vectors {
+		v := make([]float32, dim)
+		for j := range v {
+			v[j] = rng.Float32()*2 - 1
+		}
+		vectors[i] = v
+	}
+
+	nQueries := 50
+	queries := make([][]float32, nQueries)
+	for i := range queries {
+		q := make([]float32, dim)
+		for j := range q {
+			q[j] = rng.Float32()*2 - 1
+		}
+		queries[i] = q
+	}
+
+	groundTruth := make([][]int, nQueries)
+	for qi, q := range queries {
+		type distIdx struct {
+			dist float32
+			idx  int
+		}
+		dists := make([]distIdx, n)
+		for vi, v := range vectors {
+			dists[vi] = distIdx{CosineDistance(q, v), vi}
+		}
+		sort.Slice(dists, func(a, b int) bool { return dists[a].dist < dists[b].dist })
+		gt := make([]int, k)
+		for i := 0; i < k && i < len(dists); i++ {
+			gt[i] = dists[i].idx
+		}
+		groundTruth[qi] = gt
+	}
+
+	for _, m := range mValues {
+		store := NewMemNodeStore()
+		idx := NewHNSWIndex(store, CosineDistance, WithM(m))
+
+		t.Run(fmt.Sprintf("M=%d/insert", m), func(t *testing.T) {
+			start := time.Now()
+			for i, v := range vectors {
+				if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+					t.Fatalf("insert %d: %v", i, err)
+				}
+			}
+			elapsed := time.Since(start)
+			t.Logf("M=%d insert 40K: %v (%.2fms/op)", m, elapsed, float64(elapsed.Milliseconds())/float64(n))
+		})
+
+		for _, efs := range efSearchValues {
+			t.Run(fmt.Sprintf("M=%d/efS=%d", m, efs), func(t *testing.T) {
+				idx.mu.Lock()
+				idx.efSearch = efs
+				idx.mu.Unlock()
+
+				latencies := make([]time.Duration, len(queries))
+				recalls := make([]float64, len(queries))
+
+				for qi, q := range queries {
+					start := time.Now()
+					results, err := idx.Search(q, k)
+					latencies[qi] = time.Since(start)
+					if err != nil {
+						t.Fatalf("search %d: %v", qi, err)
+					}
+
+					gtSet := make(map[uint64]bool, k)
+					for _, vi := range groundTruth[qi] {
+						gtSet[uint64(vi)+1] = true
+					}
+					hits := 0
+					for _, r := range results {
+						if gtSet[r.ID] {
+							hits++
+						}
+					}
+					recalls[qi] = float64(hits) / float64(k)
+				}
+
+				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+				p50 := percentile(latencies, 0.50)
+				p99 := percentile(latencies, 0.99)
+
+				var totalRecall float64
+				for _, r := range recalls {
+					totalRecall += r
+				}
+				meanRecall := totalRecall / float64(len(recalls))
+
+				t.Logf("M=%d efS=%d: p50=%v p99=%v recall@10=%.4f", m, efs, p50, p99, meanRecall)
+			})
+		}
+	}
+}
