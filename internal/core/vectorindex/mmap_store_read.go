@@ -1,0 +1,155 @@
+package vectorindex
+
+import (
+	"encoding/binary"
+	"fmt"
+	"math"
+)
+
+// GetVector returns a copy of the vector for the given node ID.
+func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
+	s.muVec.RLock()
+	defer s.muVec.RUnlock()
+
+	if id >= s.vecCapacity {
+		return nil, fmt.Errorf("MmapStore.GetVector: id %d out of range (cap %d)", id, s.vecCapacity)
+	}
+
+	offset := pageSize + int(id)*s.vecSlotSize
+	raw := s.vectors[offset : offset+s.vecSlotSize]
+	vec := make([]float32, s.dim)
+	for i := 0; i < s.dim; i++ {
+		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4 : i*4+4]))
+	}
+	return vec, nil
+}
+
+// GetVectorRef returns a copy of the vector (same as GetVector in Phase 1).
+// A future optimization may return a zero-copy reference with epoch-based reclamation.
+func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
+	return s.GetVector(id)
+}
+
+// GetNeighbors returns the neighbor list for the given node and layer.
+func (s *MmapStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
+	s.muGraph.RLock()
+	defer s.muGraph.RUnlock()
+
+	if layer == 0 {
+		return s.getNeighborsL0(id)
+	}
+	return s.getNeighborsUpper(id, layer)
+}
+
+func (s *MmapStore) getNeighborsL0(id uint64) ([]uint64, error) {
+	if id >= s.l0Capacity {
+		return nil, fmt.Errorf("MmapStore.GetNeighbors: id %d out of range (l0 cap %d)", id, s.l0Capacity)
+	}
+
+	offset := pageSize + int(id)*s.l0SlotSize
+	count := int(binary.LittleEndian.Uint32(s.graphL0[offset : offset+4]))
+	if count > s.mmax0 {
+		count = s.mmax0
+	}
+
+	neighbors := make([]uint64, count)
+	base := offset + 4
+	for i := 0; i < count; i++ {
+		neighbors[i] = binary.LittleEndian.Uint64(s.graphL0[base+i*8 : base+i*8+8])
+	}
+	return neighbors, nil
+}
+
+func (s *MmapStore) getNeighborsUpper(id uint64, layer int) ([]uint64, error) {
+	// Read the UpperSlot index from nodes.dat.
+	s.muNodes.RLock()
+	upperSlot, err := s.readUpperSlot(id)
+	s.muNodes.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	if upperSlot == 0 {
+		return nil, nil // no upper slot allocated
+	}
+
+	if uint64(upperSlot) >= s.upperCapacity {
+		return nil, fmt.Errorf("MmapStore.GetNeighbors: upper slot %d out of range (cap %d)", upperSlot, s.upperCapacity)
+	}
+
+	layerIdx := layer - 1 // layer 1 maps to index 0 in upper slot
+	if layerIdx < 0 || layerIdx >= s.maxLayers {
+		return nil, nil
+	}
+
+	layerSize := graphUpperLayerSize(s.m)
+	slotOffset := pageSize + int(upperSlot)*s.upperSlotSz
+	layerOffset := slotOffset + layerIdx*layerSize
+
+	count := int(binary.LittleEndian.Uint32(s.graphUpper[layerOffset : layerOffset+4]))
+	if count > s.m {
+		count = s.m
+	}
+
+	neighbors := make([]uint64, count)
+	base := layerOffset + 4
+	for i := 0; i < count; i++ {
+		neighbors[i] = binary.LittleEndian.Uint64(s.graphUpper[base+i*8 : base+i*8+8])
+	}
+	return neighbors, nil
+}
+
+// readUpperSlot reads the UpperSlot field from nodes.dat for the given node.
+// Caller must hold muNodes.RLock.
+func (s *MmapStore) readUpperSlot(id uint64) (uint32, error) {
+	if id >= s.nodeCapacity {
+		return 0, fmt.Errorf("MmapStore: node id %d out of range (cap %d)", id, s.nodeCapacity)
+	}
+	offset := pageSize + int(id)*nodeSlotSize
+	// UpperSlot is at bytes 8..12 in the NodeSlot (after Level[1] + Flags[1] + pad[2] + Norm[4]).
+	return binary.LittleEndian.Uint32(s.nodes[offset+8 : offset+12]), nil
+}
+
+// GetNorm returns the precomputed L2 norm for a node.
+func (s *MmapStore) GetNorm(id uint64) (float32, error) {
+	s.muNodes.RLock()
+	defer s.muNodes.RUnlock()
+
+	if id >= s.nodeCapacity {
+		return 0, fmt.Errorf("MmapStore.GetNorm: id %d out of range (cap %d)", id, s.nodeCapacity)
+	}
+	offset := pageSize + int(id)*nodeSlotSize
+	// Norm is at bytes 4..8 in the NodeSlot.
+	bits := binary.LittleEndian.Uint32(s.nodes[offset+4 : offset+8])
+	return math.Float32frombits(bits), nil
+}
+
+// GetNodeLevel returns the level of the given node.
+func (s *MmapStore) GetNodeLevel(id uint64) (int, error) {
+	s.muNodes.RLock()
+	defer s.muNodes.RUnlock()
+
+	if id >= s.nodeCapacity {
+		return 0, fmt.Errorf("MmapStore.GetNodeLevel: id %d out of range (cap %d)", id, s.nodeCapacity)
+	}
+	offset := pageSize + int(id)*nodeSlotSize
+	level := int(s.nodes[offset]) // Level is first byte
+	flags := s.nodes[offset+1]
+	if flags&nodeFlagDeleted != 0 {
+		return 0, fmt.Errorf("MmapStore.GetNodeLevel: node %d is deleted", id)
+	}
+	return level, nil
+}
+
+// GetEntryPoint returns the entry point node ID and its level.
+func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
+	if s.meta.EntryPoint == ^uint64(0) {
+		return 0, 0, fmt.Errorf("MmapStore.GetEntryPoint: no entry point set")
+	}
+	return s.meta.EntryPoint, int(s.meta.EntryLevel), nil
+}
+
+// GetNodeId looks up the node ID for a document ID (in-memory map).
+func (s *MmapStore) GetNodeId(docId string) (uint64, bool, error) {
+	id, ok := s.docToNode[docId]
+	return id, ok, nil
+}
