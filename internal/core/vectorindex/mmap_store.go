@@ -17,6 +17,14 @@ type MmapStoreOptions struct {
 }
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
+//
+// Lock ordering (acquire outer before inner to avoid deadlocks):
+//
+//	muGraph → muNodes → muVec
+//
+// getNeighborsUpper acquires muNodes while muGraph is held — this is
+// consistent with the ordering above. Any future write path must follow
+// the same order.
 type MmapStore struct {
 	dir  string
 	meta MetaHeader

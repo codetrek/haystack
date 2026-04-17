@@ -62,6 +62,7 @@ func (s *MmapStore) getNeighborsL0(id uint64) ([]uint64, error) {
 
 func (s *MmapStore) getNeighborsUpper(id uint64, layer int) ([]uint64, error) {
 	// Read the UpperSlot index from nodes.dat.
+	// Lock order: muGraph (held by caller) → muNodes (acquired here). See MmapStore doc.
 	s.muNodes.RLock()
 	upperSlot, err := s.readUpperSlot(id)
 	s.muNodes.RUnlock()
