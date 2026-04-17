@@ -213,7 +213,7 @@ func (s *MmapStore) mmapAll() error {
 	// Track opened files and mappings for cleanup on error.
 	var openedFiles []*os.File
 	var mappedRegions [][]byte
-	cleanup := func() {
+	cleanup := func() { // nocov: error cleanup path — requires partial mmap failure to trigger
 		for _, m := range mappedRegions {
 			mmapFree(m)
 		}
