@@ -2,6 +2,7 @@ package vectorindex
 
 import (
 	"container/heap"
+	"fmt"
 	"math"
 	"math/rand"
 	"sort"
@@ -100,6 +101,16 @@ func (h *HNSWIndex) randomLevel() int {
 func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Upsert: if docId already exists, delete the old node first to avoid
+	// orphan nodes and inconsistent mappings (HAY-005).
+	if existingId, found, err := h.store.GetNodeId(docId); err != nil {
+		return fmt.Errorf("failed to check existing docId %q: %v", docId, err)
+	} else if found {
+		if err := h.deleteNodeLocked(existingId, docId); err != nil {
+			return fmt.Errorf("failed to delete existing node for docId %q: %v", docId, err)
+		}
+	}
 
 	// If the store supports batching, wrap this insert in a batch.
 	// Nested calls (e.g. from InsertBatch) just increment depth.
@@ -401,6 +412,11 @@ func (h *HNSWIndex) Delete(docId string) error {
 		return nil
 	}
 
+	return h.deleteNodeLocked(nodeId, docId)
+}
+
+// deleteNodeLocked removes a node from the HNSW graph. Caller must hold h.mu.
+func (h *HNSWIndex) deleteNodeLocked(nodeId uint64, docId string) error {
 	level, err := h.store.GetNodeLevel(nodeId)
 	if err != nil {
 		return err
