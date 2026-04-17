@@ -45,6 +45,7 @@ type MmapStore struct {
 	muVec   sync.RWMutex
 	muGraph sync.RWMutex
 	muNodes sync.RWMutex
+	muDoc   sync.RWMutex // protects docToNode
 
 	dim           int
 	m             int
@@ -209,25 +210,42 @@ func (s *MmapStore) mmapAll() error {
 		{"graph_upper.dat", &s.upperFile, &s.graphUpper, &s.upperCapacity},
 	}
 
+	// Track opened files and mappings for cleanup on error.
+	var openedFiles []*os.File
+	var mappedRegions [][]byte
+	cleanup := func() {
+		for _, m := range mappedRegions {
+			mmapFree(m)
+		}
+		for _, f := range openedFiles {
+			f.Close()
+		}
+	}
+
 	for _, fi := range files {
 		path := filepath.Join(s.dir, fi.name)
 		f, err := os.OpenFile(path, os.O_RDWR, 0644)
 		if err != nil {
+			cleanup()
 			return fmt.Errorf("open %s: %w", fi.name, err)
 		}
 		*fi.file = f
+		openedFiles = append(openedFiles, f)
 
 		info, err := f.Stat()
 		if err != nil {
+			cleanup()
 			return fmt.Errorf("stat %s: %w", fi.name, err)
 		}
 		size := int(info.Size())
 
 		mapped, err := mmapAlloc(f.Fd(), 0, size, mmapRead|mmapWrite)
 		if err != nil {
+			cleanup()
 			return fmt.Errorf("mmap %s: %w", fi.name, err)
 		}
 		*fi.data = mapped
+		mappedRegions = append(mappedRegions, mapped)
 	}
 
 	// Read capacities from headers.
