@@ -20,7 +20,9 @@
 
 
 ## Backlog 📋
-（空）
+| ID | 任务 | Owner | 优先级 | 说明 |
+|----|------|-------|--------|------|
+| HAY-004g | HNSW Insert upsert 修补（重复 docId 孤儿节点） | Dev | P1 | Insert 开头 GetNodeId 检查，存在则先 Delete 再 Insert；小改无需设计文档 |
 
 ## 设计文档
 - [HAY-004 HNSW 设计](HAY-004-hnsw/design.md)
