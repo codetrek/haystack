@@ -12,18 +12,19 @@
 | HAY-004d | Pebble 替换 mock | Dev | #44 | 2026-04-14 |
 | HAY-004e | 并发安全 | Dev | #46 | 2026-04-14 |
 | HAY-004f | 性能验证 & E2E（参数化 benchmark + SIFT 真实数据验证） | Dev | #49 | 2026-04-17 |
-| HAY-004f-qa | QA 验收：HNSW 性能 & E2E | QA | — | 2026-04-17 |
+| HAY-004f-qa | QA 验收：HNSW 性能 & E2E | QA | #50 | 2026-04-17 |
+| HAY-004g | HNSW Insert upsert 修补（重复 docId 孤儿节点） | Dev | #51 | 2026-04-17 |
+| HAY-006 | 补充 upsert 测试场景 | Dev | #52 | 2026-04-17 |
 
 ## In Progress 🔵
 | ID | 任务 | Owner | Branch | 说明 |
 |----|------|-------|--------|------|
-
+| HAY-007 | mmap flat file 存储引擎 | Dev | PR #53 | Phase 1 完成，等飞马 review |
 
 ## Backlog 📋
-| ID | 任务 | Owner | 优先级 | 说明 |
-|----|------|-------|--------|------|
-| HAY-004g | HNSW Insert upsert 修补（重复 docId 孤儿节点） | Dev | P1 | Insert 开头 GetNodeId 检查，存在则先 Delete 再 Insert；小改无需设计文档 |
+（空）
 
 ## 设计文档
 - [HAY-004 HNSW 设计](HAY-004-hnsw/design.md)
 - [coder/hnsw 审查报告](HAY-004-hnsw/hnsw-deep-review.md)
+- [HAY-007 MmapStore 设计](../design/HAY-007-mmap-store.md)
