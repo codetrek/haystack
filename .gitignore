@@ -21,3 +21,4 @@ internal/core/vectorindex/testdata/*.bin
 *.out
 cover.html
 scripts/lib/coverage/coverage
+internal/core/vectorindex/testdata/sift/

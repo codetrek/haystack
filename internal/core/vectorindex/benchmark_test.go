@@ -952,6 +952,9 @@ func loadFvecs(path string, limit int) ([][]float32, error) {
 }
 
 // loadIvecs reads a .ivecs file (ground truth): each record is [k(int32), ids(k × int32)].
+// Currently unused — we compute brute-force ground truth instead because SIFT's
+// built-in ground truth is for the full 1M dataset, not our 100K subset.
+// Kept for future use when testing with the full 1M dataset.
 func loadIvecs(path string, limit int) ([][]int32, error) {
 	f, err := os.Open(path)
 	if err != nil {
