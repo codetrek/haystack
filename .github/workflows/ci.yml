@@ -3,24 +3,8 @@ name: CI Pipeline
 on:
   push:
     branches: [ "main" ]
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - "Dockerfile*"
-      - "scripts/**"
-      - ".github/workflows/ci.yml"
   pull_request:
     branches: [ "main", "master" ]
-    paths:
-      - "**/*.go"
-      - "go.mod"
-      - "go.sum"
-      - "Makefile"
-      - "Dockerfile*"
-      - "scripts/**"
-      - ".github/workflows/ci.yml"
 
 jobs:
   build-and-test:
