@@ -1094,3 +1094,39 @@ func TestBenchmarkSIFT(t *testing.T) {
 		})
 	}
 }
+
+// BenchmarkMmapStoreGetVector measures mmap read latency.
+// Target: < 1μs per GetVector call.
+func BenchmarkMmapStoreGetVector(b *testing.B) {
+	// Build a small MmapStore with 1000 vectors
+	store := NewMemNodeStore()
+	for i := 0; i < 1000; i++ {
+		v := make([]float32, 128)
+		for j := range v {
+			v[j] = float32(i*128 + j)
+		}
+		store.PutNode(uint64(i), 0, v)
+		store.SetNeighbors(uint64(i), 0, nil)
+		store.SetNodeMapping(fmt.Sprintf("doc%d", i), uint64(i))
+	}
+
+	dir := b.TempDir()
+	err := ExportMemStoreToMmap(store, 1000, 128, dir)
+	if err != nil {
+		b.Fatalf("export: %v", err)
+	}
+
+	ms, err := OpenMmapStore(dir, 128)
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer ms.Close()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, err := ms.GetVector(uint64(i % 1000))
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
