@@ -151,6 +151,8 @@ func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 
 // GetNodeId looks up the node ID for a document ID (in-memory map).
 func (s *MmapStore) GetNodeId(docId string) (uint64, bool, error) {
+	s.muDoc.RLock()
 	id, ok := s.docToNode[docId]
+	s.muDoc.RUnlock()
 	return id, ok, nil
 }
