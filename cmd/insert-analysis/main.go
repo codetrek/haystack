@@ -11,11 +11,11 @@ import (
 
 type countingStore struct {
 	vi.NodeStore
-	reads       atomic.Int64
-	putNodes    atomic.Int64
+	reads        atomic.Int64
+	putNodes     atomic.Int64
 	setNeighbors atomic.Int64
-	setMappings atomic.Int64
-	setNorms    atomic.Int64
+	setMappings  atomic.Int64
+	setNorms     atomic.Int64
 }
 
 func (c *countingStore) GetVectorRef(id uint64) ([]float32, error) {
@@ -90,10 +90,10 @@ func main() {
 	}
 
 	type sample struct {
-		n                                              int
+		n                                                      int
 		avgReads, avgPuts, avgNeighbors, avgMappings, avgNorms float64
-		avgTotalWrites                                 float64
-		cumReads, cumWrites                            int64
+		avgTotalWrites                                         float64
+		cumReads, cumWrites                                    int64
 	}
 
 	var samples []sample
