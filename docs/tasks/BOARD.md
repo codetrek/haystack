@@ -19,7 +19,7 @@
 ## In Progress 🔵
 | ID | 任务 | Owner | Branch | 说明 |
 |----|------|-------|--------|------|
-| HAY-007 | mmap flat file 存储引擎 | Dev | PR #54 | Phase 1 P1 修复，等飞马 review |
+| HAY-007 | mmap flat file 存储引擎 | Dev | PR #55 | Phase 2 完成，50K Insert 0.38s（2400x vs Pebble），等飞马 review |
 
 ## Backlog 📋
 （空）
