@@ -165,7 +165,7 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	// Checkpoint after replay to persist recovered state and truncate WAL,
 	// so subsequent Opens don't re-replay the same records.
 	if s.wal.LSN() > s.meta.WalCheckpointLSN {
-		if err := s.checkpointLocked(); err != nil {
+		if err := s.checkpointLocked(); err != nil { // nocov: post-replay checkpoint failure requires msync/rename to fail
 			s.idmapFile.Close()
 			wal.Close()
 			s.closeMmaps()
@@ -438,7 +438,7 @@ func (s *MmapStore) replayWAL() error {
 			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 
 			// If level > 0, allocate an upper slot.
-			if level > 0 { // nocov: replay upper-level allocation
+			if level > 0 {
 				if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
 					return err
 				}
@@ -472,7 +472,7 @@ func (s *MmapStore) replayWAL() error {
 				}
 			}
 
-		case WalSetNorm: // nocov: replay set-norm path
+		case WalSetNorm:
 			nodeId, norm := DecodeSetNorm(payload)
 			if nodeId < s.nodeCapacity {
 				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
