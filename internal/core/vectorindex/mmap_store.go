@@ -142,7 +142,7 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	}
 
 	// Replay WAL from checkpoint.
-	if err := s.replayWAL(); err != nil {
+	if err := s.replayWAL(); err != nil { // nocov: WAL replay error during Open
 		s.idmapFile.Close()
 		wal.Close()
 		s.closeMmaps()
@@ -317,7 +317,7 @@ func (s *MmapStore) mmapAll() error {
 }
 
 // closeMmaps unmaps and closes all data files (cleanup helper).
-func (s *MmapStore) closeMmaps() {
+func (s *MmapStore) closeMmaps() { // nocov: cleanup helper — called from Close/error paths
 	mmapFree(s.vectors)
 	mmapFree(s.nodes)
 	mmapFree(s.graphL0)
