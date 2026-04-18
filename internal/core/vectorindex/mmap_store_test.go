@@ -3,6 +3,7 @@ package vectorindex
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -97,7 +98,11 @@ func TestMmapStoreInvalidOpts(t *testing.T) {
 
 func TestMmapStoreInitBadDir(t *testing.T) {
 	// Opening in a non-writable path should fail during initAllFiles.
-	_, err := OpenMmapStore("/dev/null/impossible", MmapStoreOptions{Dim: 4, M: 4})
+	badPath := "/dev/null/impossible"
+	if runtime.GOOS == "windows" {
+		badPath = "NUL\\impossible"
+	}
+	_, err := OpenMmapStore(badPath, MmapStoreOptions{Dim: 4, M: 4})
 	if err == nil {
 		t.Fatal("expected error for non-writable path")
 	}
