@@ -81,6 +81,9 @@ func (w *WAL) scanLSN() error {
 		}
 		lsn := binary.LittleEndian.Uint64(header[0:8])
 		length := binary.LittleEndian.Uint32(header[8:12])
+		if length > maxWalPayloadSize {
+			break // corrupted record — payload too large
+		}
 
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {
