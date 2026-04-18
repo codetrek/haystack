@@ -143,10 +143,15 @@ func (s *MmapStore) GetNodeLevel(id uint64) (int, error) {
 
 // GetEntryPoint returns the entry point node ID and its level.
 func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
-	if s.meta.EntryPoint == ^uint64(0) {
+	s.muWrite.RLock()
+	ep := s.meta.EntryPoint
+	el := s.meta.EntryLevel
+	s.muWrite.RUnlock()
+
+	if ep == ^uint64(0) {
 		return 0, 0, fmt.Errorf("MmapStore.GetEntryPoint: no entry point set")
 	}
-	return s.meta.EntryPoint, int(s.meta.EntryLevel), nil
+	return ep, int(el), nil
 }
 
 // GetNodeId looks up the node ID for a document ID (in-memory map).

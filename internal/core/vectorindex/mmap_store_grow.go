@@ -65,10 +65,9 @@ func (s *MmapStore) growFile(which fileType, requiredCap uint64) error {
 }
 
 func (s *MmapStore) growVectors(requiredCap uint64) error {
-	s.muVec.Lock()
-	defer s.muVec.Unlock()
+	// Caller holds muWrite; no additional lock needed.
 
-	// Re-check under lock.
+	// Re-check capacity.
 	if requiredCap <= s.vecCapacity {
 		return nil
 	}
@@ -84,8 +83,7 @@ func (s *MmapStore) growVectors(requiredCap uint64) error {
 }
 
 func (s *MmapStore) growNodes(requiredCap uint64) error {
-	s.muNodes.Lock()
-	defer s.muNodes.Unlock()
+	// Caller holds muWrite; no additional lock needed.
 
 	if requiredCap <= s.nodeCapacity {
 		return nil
@@ -102,8 +100,7 @@ func (s *MmapStore) growNodes(requiredCap uint64) error {
 }
 
 func (s *MmapStore) growL0(requiredCap uint64) error {
-	s.muGraph.Lock()
-	defer s.muGraph.Unlock()
+	// Caller holds muWrite; no additional lock needed.
 
 	if requiredCap <= s.l0Capacity {
 		return nil
@@ -120,8 +117,7 @@ func (s *MmapStore) growL0(requiredCap uint64) error {
 }
 
 func (s *MmapStore) growUpper(requiredCap uint64) error {
-	s.muGraph.Lock()
-	defer s.muGraph.Unlock()
+	// Caller holds muWrite; no additional lock needed.
 
 	if requiredCap <= s.upperCapacity {
 		return nil

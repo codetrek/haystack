@@ -20,13 +20,15 @@ type MmapStoreOptions struct {
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
 //
-// Lock ordering (acquire outer before inner to avoid deadlocks):
+// Concurrency model:
 //
-//	muGraph → muNodes → muVec
-//
-// getNeighborsUpper acquires muNodes while muGraph is held — this is
-// consistent with the ordering above. Any future write path must follow
-// the same order.
+//   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
+//     DeleteNode, SetNodeMapping, NextNodeId, BeginBatch, CommitBatch,
+//     DiscardBatch) are serialised by muWrite.Lock().
+//   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
+//   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
+//   - Grow functions (ensureCapacity / growFile) are called under muWrite
+//     and do not acquire additional locks.
 type MmapStore struct {
 	dir  string
 	meta MetaHeader
@@ -51,6 +53,7 @@ type MmapStore struct {
 	nodeToDoc map[uint64]string
 	idmapFile *os.File // idmap.dat append handle
 
+	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
 	muVec   sync.RWMutex
 	muGraph sync.RWMutex
 	muNodes sync.RWMutex
