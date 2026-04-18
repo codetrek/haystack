@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"os"
+	"path/filepath"
 
 	"github.com/viterin/vek/vek32"
 )
@@ -340,6 +342,85 @@ func (s *MmapStore) syncAll() error {
 		return err
 	}
 	return mmapSync(s.graphUpper)
+}
+
+// Checkpoint persists the current state: msync all mmap regions, write
+// meta.bin with the current WAL LSN, truncate the WAL, and compact idmap.
+func (s *MmapStore) Checkpoint() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	return s.checkpointLocked()
+}
+
+func (s *MmapStore) checkpointLocked() error {
+	// 1. msync all mmap regions.
+	if err := s.syncAll(); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: msync: %w", err)
+	}
+	// 2. Record current WAL LSN into meta and write meta.bin atomically.
+	s.meta.WalCheckpointLSN = s.wal.LSN()
+	if err := writeMetaHeader(s.dir, &s.meta); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: meta: %w", err)
+	}
+	// 3. Truncate WAL (LSN is preserved inside WAL).
+	if err := s.wal.Reset(); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: WAL reset: %w", err)
+	}
+	// 4. Compact idmap.
+	if err := s.compactIdmap(); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: idmap compact: %w", err)
+	}
+	return nil
+}
+
+// compactIdmap rewrites idmap.dat with only the current in-memory mappings,
+// removing stale entries from deleted nodes.
+func (s *MmapStore) compactIdmap() error {
+	path := filepath.Join(s.dir, "idmap.dat")
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+
+	s.muDoc.RLock()
+	for docId, nodeId := range s.docToNode {
+		docBytes := []byte(docId)
+		entry := make([]byte, 10+len(docBytes)+4)
+		binary.LittleEndian.PutUint64(entry[0:], nodeId)
+		binary.LittleEndian.PutUint16(entry[8:], uint16(len(docBytes)))
+		copy(entry[10:], docBytes)
+		h := crc32.NewIEEE()
+		h.Write(entry[:10+len(docBytes)])
+		binary.LittleEndian.PutUint32(entry[10+len(docBytes):], h.Sum32())
+		if _, err := f.Write(entry); err != nil {
+			s.muDoc.RUnlock()
+			f.Close()
+			os.Remove(tmp)
+			return err
+		}
+	}
+	s.muDoc.RUnlock()
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	f.Close()
+
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+
+	// Reopen idmap for append.
+	nf, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		return err
+	}
+	s.idmapFile.Close()
+	s.idmapFile = nf
+	return nil
 }
 
 // NextNodeId returns the next available node ID (simple auto-increment).
