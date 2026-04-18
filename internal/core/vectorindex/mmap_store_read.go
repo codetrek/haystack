@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"unsafe"
 )
 
 // GetVector returns a copy of the vector for the given node ID.
@@ -16,18 +17,26 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	}
 
 	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
-	raw := s.vectors[offset : offset+int64(s.vecSlotSize)]
+	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
+	src := unsafe.Slice(ptr, s.dim)
 	vec := make([]float32, s.dim)
-	for i := 0; i < s.dim; i++ {
-		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4 : i*4+4]))
-	}
+	copy(vec, src)
 	return vec, nil
 }
 
-// GetVectorRef returns a copy of the vector (same as GetVector in Phase 1).
-// A future optimization may return a zero-copy reference with epoch-based reclamation.
+// GetVectorRef returns a zero-copy reference into the mmap'd region.
+// The caller must not retain the slice past any grow/remap operation.
 func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
-	return s.GetVector(id)
+	s.muVec.RLock()
+	defer s.muVec.RUnlock()
+
+	if id >= s.vecCapacity {
+		return nil, fmt.Errorf("MmapStore.GetVectorRef: id %d out of range (cap %d)", id, s.vecCapacity)
+	}
+
+	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
+	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
+	return unsafe.Slice(ptr, s.dim), nil
 }
 
 // GetNeighbors returns the neighbor list for the given node and layer.
