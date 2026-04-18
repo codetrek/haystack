@@ -237,6 +237,15 @@ func (s *MmapStore) DeleteNodeMapping(docId string) error {
 
 // DeleteNode marks a node as deleted (tombstone). Full implementation in Phase 3.
 func (s *MmapStore) DeleteNode(id uint64) error {
+	// Look up docId for WAL record.
+	s.muDoc.RLock()
+	docId := s.nodeToDoc[id]
+	s.muDoc.RUnlock()
+
+	if _, err := s.wal.Append(WalDelete, EncodeDelete(id, docId), s.batchMode); err != nil {
+		return fmt.Errorf("MmapStore.DeleteNode: WAL: %w", err)
+	}
+
 	s.muNodes.RLock()
 	defer s.muNodes.RUnlock()
 
