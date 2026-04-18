@@ -589,8 +589,55 @@ func TestCrashPoint_AfterMsync(t *testing.T) {
 	s2.Close()
 }
 
-// 6c: meta.bin written, WAL not truncated → old WAL records skipped by LSN filter.
+// 6c: meta.bin written, crash AFTER meta but BEFORE WAL truncate.
+// Uses crashAfterMeta hook. WAL still has old records; on recovery the LSN
+// filter skips them because meta.WalCheckpointLSN is already advanced.
 func TestCrashPoint_AfterMeta(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	s.crashAfterMeta = func() {
+		panic("crash after meta")
+	}
+
+	func() {
+		defer func() { recover() }()
+		s.Checkpoint()
+	}()
+	s.crashAfterMeta = nil
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+	s2.Close()
+}
+
+// 6c-b: crash BEFORE WAL truncate (uses crashBeforeTruncate hook).
+func TestCrashPoint_BeforeTruncate(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
 	if err != nil {
