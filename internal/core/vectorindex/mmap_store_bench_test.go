@@ -1,13 +1,118 @@
+//go:build benchmark
+
 package vectorindex
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// ---------------------------------------------------------------------------
+// SIFT fvecs / ivecs loaders
+// ---------------------------------------------------------------------------
+
+const siftDir = "testdata/sift/sift"
+
+// loadSiftFvecs reads a .fvecs file (standard format: each vector prefixed by uint32 dim).
+func loadSiftFvecs(path string, maxVecs int) ([][]float32, int, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer f.Close()
+
+	var dim uint32
+	if err := binary.Read(f, binary.LittleEndian, &dim); err != nil {
+		return nil, 0, fmt.Errorf("read dim: %w", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return nil, 0, err
+	}
+
+	recordSize := 4 + int(dim)*4
+	info, err := f.Stat()
+	if err != nil {
+		return nil, 0, err
+	}
+	totalVecs := int(info.Size()) / recordSize
+	if maxVecs > 0 && totalVecs > maxVecs {
+		totalVecs = maxVecs
+	}
+
+	buf := make([]byte, recordSize)
+	vecs := make([][]float32, totalVecs)
+	for i := 0; i < totalVecs; i++ {
+		if _, err := f.Read(buf); err != nil {
+			return nil, 0, fmt.Errorf("read vec %d: %w", i, err)
+		}
+		vec := make([]float32, dim)
+		for j := 0; j < int(dim); j++ {
+			vec[j] = math.Float32frombits(binary.LittleEndian.Uint32(buf[4+j*4:]))
+		}
+		vecs[i] = vec
+	}
+	return vecs, int(dim), nil
+}
+
+// loadSiftIvecs reads a .ivecs file (standard format: each list prefixed by uint32 count).
+func loadSiftIvecs(path string, maxQueries int) ([][]uint32, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var k uint32
+	if err := binary.Read(f, binary.LittleEndian, &k); err != nil {
+		return nil, fmt.Errorf("read k: %w", err)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return nil, err
+	}
+
+	recordSize := 4 + int(k)*4
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	totalQueries := int(info.Size()) / recordSize
+	if maxQueries > 0 && totalQueries > maxQueries {
+		totalQueries = maxQueries
+	}
+
+	buf := make([]byte, recordSize)
+	result := make([][]uint32, totalQueries)
+	for i := 0; i < totalQueries; i++ {
+		if _, err := f.Read(buf); err != nil {
+			return nil, fmt.Errorf("read query %d: %w", i, err)
+		}
+		ids := make([]uint32, k)
+		for j := 0; j < int(k); j++ {
+			ids[j] = binary.LittleEndian.Uint32(buf[4+j*4:])
+		}
+		result[i] = ids
+	}
+	return result, nil
+}
+
+func siftAvailable() bool {
+	_, err := os.Stat(filepath.Join(siftDir, "sift_base.fvecs"))
+	return err == nil
+}
+
+// ---------------------------------------------------------------------------
+// Existing 50K raw store benchmark (unchanged)
+// ---------------------------------------------------------------------------
 
 func BenchmarkMmapStore50KInsert(b *testing.B) {
 	const (
@@ -99,5 +204,158 @@ func BenchmarkMmapStore50KInsert(b *testing.B) {
 		if elapsed > 90*time.Second {
 			b.Fatalf("50K insert took %v, exceeds 90s target", elapsed)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 3: SIFT-128 50K HNSW E2E Benchmarks
+// ---------------------------------------------------------------------------
+
+// BenchmarkHNSW_MemStore_50K_Insert benchmarks HNSW insert with MemStore (baseline).
+func BenchmarkHNSW_MemStore_50K_Insert(b *testing.B) {
+	if !siftAvailable() {
+		b.Skip("SIFT data not available")
+	}
+
+	vecs, _, err := loadSiftFvecs(filepath.Join(siftDir, "sift_base.fvecs"), 50000)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for n := 0; n < b.N; n++ {
+		store := NewMemNodeStore()
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+			WithRand(rand.New(rand.NewSource(42))))
+
+		start := time.Now()
+		for i, v := range vecs {
+			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+				b.Fatalf("Insert %d: %v", i, err)
+			}
+		}
+		elapsed := time.Since(start)
+		b.ReportMetric(elapsed.Seconds(), "total_sec")
+		b.ReportMetric(float64(len(vecs))/elapsed.Seconds(), "inserts/sec")
+	}
+}
+
+// BenchmarkHNSW_MmapStore_50K_Insert benchmarks HNSW insert with MmapStore. Target < 90s.
+func BenchmarkHNSW_MmapStore_50K_Insert(b *testing.B) {
+	if !siftAvailable() {
+		b.Skip("SIFT data not available")
+	}
+
+	vecs, dim, err := loadSiftFvecs(filepath.Join(siftDir, "sift_base.fvecs"), 50000)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for n := 0; n < b.N; n++ {
+		dir := b.TempDir()
+		store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		start := time.Now()
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+			WithRand(rand.New(rand.NewSource(42))))
+
+		for i, v := range vecs {
+			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+				b.Fatalf("Insert %d: %v", i, err)
+			}
+		}
+
+		elapsed := time.Since(start)
+		b.ReportMetric(elapsed.Seconds(), "total_sec")
+		b.ReportMetric(float64(len(vecs))/elapsed.Seconds(), "inserts/sec")
+
+		if err := store.Close(); err != nil {
+			b.Fatal(err)
+		}
+
+		if elapsed > 90*time.Second {
+			b.Fatalf("50K SIFT insert took %v, exceeds 90s target", elapsed)
+		}
+	}
+}
+
+// BenchmarkHNSW_Search_MemStore_vs_MmapStore benchmarks search latency on 50K SIFT data.
+func BenchmarkHNSW_Search_MemStore_vs_MmapStore(b *testing.B) {
+	if !siftAvailable() {
+		b.Skip("SIFT data not available")
+	}
+
+	vecs, dim, err := loadSiftFvecs(filepath.Join(siftDir, "sift_base.fvecs"), 50000)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	queryVecs, _, err := loadSiftFvecs(filepath.Join(siftDir, "sift_query.fvecs"), 1000)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	const k = 10
+	hnswSeed := int64(42)
+
+	// Build MemStore index.
+	memStore := NewMemNodeStore()
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range vecs {
+		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			b.Fatalf("MemStore insert %d: %v", i, err)
+		}
+	}
+
+	// Build MmapStore index.
+	dir := b.TempDir()
+	mmapStore, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer mmapStore.Close()
+
+	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range vecs {
+		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			b.Fatalf("MmapStore insert %d: %v", i, err)
+		}
+	}
+
+	b.Run("MemStore_Search_1000", func(b *testing.B) {
+		searchBench(b, memIdx, queryVecs, k)
+	})
+
+	b.Run("MmapStore_Search_1000", func(b *testing.B) {
+		searchBench(b, mmapIdx, queryVecs, k)
+	})
+}
+
+func searchBench(b *testing.B, idx *HNSWIndex, queries [][]float32, k int) {
+	b.Helper()
+
+	for n := 0; n < b.N; n++ {
+		latencies := make([]time.Duration, len(queries))
+		for i, q := range queries {
+			start := time.Now()
+			_, err := idx.Search(q, k)
+			latencies[i] = time.Since(start)
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+
+		sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+		p50 := latencies[len(latencies)/2]
+		p99 := latencies[int(float64(len(latencies))*0.99)]
+
+		b.ReportMetric(float64(p50.Microseconds()), "p50_us")
+		b.ReportMetric(float64(p99.Microseconds()), "p99_us")
+
+		runtime.GC()
 	}
 }
