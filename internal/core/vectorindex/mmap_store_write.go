@@ -283,13 +283,17 @@ func (s *MmapStore) BeginBatch() {
 }
 
 // CommitBatch exits one level of batch nesting. When depth reaches 0,
-// flushes WAL and optionally syncs all mmap regions.
+// flushes WAL and syncs all mmap regions. The sync parameter is kept for
+// interface compatibility; batch commits always sync to ensure durability.
 func (s *MmapStore) CommitBatch(sync bool) error {
 	s.batchDepth--
 	if s.batchDepth > 0 {
 		return nil
 	}
 	s.batchMode = false
+
+	// Batch commits always sync to ensure durability.
+	sync = true
 
 	if err := s.wal.Flush(); err != nil {
 		return fmt.Errorf("MmapStore.CommitBatch: WAL flush: %w", err)
