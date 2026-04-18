@@ -24,19 +24,9 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	return vec, nil
 }
 
-// GetVectorRef returns a zero-copy reference into the mmap'd region.
-// The caller must not retain the slice past any grow/remap operation.
+// GetVectorRef returns a copied vector for the given node ID.
 func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
-	s.muVec.RLock()
-	defer s.muVec.RUnlock()
-
-	if id >= s.vecCapacity {
-		return nil, fmt.Errorf("MmapStore.GetVectorRef: id %d out of range (cap %d)", id, s.vecCapacity)
-	}
-
-	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
-	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
-	return unsafe.Slice(ptr, s.dim), nil
+	return s.GetVector(id)
 }
 
 // GetNeighbors returns the neighbor list for the given node and layer.
