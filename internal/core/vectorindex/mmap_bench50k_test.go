@@ -36,7 +36,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 	base = base[:nBase]
 	t.Logf("Loaded %d vectors, dim=%d", len(base), len(base[0]))
 
-	batchSizes := []int{10, 20, 40, 60, 80, 100}
+	batchSizes := []int{10, 20, 40, 60, 80, 100, 150, 200}
 
 	for _, bs := range batchSizes {
 		bs := bs
