@@ -171,6 +171,131 @@ func TestWALCorruptedCRC(t *testing.T) {
 	assert.Equal(t, 2, count) // Stops at corrupted record
 }
 
+// ---------------------------------------------------------------------------
+// Store-level WAL replay integration tests
+// These exercise the replayWAL callback in MmapStore (block #1, #2).
+// ---------------------------------------------------------------------------
+
+func TestWALReplayInsertWithUpperLevel(t *testing.T) {
+	// Write a node at level>0, close, reopen → replayWAL must allocate upper
+	// slot and restore vectors/nodes/meta correctly.
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Dim: 4, M: 4}
+
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	vec := []float32{3.0, 4.0, 0.0, 0.0}
+	requireNoError(t, s.PutNode(0, 2, vec))
+	requireNoError(t, s.SetEntryPoint(0, 2))
+	requireNoError(t, s.Close())
+
+	// Reopen triggers replayWAL (no checkpoint, so all WAL records replayed).
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	got, err := s2.GetVector(0)
+	requireNoError(t, err)
+	assert.Equal(t, vec, got)
+
+	level, err := s2.GetNodeLevel(0)
+	requireNoError(t, err)
+	assert.Equal(t, 2, level)
+
+	epId, epLevel, err := s2.GetEntryPoint()
+	requireNoError(t, err)
+	assert.Equal(t, uint64(0), epId)
+	assert.Equal(t, 2, epLevel)
+
+	// Upper neighbors should be settable after replay (proves upper slot was allocated).
+	requireNoError(t, s2.SetNeighbors(0, 1, []uint64{0}))
+}
+
+func TestWALReplaySetNeighborsUpperPath(t *testing.T) {
+	// Exercises the WalSetNeighbors → setNeighborsUpper path in replayWAL.
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Dim: 4, M: 4}
+
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	vec := []float32{1.0, 0, 0, 0}
+	requireNoError(t, s.PutNode(0, 2, vec))
+	requireNoError(t, s.SetNeighbors(0, 1, []uint64{1, 2}))
+	requireNoError(t, s.SetNeighbors(0, 0, []uint64{3}))
+	requireNoError(t, s.Close())
+
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	nbs, err := s2.GetNeighbors(0, 1)
+	requireNoError(t, err)
+	assert.Equal(t, []uint64{1, 2}, nbs)
+
+	nbs0, err := s2.GetNeighbors(0, 0)
+	requireNoError(t, err)
+	assert.Equal(t, []uint64{3}, nbs0)
+}
+
+func TestWALReplaySetNormAndDelete(t *testing.T) {
+	// Exercises WalSetNorm and WalDelete record types in replayWAL.
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Dim: 4, M: 4}
+
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	vec := []float32{1.0, 0, 0, 0}
+	requireNoError(t, s.PutNode(0, 0, vec))
+	requireNoError(t, s.PutNode(1, 0, vec))
+	requireNoError(t, s.SetNorm(0, 42.0))
+	requireNoError(t, s.DeleteNode(1))
+	requireNoError(t, s.Close())
+
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	norm, err := s2.GetNorm(0)
+	requireNoError(t, err)
+	assert.InDelta(t, float32(42.0), norm, 0.01)
+
+	// Node 1 should be deleted after replay.
+	_, err = s2.GetNodeLevel(1)
+	assert.Error(t, err)
+
+	// rebuildNodeCount should give 1 (only node 0 alive).
+	assert.Equal(t, uint64(1), s2.meta.NodeCount)
+}
+
+func TestWALReplayGrowsDuringReplay(t *testing.T) {
+	// Insert a node beyond initial capacity, close, reopen.
+	// replayWAL must call ensureCapacity and grow files during replay.
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Dim: 4, M: 4}
+
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	vec := []float32{5.0, 6.0, 7.0, 8.0}
+	// Insert at ID 1500 (beyond default 1024 capacity).
+	requireNoError(t, s.PutNode(1500, 0, vec))
+	requireNoError(t, s.Close())
+
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	got, err := s2.GetVector(1500)
+	requireNoError(t, err)
+	assert.Equal(t, vec, got)
+
+	// Capacity should have grown during replay.
+	assert.Greater(t, s2.vecCapacity, uint64(1500))
+}
+
 func TestWALContinueLSNAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	w, err := OpenWAL(dir)
