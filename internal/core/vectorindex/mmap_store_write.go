@@ -464,11 +464,14 @@ func (s *MmapStore) compactIdmap() error {
 	if err != nil {
 		return err
 	}
+	s.muDoc.Lock()
 	if err := s.idmapFile.Close(); err != nil {
+		s.muDoc.Unlock()
 		nf.Close()
 		return fmt.Errorf("MmapStore.compactIdmap: close old idmap: %w", err)
 	}
 	s.idmapFile = nf
+	s.muDoc.Unlock()
 	return nil
 }
 
