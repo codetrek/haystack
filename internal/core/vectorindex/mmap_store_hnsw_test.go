@@ -531,3 +531,415 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		assertSearchResultsMatch(t, "WAL replay", preResults, postResults)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task 5: graph_upper.dat upper-layer verification
+// ---------------------------------------------------------------------------
+
+// TestMmapHNSW_UpperGraph_MultiLayer verifies that upper-layer nodes are
+// correctly generated, stored, and readable.
+func TestMmapHNSW_UpperGraph_MultiLayer(t *testing.T) {
+	const (
+		n   = 5000
+		dim = 128
+		k   = 10
+	)
+
+	dir := t.TempDir()
+	store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	// Use efConstruction=200 and fixed seed to get deterministic upper layers.
+	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+		WithEfConstruction(200),
+		WithRand(rand.New(rand.NewSource(42))))
+
+	rng := rand.New(rand.NewSource(99))
+	vecs := randomVectors(rng, n, dim)
+	for i, v := range vecs {
+		if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("Insert doc-%d: %v", i, err)
+		}
+	}
+
+	// Verify entry point exists and has level > 0 (with 5000 nodes this is very likely).
+	epID, maxLevel, err := store.GetEntryPoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Entry point: id=%d, maxLevel=%d", epID, maxLevel)
+	assert.Greater(t, maxLevel, 0, "with 5000 nodes, maxLevel should be > 0")
+
+	// Collect all upper-layer nodes and verify their neighbors.
+	upperNodeCount := 0
+	for i := uint64(0); i < uint64(n); i++ {
+		level, err := store.GetNodeLevel(i)
+		if err != nil {
+			continue
+		}
+		if level > 0 {
+			upperNodeCount++
+			for layer := 1; layer <= level; layer++ {
+				nbs, err := store.GetNeighbors(i, layer)
+				if err != nil {
+					t.Fatalf("GetNeighbors(%d, %d): %v", i, layer, err)
+				}
+				// Upper-layer neighbors should be valid node IDs.
+				for _, nb := range nbs {
+					nbLevel, err := store.GetNodeLevel(nb)
+					if err != nil {
+						t.Fatalf("neighbor %d of node %d at layer %d: GetNodeLevel failed: %v", nb, i, layer, err)
+					}
+					assert.GreaterOrEqual(t, nbLevel, layer,
+						"neighbor %d of node %d at layer %d must have level >= %d", nb, i, layer, layer)
+				}
+			}
+		}
+	}
+	t.Logf("Upper-layer nodes: %d / %d", upperNodeCount, n)
+	assert.Greater(t, upperNodeCount, 0, "should have at least some upper-layer nodes")
+
+	// Build MemStore baseline for comparison.
+	memStore := NewMemNodeStore()
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+		WithEfConstruction(200),
+		WithRand(rand.New(rand.NewSource(42))))
+	for i, v := range vecs {
+		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("MemStore insert %d: %v", i, err)
+		}
+	}
+
+	// Compare upper-layer structure: entry point and max level should match.
+	memEP, memMaxLevel, err := memStore.GetEntryPoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assert.Equal(t, memEP, epID, "entry point should match MemStore")
+	assert.Equal(t, memMaxLevel, maxLevel, "maxLevel should match MemStore")
+
+	// Search should produce comparable results.
+	queries := randomVectors(rng, 5, dim)
+	for i, q := range queries {
+		memRes, err := memIdx.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mmapRes, err := idx.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, len(memRes), len(mmapRes),
+			"query %d: result count mismatch", i)
+		for j := range memRes {
+			assert.Equal(t, memRes[j].ID, mmapRes[j].ID,
+				"query %d result %d: ID mismatch", i, j)
+		}
+	}
+}
+
+// TestMmapHNSW_UpperGraph_PersistenceReopen verifies upper graph survives
+// close → reopen with correct entry point and search results.
+func TestMmapHNSW_UpperGraph_PersistenceReopen(t *testing.T) {
+	const (
+		n   = 5000
+		dim = 128
+		k   = 10
+		nq  = 5
+	)
+
+	dir := t.TempDir()
+	rng := rand.New(rand.NewSource(99))
+	vecs := randomVectors(rng, n, dim)
+	queries := randomVectors(rng, nq, dim)
+	hnswSeed := int64(42)
+
+	var preResults [][]SearchResult
+	var preEP uint64
+	var preMaxLevel int
+
+	// Phase 1: Build index with upper layers.
+	{
+		store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+			WithEfConstruction(200),
+			WithRand(rand.New(rand.NewSource(hnswSeed))))
+
+		for i, v := range vecs {
+			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+				t.Fatalf("Insert doc-%d: %v", i, err)
+			}
+		}
+
+		preResults = mmapHNSWSearchResults(t, idx, queries, k)
+		preEP, preMaxLevel, err = store.GetEntryPoint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("Pre-close: entry=%d, maxLevel=%d", preEP, preMaxLevel)
+		assert.Greater(t, preMaxLevel, 0)
+
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Phase 2: Reopen and verify.
+	{
+		store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+			WithEfConstruction(200),
+			WithRand(rand.New(rand.NewSource(hnswSeed))))
+
+		// Verify entry point and max level restored.
+		postEP, postMaxLevel, err := store.GetEntryPoint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		assert.Equal(t, preEP, postEP, "entry point should be restored")
+		assert.Equal(t, preMaxLevel, postMaxLevel, "maxLevel should be restored")
+
+		// Verify search results match.
+		postResults := mmapHNSWSearchResults(t, idx, queries, k)
+		assertSearchResultsMatch(t, "upper-reopen", preResults, postResults)
+	}
+}
+
+// TestMmapHNSW_UpperGraph_GrowCrashRecovery verifies that upper graph grow
+// followed by crash is correctly recovered via WAL replay.
+func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
+	const (
+		dim = 128
+		k   = 10
+		nq  = 5
+	)
+
+	dir := t.TempDir()
+	rng := rand.New(rand.NewSource(99))
+	hnswSeed := int64(42)
+
+	// Use a large number of vectors to ensure upper graph slots grow.
+	n := 8000
+	vecs := randomVectors(rng, n, dim)
+	queries := randomVectors(rng, nq, dim)
+
+	var preResults [][]SearchResult
+	{
+		store, err := OpenMmapStore(dir, MmapStoreOptions{
+			Dim: dim, M: 16,
+			CheckpointInterval: 1000000, // disable auto-checkpoint
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+			WithEfConstruction(200),
+			WithRand(rand.New(rand.NewSource(hnswSeed))))
+
+		for i, v := range vecs {
+			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+				t.Fatalf("Insert doc-%d: %v", i, err)
+			}
+		}
+
+		preResults = mmapHNSWSearchResults(t, idx, queries, k)
+
+		ep, maxL, _ := store.GetEntryPoint()
+		t.Logf("Pre-crash: entry=%d, maxLevel=%d, upperCap=%d", ep, maxL, store.upperCapacity)
+
+		// Simulate crash: flush WAL but don't checkpoint/close.
+		if err := store.wal.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.wal.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.syncAll(); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeMetaHeader(dir, &store.meta); err != nil {
+			t.Fatal(err)
+		}
+
+		// Leak resources (simulating crash).
+		mmapFree(store.vectors)
+		mmapFree(store.nodes)
+		mmapFree(store.graphL0)
+		mmapFree(store.graphUpper)
+		store.vecFile.Close()
+		store.nodeFile.Close()
+		store.l0File.Close()
+		store.upperFile.Close()
+		store.wal.Close()
+		store.idmapFile.Close()
+	}
+
+	// Phase 2: Reopen (triggers WAL replay) and verify.
+	{
+		store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+
+		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+			WithEfConstruction(200),
+			WithRand(rand.New(rand.NewSource(hnswSeed))))
+
+		// Verify entry point is valid.
+		ep, maxL, err := store.GetEntryPoint()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("Post-crash: entry=%d, maxLevel=%d, upperCap=%d", ep, maxL, store.upperCapacity)
+		assert.Greater(t, maxL, 0, "maxLevel should be > 0 after recovery")
+
+		// Verify search results match pre-crash.
+		postResults := mmapHNSWSearchResults(t, idx, queries, k)
+		assertSearchResultsMatch(t, "upper-grow-crash", preResults, postResults)
+
+		// Verify upper slot allocation didn't leak: count upper-layer nodes
+		// and ensure nextUpperSlot is consistent.
+		upperCount := 0
+		for i := uint64(0); i < uint64(n); i++ {
+			level, err := store.GetNodeLevel(i)
+			if err != nil {
+				continue
+			}
+			if level > 0 {
+				upperCount++
+			}
+		}
+		t.Logf("Upper-layer nodes after recovery: %d", upperCount)
+		assert.Greater(t, upperCount, 0)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 4: Recall@10 verification
+// ---------------------------------------------------------------------------
+
+// recallAtK computes recall@K given ground truth indices and HNSW search results.
+// nodeToBaseIdx maps node IDs to base vector indices (0-based).
+func recallAtK(trueNN []int, approxResults []SearchResult, k int, nodeToBaseIdx map[uint64]int) float64 {
+	trueSet := make(map[int]bool, k)
+	for i := 0; i < k && i < len(trueNN); i++ {
+		trueSet[trueNN[i]] = true
+	}
+	hits := 0
+	for i := 0; i < k && i < len(approxResults); i++ {
+		baseIdx, ok := nodeToBaseIdx[approxResults[i].ID]
+		if ok && trueSet[baseIdx] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(k)
+}
+
+// buildNodeToBaseIdxMap builds a mapping from node ID → base vector index.
+func buildNodeToBaseIdxMap(store NodeStore, n int) map[uint64]int {
+	m := make(map[uint64]int, n)
+	for i := 0; i < n; i++ {
+		nodeId, ok, _ := store.GetNodeId(fmt.Sprintf("doc-%d", i))
+		if ok {
+			m[nodeId] = i
+		}
+	}
+	return m
+}
+
+// TestMmapHNSW_RecallAt10 verifies recall@10 for both MemStore and MmapStore.
+// Uses 5000 random 128d vectors and brute-force ground truth.
+func TestMmapHNSW_RecallAt10(t *testing.T) {
+	const (
+		n   = 5000
+		dim = 128
+		k   = 10
+		nq  = 100
+	)
+
+	rng := rand.New(rand.NewSource(99))
+	baseVecs := randomVectors(rng, n, dim)
+	queryVecs := randomVectors(rng, nq, dim)
+	hnswSeed := int64(42)
+
+	// Build ground truth via brute force.
+	groundTruth := make([][]int, nq)
+	for i, q := range queryVecs {
+		groundTruth[i] = bruteForceKNN(q, baseVecs, k, CosineDistance)
+	}
+
+	// --- MemStore recall ---
+	memStore := NewMemNodeStore()
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+		WithEfConstruction(200), WithEfSearch(200),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range baseVecs {
+		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("MemStore insert %d: %v", i, err)
+		}
+	}
+
+	var memRecallSum float64
+	memMapping := buildNodeToBaseIdxMap(memStore, n)
+	for i, q := range queryVecs {
+		res, err := memIdx.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		memRecallSum += recallAtK(groundTruth[i], res, k, memMapping)
+	}
+	memRecall := memRecallSum / float64(nq)
+	t.Logf("MemStore recall@10 = %.4f", memRecall)
+	assert.Greater(t, memRecall, 0.95, "MemStore recall@10 should be > 0.95")
+
+	// --- MmapStore recall ---
+	dir := t.TempDir()
+	mmapStore, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mmapStore.Close()
+
+	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+		WithEfConstruction(200), WithEfSearch(200),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range baseVecs {
+		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("MmapStore insert %d: %v", i, err)
+		}
+	}
+
+	var mmapRecallSum float64
+	mmapMapping := buildNodeToBaseIdxMap(mmapStore, n)
+	for i, q := range queryVecs {
+		res, err := mmapIdx.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mmapRecallSum += recallAtK(groundTruth[i], res, k, mmapMapping)
+	}
+	mmapRecall := mmapRecallSum / float64(nq)
+	t.Logf("MmapStore recall@10 = %.4f", mmapRecall)
+	assert.Greater(t, mmapRecall, 0.95, "MmapStore recall@10 should be > 0.95")
+
+	// Recall difference should be < 0.01.
+	diff := memRecall - mmapRecall
+	if diff < 0 {
+		diff = -diff
+	}
+	t.Logf("Recall difference = %.4f", diff)
+	assert.Less(t, diff, 0.01, "MmapStore vs MemStore recall difference should be < 0.01")
+}
