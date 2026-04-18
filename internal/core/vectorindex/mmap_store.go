@@ -149,6 +149,17 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		return nil, fmt.Errorf("MmapStore: replay: %w", err)
 	}
 
+	// Checkpoint after replay to persist recovered state and truncate WAL,
+	// so subsequent Opens don't re-replay the same records.
+	if s.wal.LSN() > s.meta.WalCheckpointLSN {
+		if err := s.checkpointLocked(); err != nil {
+			s.idmapFile.Close()
+			wal.Close()
+			s.closeMmaps()
+			return nil, fmt.Errorf("MmapStore: post-replay checkpoint: %w", err)
+		}
+	}
+
 	return s, nil
 }
 
@@ -161,31 +172,20 @@ func (s *MmapStore) Close() error {
 		}
 	}
 
-	// 1. msync all mmap regions.
-	setErr(mmapSync(s.vectors))
-	setErr(mmapSync(s.nodes))
-	setErr(mmapSync(s.graphL0))
-	setErr(mmapSync(s.graphUpper))
+	// 1. Checkpoint: msync + writeMeta + WAL truncate + idmap compact.
+	setErr(s.checkpointLocked())
 
-	// 2. WAL sync.
-	if s.wal != nil {
-		setErr(s.wal.Sync())
-	}
-
-	// 3. Write final meta header.
-	setErr(writeMetaHeader(s.dir, &s.meta))
-
-	// 4. Close WAL.
+	// 2. Close WAL.
 	if s.wal != nil {
 		setErr(s.wal.Close())
 	}
 
-	// 5. Close idmap file.
+	// 3. Close idmap file (checkpoint already reopened it).
 	if s.idmapFile != nil {
 		setErr(s.idmapFile.Close())
 	}
 
-	// 6. munmap all.
+	// 4. munmap all.
 	setErr(mmapFree(s.vectors))
 	setErr(mmapFree(s.nodes))
 	setErr(mmapFree(s.graphL0))
@@ -196,7 +196,7 @@ func (s *MmapStore) Close() error {
 	s.graphL0 = nil
 	s.graphUpper = nil
 
-	// 7. Close all files.
+	// 5. Close all files.
 	setErr(s.vecFile.Close())
 	setErr(s.nodeFile.Close())
 	setErr(s.l0File.Close())

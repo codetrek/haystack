@@ -115,6 +115,100 @@ func TestCheckpoint_ContinueWriteAndReplay(t *testing.T) {
 	}
 }
 
+func TestClose_WALTruncated(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := 5
+	s.BeginBatch()
+	for i := 0; i < n; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// After clean Close, WAL should be empty and meta should have checkpoint LSN.
+	walPath := filepath.Join(dir, "wal.bin")
+	info, _ := os.Stat(walPath)
+	if info.Size() != 0 {
+		t.Fatalf("WAL size after Close: got %d, want 0", info.Size())
+	}
+	meta, _ := readMetaHeader(dir)
+	if meta.WalCheckpointLSN != uint64(n) {
+		t.Fatalf("WalCheckpointLSN: got %d, want %d", meta.WalCheckpointLSN, n)
+	}
+}
+
+func TestOpen_ReplayThenCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write records.
+	n := 5
+	s.BeginBatch()
+	for i := 0; i < n; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash: close WAL and files without calling Close().
+	s.wal.Close()
+	s.idmapFile.Close()
+	mmapFree(s.vectors)
+	mmapFree(s.nodes)
+	mmapFree(s.graphL0)
+	mmapFree(s.graphUpper)
+	s.vecFile.Close()
+	s.nodeFile.Close()
+	s.l0File.Close()
+	s.upperFile.Close()
+
+	// Reopen — should replay WAL and then auto-checkpoint.
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// After open, WAL should be truncated (post-replay checkpoint).
+	walPath := filepath.Join(dir, "wal.bin")
+	info, _ := os.Stat(walPath)
+	if info.Size() != 0 {
+		t.Fatalf("WAL should be truncated after replay+checkpoint, got size %d", info.Size())
+	}
+
+	// Data should be intact.
+	for i := 0; i < n; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+
+	if err := s2.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
