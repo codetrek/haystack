@@ -229,6 +229,10 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 	if meanRecall < 0.80 {
 		t.Errorf("recall@%d = %.4f, want >= 0.80", k, meanRecall)
 	}
+
+	if p99 > 5*time.Millisecond {
+		t.Errorf("p99 latency = %v, want <= 5ms", p99)
+	}
 }
 
 func percentile(sorted []time.Duration, p float64) time.Duration {
