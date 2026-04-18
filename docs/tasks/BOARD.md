@@ -19,7 +19,7 @@
 ## In Progress 🔵
 | ID | 任务 | Owner | Branch | 说明 |
 |----|------|-------|--------|------|
-| HAY-007 | mmap flat file 存储引擎 | Dev | PR #56 | Phase 3 完成（Checkpoint+Recovery），等飞马 review |
+| HAY-007 | mmap flat file 存储引擎 | Dev | PR #57 | Phase 4 完成（测试/E2E/集成），等飞马 review |
 
 ## Backlog 📋
 （空）
