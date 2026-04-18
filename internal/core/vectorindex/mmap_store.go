@@ -389,7 +389,7 @@ func (s *MmapStore) loadIdmap() error {
 // mmap data and meta state. All 5 record types are handled so that crash
 // recovery fully reconstructs the index.
 func (s *MmapStore) replayWAL() error {
-	return s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
+	err := s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
 		switch typ {
 		case WalInsert:
 			nodeId, level, vec, norm, _ := DecodeInsert(payload)
@@ -481,4 +481,22 @@ func (s *MmapStore) replayWAL() error {
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	s.rebuildNodeCount()
+	return nil
+}
+
+// rebuildNodeCount scans nodes.dat and counts non-tombstone slots,
+// replacing the WAL-replayed NodeCount with the authoritative value.
+func (s *MmapStore) rebuildNodeCount() {
+	var count uint64
+	for i := uint64(0); i < s.meta.TotalSlots; i++ {
+		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
+		if s.nodes[off+1]&nodeFlagDeleted == 0 {
+			count++
+		}
+	}
+	s.meta.NodeCount = count
 }
