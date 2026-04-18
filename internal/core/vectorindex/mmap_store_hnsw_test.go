@@ -475,6 +475,19 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		crashCleanup := func() {
+			mmapFree(store.vectors)
+			mmapFree(store.nodes)
+			mmapFree(store.graphL0)
+			mmapFree(store.graphUpper)
+			store.vecFile.Close()
+			store.nodeFile.Close()
+			store.l0File.Close()
+			store.upperFile.Close()
+			store.wal.Close()
+			store.idmapFile.Close()
+		}
+		t.Cleanup(crashCleanup)
 
 		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
@@ -489,16 +502,7 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 
 		// Simulate crash: close file handles without syncing mmaps or
 		// writing meta. Data exists only in the WAL; recovery must replay it.
-		mmapFree(store.vectors)
-		mmapFree(store.nodes)
-		mmapFree(store.graphL0)
-		mmapFree(store.graphUpper)
-		store.vecFile.Close()
-		store.nodeFile.Close()
-		store.l0File.Close()
-		store.upperFile.Close()
-		store.wal.Close()
-		store.idmapFile.Close()
+		crashCleanup()
 	}
 
 	// Phase 2: Reopen (triggers WAL replay) and verify results.
@@ -507,7 +511,7 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer store.Close()
+		t.Cleanup(func() { store.Close() })
 
 		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
@@ -728,6 +732,19 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		crashCleanup := func() {
+			mmapFree(store.vectors)
+			mmapFree(store.nodes)
+			mmapFree(store.graphL0)
+			mmapFree(store.graphUpper)
+			store.vecFile.Close()
+			store.nodeFile.Close()
+			store.l0File.Close()
+			store.upperFile.Close()
+			store.wal.Close()
+			store.idmapFile.Close()
+		}
+		t.Cleanup(crashCleanup)
 
 		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
 			WithEfConstruction(200),
@@ -751,19 +768,8 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 		if err := store.wal.Sync(); err != nil {
 			t.Fatal(err)
 		}
-		// Do NOT call syncAll/writeMetaHeader — simulate crash with data only in WAL.
 
-		// Leak resources (simulating crash).
-		mmapFree(store.vectors)
-		mmapFree(store.nodes)
-		mmapFree(store.graphL0)
-		mmapFree(store.graphUpper)
-		store.vecFile.Close()
-		store.nodeFile.Close()
-		store.l0File.Close()
-		store.upperFile.Close()
-		store.wal.Close()
-		store.idmapFile.Close()
+		crashCleanup()
 	}
 
 	// Phase 2: Reopen (triggers WAL replay) and verify.
@@ -772,7 +778,7 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer store.Close()
+		t.Cleanup(func() { store.Close() })
 
 		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
 			WithEfConstruction(200),
@@ -842,7 +848,7 @@ func buildNodeToBaseIdxMap(store NodeStore, n int, docFmt string) map[uint64]int
 }
 
 // TestMmapHNSW_RecallAt10 verifies recall@10 for both MemStore and MmapStore.
-// Uses 5000 random 128d vectors and brute-force ground truth.
+// Uses 2000 random 128d vectors (reduced from 5000 for CI speed) and brute-force ground truth.
 func TestMmapHNSW_RecallAt10(t *testing.T) {
 	const (
 		n   = 2000
