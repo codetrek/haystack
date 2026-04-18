@@ -80,7 +80,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 		s.meta.MaxLevel = uint32(level)
 	}
 
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // SetNeighbors stores the neighbor list for a node and layer.
@@ -92,10 +92,16 @@ func (s *MmapStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error
 		return fmt.Errorf("MmapStore.SetNeighbors: WAL: %w", err)
 	}
 
+	var err2 error
 	if layer == 0 {
-		return s.setNeighborsL0(id, neighbors)
+		err2 = s.setNeighborsL0(id, neighbors)
+	} else {
+		err2 = s.setNeighborsUpper(id, layer, neighbors)
 	}
-	return s.setNeighborsUpper(id, layer, neighbors)
+	if err2 != nil {
+		return err2
+	}
+	return s.maybeCheckpoint()
 }
 
 func (s *MmapStore) setNeighborsL0(id uint64, neighbors []uint64) error {
@@ -174,7 +180,7 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 	if !s.batchMode {
 		mmapSync(s.nodes)
 	}
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // SetEntryPoint sets the HNSW entry point and max layer.
@@ -191,7 +197,7 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	if uint32(maxLayer) > s.meta.MaxLevel {
 		s.meta.MaxLevel = uint32(maxLayer)
 	}
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // SetNodeMapping adds a docId ↔ nodeId mapping and persists it to idmap.dat.
@@ -260,7 +266,7 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 	if s.meta.NodeCount > 0 {
 		s.meta.NodeCount--
 	}
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // readGraphUpperNextSlot reads the NextSlot field from graph_upper.dat header.
@@ -313,6 +319,9 @@ func (s *MmapStore) CommitBatch(sync bool) error {
 			return fmt.Errorf("MmapStore.CommitBatch: mmap sync: %w", err)
 		}
 	}
+	if s.opsSinceCheckpoint >= s.checkpointInterval {
+		return s.checkpointLocked()
+	}
 	return nil
 }
 
@@ -344,6 +353,16 @@ func (s *MmapStore) syncAll() error {
 	return mmapSync(s.graphUpper)
 }
 
+// maybeCheckpoint increments the ops counter and triggers a checkpoint
+// if the threshold is reached. Caller must hold muWrite.
+func (s *MmapStore) maybeCheckpoint() error {
+	s.opsSinceCheckpoint++
+	if !s.batchMode && s.opsSinceCheckpoint >= s.checkpointInterval {
+		return s.checkpointLocked()
+	}
+	return nil
+}
+
 // Checkpoint persists the current state: msync all mmap regions, write
 // meta.bin with the current WAL LSN, truncate the WAL, and compact idmap.
 func (s *MmapStore) Checkpoint() error {
@@ -370,6 +389,8 @@ func (s *MmapStore) checkpointLocked() error {
 	if err := s.compactIdmap(); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: idmap compact: %w", err)
 	}
+	// 5. Reset ops counter.
+	s.opsSinceCheckpoint = 0
 	return nil
 }
 

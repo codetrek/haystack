@@ -14,8 +14,9 @@ const defaultInitialCapacity = 1024
 
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
-	Dim int // vector dimension (required)
-	M   int // HNSW M parameter (required)
+	Dim                int // vector dimension (required)
+	M                  int // HNSW M parameter (required)
+	CheckpointInterval int // auto-checkpoint every N WAL appends (0 = default 1000)
 }
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
@@ -44,9 +45,11 @@ type MmapStore struct {
 	upperFile *os.File
 
 	// WAL and batch support
-	wal        *WAL
-	batchMode  bool
-	batchDepth int
+	wal                *WAL
+	batchMode          bool
+	batchDepth         int
+	opsSinceCheckpoint uint64
+	checkpointInterval uint64
 
 	// ID mapping (doc ↔ node)
 	docToNode map[string]uint64
@@ -97,6 +100,10 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		nodeToDoc:   make(map[uint64]string),
 	}
 	s.upperSlotSz = graphUpperSlotSize(opts.M, s.maxLayers)
+	s.checkpointInterval = 1000
+	if opts.CheckpointInterval > 0 {
+		s.checkpointInterval = uint64(opts.CheckpointInterval)
+	}
 
 	metaPath := filepath.Join(dir, "meta.bin")
 	if _, err := os.Stat(metaPath); os.IsNotExist(err) {

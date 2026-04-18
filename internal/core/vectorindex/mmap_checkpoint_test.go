@@ -209,6 +209,95 @@ func TestOpen_ReplayThenCheckpoint(t *testing.T) {
 	}
 }
 
+func TestAutoCheckpoint_TriggeredAtInterval(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4, CheckpointInterval: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write 15 records (non-batch, so each PutNode triggers maybeCheckpoint).
+	for i := 0; i < 15; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// After 15 ops with interval=10, a checkpoint should have fired.
+	// The WAL should have been truncated at op 10, so only ops 11-15 remain.
+	walPath := filepath.Join(dir, "wal.bin")
+	info, _ := os.Stat(walPath)
+	if info.Size() == 0 {
+		// WAL could be 0 if exactly at threshold — but we wrote 15 so 5 should remain.
+		// Actually with auto-checkpoint at 10, ops 1-10 get checkpointed, 11-15 in WAL.
+	}
+
+	// Meta should show a non-zero checkpoint LSN.
+	meta, _ := readMetaHeader(dir)
+	if meta.WalCheckpointLSN == 0 {
+		t.Fatal("expected auto-checkpoint to have set WalCheckpointLSN > 0")
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAutoCheckpoint_NotTriggeredBelowInterval(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4, CheckpointInterval: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write 5 records — well below 1000.
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// WAL should still have data (no auto-checkpoint).
+	walPath := filepath.Join(dir, "wal.bin")
+	info, _ := os.Stat(walPath)
+	if info.Size() == 0 {
+		t.Fatal("WAL should not be empty — auto-checkpoint should not have triggered")
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAutoCheckpoint_BatchMode(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4, CheckpointInterval: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Batch mode: checkpoint should trigger at CommitBatch, not during writes.
+	s.BeginBatch()
+	for i := 0; i < 10; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// After commit with 10 ops and interval=5, checkpoint should have fired.
+	meta, _ := readMetaHeader(dir)
+	if meta.WalCheckpointLSN == 0 {
+		t.Fatal("expected auto-checkpoint after CommitBatch")
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
