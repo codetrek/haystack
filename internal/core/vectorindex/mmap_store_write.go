@@ -337,6 +337,7 @@ func (s *MmapStore) syncAll() error {
 // NextNodeId returns the next available node ID (simple auto-increment).
 // Thread safety: callers must serialize via HNSW h.mu (Insert holds it).
 func (s *MmapStore) NextNodeId() (uint64, error) {
+	// TODO Phase 3: check freelist before increment
 	id := s.meta.NextNodeId
 	s.meta.NextNodeId++
 	return id, nil
