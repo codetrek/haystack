@@ -751,12 +751,7 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 		if err := store.wal.Sync(); err != nil {
 			t.Fatal(err)
 		}
-		if err := store.syncAll(); err != nil {
-			t.Fatal(err)
-		}
-		if err := writeMetaHeader(dir, &store.meta); err != nil {
-			t.Fatal(err)
-		}
+		// Do NOT call syncAll/writeMetaHeader — simulate crash with data only in WAL.
 
 		// Leak resources (simulating crash).
 		mmapFree(store.vectors)
