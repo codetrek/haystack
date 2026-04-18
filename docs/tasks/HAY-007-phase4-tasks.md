@@ -16,27 +16,27 @@
 
 **文件**: `mmap_store_hnsw_test.go`
 
-- [ ] 1.1 小规模 Insert → Search 测试（100 vectors, 128d）
+- [x] 1.1 小规模 Insert → Search 测试（100 vectors, 128d）
   - OpenMmapStore → NewHNSWIndex → Insert 100 docs → Search top-10 → 验证结果非空且有序
   - 参考 `hnsw_integration_test.go:49-68` 的 MemStore 模式
-- [ ] 1.2 Insert → Delete → Search 测试
+- [x] 1.2 Insert → Delete → Search 测试
   - Insert 50 docs → Delete 10 → Search → 验证已删除 doc 不在结果中
-- [ ] 1.3 Insert → Search → Delete → Re-insert → Search
+- [x] 1.3 Insert → Search → Delete → Re-insert → Search
   - 验证 freelist slot 复用后搜索仍然正确
-- [ ] 1.4 Upsert 测试
+- [x] 1.4 Upsert 测试
   - Insert doc → Upsert 同 docId 新向量 → Search → 验证返回新向量的结果
 
 ## Task 2: 持久化验证测试
 
 **文件**: `mmap_store_hnsw_test.go`
 
-- [ ] 2.1 写入 → Close → 重新打开 → Search
+- [x] 2.1 写入 → Close → 重新打开 → Search
   - Insert 200 docs → Close store → OpenMmapStore 同目录 → NewHNSWIndex → Search → recall 与关闭前一致
-- [ ] 2.2 写入 → Close → 重新打开 → 继续 Insert → Search
+- [x] 2.2 写入 → Close → 重新打开 → 继续 Insert → Search
   - 验证持久化后可增量追加
-- [ ] 2.3 写入 → Close → 重新打开 → Delete → Search
+- [x] 2.3 写入 → Close → 重新打开 → Delete → Search
   - 验证持久化后可正确删除
-- [ ] 2.4 WAL replay → HNSW Search 完整 E2E
+- [x] 2.4 WAL replay → HNSW Search 完整 E2E
   - Insert N docs → 模拟 crash（不调用 Close/Checkpoint）→ 重新 OpenMmapStore（触发 WAL replay）→ NewHNSWIndex → Search → 验证 recall 与 crash 前一致
   - 覆盖场景：crash 发生在 Insert 中途 / Delete 中途 / Checkpoint 中途
 
@@ -44,16 +44,16 @@
 
 **文件**: `mmap_store_bench_test.go`
 
-- [ ] 3.1 实现 SIFT-128 数据加载工具
+- [x] 3.1 实现 SIFT-128 数据加载工具
   - 使用 SIFT-128 数据集（ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz）
   - 实现 fvecs/ivecs 格式解析，取前 50K base vectors + 100 query vectors + ground truth
   - 禁止使用合成数据：SIFT-128 提供真实分布和标准 ground truth，确保 recall 可比
-- [ ] 3.2 MemStore 50K Insert benchmark（baseline）
+- [x] 3.2 MemStore 50K Insert benchmark（baseline）
   - `BenchmarkHNSW_MemStore_50K_Insert`
-- [ ] 3.3 MmapStore 50K Insert benchmark
+- [x] 3.3 MmapStore 50K Insert benchmark
   - `BenchmarkHNSW_MmapStore_50K_Insert`
   - 目标 < 90s
-- [ ] 3.4 Search benchmark（MemStore vs MmapStore）
+- [x] 3.4 Search benchmark（MemStore vs MmapStore）
   - 1000 次随机 Search top-10，记录 p50/p99 延迟
   - MmapStore 目标 p99 < 5ms
 
@@ -61,11 +61,11 @@
 
 **文件**: `mmap_store_bench_test.go` 或 `mmap_store_hnsw_test.go`
 
-- [ ] 4.1 实现 recall@K 计算工具
+- [x] 4.1 实现 recall@K 计算工具
   - brute-force KNN 作为 ground truth → 与 HNSW 结果对比
-- [ ] 4.2 MemStore recall@10 验证（baseline）
+- [x] 4.2 MemStore recall@10 验证（baseline）
   - 50K 128d 数据，100 query，recall@10 > 0.95
-- [ ] 4.3 MmapStore recall@10 验证
+- [x] 4.3 MmapStore recall@10 验证
   - 同数据同 query，recall@10 > 0.95
   - 验证 MmapStore recall 与 MemStore 一致（差异 < 0.01）
 
@@ -73,13 +73,13 @@
 
 **文件**: `mmap_store_hnsw_test.go`
 
-- [ ] 5.1 多层节点生成与上层图读写验证
+- [x] 5.1 多层节点生成与上层图读写验证
   - 使用 efConstruction=200 + 固定 seed，Insert 足够数据（≥5000 vectors）确保生成 level>0 节点
   - 验证 graph_upper.dat 中上层图邻居列表的正确性：读出 level>0 节点的邻居，与 MemStore 基线对比
-- [ ] 5.2 上层图持久化 reopen 验证
+- [x] 5.2 上层图持久化 reopen 验证
   - 写入含多层节点的 HNSW → Close → Reopen → Search → 验证 recall 与关闭前一致
   - 确认 entry point 和 maxLevel 正确恢复
-- [ ] 5.3 上层图 grow 与 crash recovery
+- [x] 5.3 上层图 grow 与 crash recovery
   - 触发 graph_upper.dat grow（大量 Insert 使上层图扩容）→ 在 grow 过程中模拟 crash
   - Replay WAL → 验证上层图结构完整，Search 正确
   - 验证 upper slot 分配在 crash 后无泄漏
@@ -88,9 +88,9 @@
 
 **文件**: `mmap_store_hnsw_test.go`
 
-- [ ] 6.1 MemStore 构建 HNSW → 导出 → MmapStore 打开 → Search
+- [x] 6.1 MemStore 构建 HNSW → 导出 → MmapStore 打开 → Search
   - 验证 ExportToMmapStore 后 recall 无损
-- [ ] 6.2 导出后继续 Insert/Delete
+- [x] 6.2 导出后继续 Insert/Delete
   - 验证导出的 MmapStore 可正常增删
 
 ## Task 7: 生产集成声明
@@ -115,3 +115,19 @@
 | 所有现有测试 | pass |
 | `CGO_ENABLED=0` 编译 | pass |
 | CI 三平台验证（Linux amd64, macOS arm64, Windows amd64） | 全部 pass |
+
+---
+
+## 完成状态
+
+Phase 4 所有验证测试任务（Task 1-6）已完成并通过。
+
+**已验证能力:**
+- MmapStore 通过 NodeStore 接口与 HNSW 完全兼容（Insert/Search/Delete/Upsert）
+- 持久化 close→reopen 搜索结果一致
+- WAL crash recovery 后搜索正确
+- Recall@10 > 0.95（MemStore vs MmapStore 差异 < 0.01）
+- graph_upper.dat 多层节点正确生成、持久化、grow+crash recovery
+- MemStore→MmapStore 导出无损 recall，支持后续 Insert/Delete
+
+**生产集成（Task 7 scope）:** 本 Phase 范围限定为验证测试。MmapStore 作为 HNSW backend 的生产 API 暴露（`WithMmapBackend()` 等）将在独立 issue 中跟进。
