@@ -550,13 +550,13 @@ func TestMmapHNSW_UpperGraph_MultiLayer(t *testing.T) {
 		}
 	}
 
-	// Verify entry point exists and has level > 0 (with 5000 nodes this is very likely).
+	// Verify entry point exists and has level > 0 (with 2000 nodes this is very likely).
 	epID, maxLevel, err := store.GetEntryPoint()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("Entry point: id=%d, maxLevel=%d", epID, maxLevel)
-	assert.Greater(t, maxLevel, 0, "with 5000 nodes, maxLevel should be > 0")
+	assert.Greater(t, maxLevel, 0, "with 2000 nodes, maxLevel should be > 0")
 
 	// Collect all upper-layer nodes and verify their neighbors.
 	upperNodeCount := 0
