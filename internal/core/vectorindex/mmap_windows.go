@@ -42,7 +42,10 @@ func munmapPlatform(data []byte) error {
 	return syscall.UnmapViewOfFile(addr)
 }
 
-// mmapSyncWindows flushes mmap'd pages to disk on Windows.
+// mmapSyncPlatform flushes mmap'd pages to disk on Windows.
+func mmapSyncPlatform(data []byte) error {
+	return mmapSyncWindows(data)
+}
 func mmapSyncWindows(data []byte) error {
 	if len(data) == 0 {
 		return nil
