@@ -379,6 +379,7 @@ func recallAtK(trueNN []int, approxResults []SearchResult, k int) float64 {
 	return float64(hits) / float64(k)
 }
 
+// TestRecallAt10_SIFT requires SIFT dataset; run locally with -tags benchmark.
 func TestRecallAt10_SIFT(t *testing.T) {
 	if !siftAvailable() {
 		t.Skip("SIFT data not available")
