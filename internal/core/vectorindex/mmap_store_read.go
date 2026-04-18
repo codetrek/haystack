@@ -17,6 +17,9 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	}
 
 	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
+	if offset%4 != 0 {
+		return nil, fmt.Errorf("MmapStore.GetVector: unaligned offset %d for id %d", offset, id)
+	}
 	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
 	src := unsafe.Slice(ptr, s.dim)
 	vec := make([]float32, s.dim)
