@@ -38,11 +38,17 @@ func mmapPlatform(fd uintptr, offset int64, length int, flags int) ([]byte, erro
 }
 
 func munmapPlatform(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
 	addr := uintptr(unsafe.Pointer(&data[0]))
 	return syscall.UnmapViewOfFile(addr)
 }
 
-// mmapSyncWindows flushes mmap'd pages to disk on Windows.
+// mmapSyncPlatform flushes mmap'd pages to disk on Windows.
+func mmapSyncPlatform(data []byte) error {
+	return mmapSyncWindows(data)
+}
 func mmapSyncWindows(data []byte) error {
 	if len(data) == 0 {
 		return nil

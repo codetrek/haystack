@@ -23,3 +23,4 @@ cover.html
 scripts/lib/coverage/coverage
 internal/core/vectorindex/testdata/sift/
 /cmd/bench50k*
+.tmp/

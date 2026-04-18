@@ -27,3 +27,8 @@ func mmapFree(data []byte) error {
 	}
 	return munmapPlatform(data)
 }
+
+// mmapSync flushes dirty pages in the mapped region to disk.
+func mmapSync(data []byte) error {
+	return mmapSyncPlatform(data)
+}

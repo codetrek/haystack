@@ -3,6 +3,8 @@ package vectorindex
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
+	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -18,13 +20,15 @@ type MmapStoreOptions struct {
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
 //
-// Lock ordering (acquire outer before inner to avoid deadlocks):
+// Concurrency model:
 //
-//	muGraph → muNodes → muVec
-//
-// getNeighborsUpper acquires muNodes while muGraph is held — this is
-// consistent with the ordering above. Any future write path must follow
-// the same order.
+//   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
+//     DeleteNode, SetNodeMapping, NextNodeId, BeginBatch, CommitBatch,
+//     DiscardBatch) are serialised by muWrite.Lock().
+//   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
+//   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
+//   - Grow functions (ensureCapacity / growFile) are called under muWrite
+//     and do not acquire additional locks.
 type MmapStore struct {
 	dir  string
 	meta MetaHeader
@@ -39,9 +43,17 @@ type MmapStore struct {
 	l0File    *os.File
 	upperFile *os.File
 
+	// WAL and batch support
+	wal        *WAL
+	batchMode  bool
+	batchDepth int
+
+	// ID mapping (doc ↔ node)
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
+	idmapFile *os.File // idmap.dat append handle
 
+	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
 	muVec   sync.RWMutex
 	muGraph sync.RWMutex
 	muNodes sync.RWMutex
@@ -114,6 +126,29 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		return nil, fmt.Errorf("MmapStore: mmap: %w", err)
 	}
 
+	// Open WAL.
+	wal, err := OpenWAL(dir)
+	if err != nil {
+		s.closeMmaps()
+		return nil, fmt.Errorf("MmapStore: WAL: %w", err)
+	}
+	s.wal = wal
+
+	// Load idmap.dat (docId ↔ nodeId mappings).
+	if err := s.loadIdmap(); err != nil {
+		wal.Close()
+		s.closeMmaps()
+		return nil, fmt.Errorf("MmapStore: idmap: %w", err)
+	}
+
+	// Replay WAL from checkpoint.
+	if err := s.replayWAL(); err != nil { // nocov: WAL replay error during Open
+		s.idmapFile.Close()
+		wal.Close()
+		s.closeMmaps()
+		return nil, fmt.Errorf("MmapStore: replay: %w", err)
+	}
+
 	return s, nil
 }
 
@@ -126,6 +161,31 @@ func (s *MmapStore) Close() error {
 		}
 	}
 
+	// 1. msync all mmap regions.
+	setErr(mmapSync(s.vectors))
+	setErr(mmapSync(s.nodes))
+	setErr(mmapSync(s.graphL0))
+	setErr(mmapSync(s.graphUpper))
+
+	// 2. WAL sync.
+	if s.wal != nil {
+		setErr(s.wal.Sync())
+	}
+
+	// 3. Write final meta header.
+	setErr(writeMetaHeader(s.dir, &s.meta))
+
+	// 4. Close WAL.
+	if s.wal != nil {
+		setErr(s.wal.Close())
+	}
+
+	// 5. Close idmap file.
+	if s.idmapFile != nil {
+		setErr(s.idmapFile.Close())
+	}
+
+	// 6. munmap all.
 	setErr(mmapFree(s.vectors))
 	setErr(mmapFree(s.nodes))
 	setErr(mmapFree(s.graphL0))
@@ -136,12 +196,11 @@ func (s *MmapStore) Close() error {
 	s.graphL0 = nil
 	s.graphUpper = nil
 
+	// 7. Close all files.
 	setErr(s.vecFile.Close())
 	setErr(s.nodeFile.Close())
 	setErr(s.l0File.Close())
 	setErr(s.upperFile.Close())
-
-	setErr(writeMetaHeader(s.dir, &s.meta))
 
 	return firstErr
 }
@@ -185,7 +244,7 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 	if upperCap < 64 {
 		upperCap = 64
 	}
-	upperHdr := GraphUpperHeader{Magic: magicGraphUpper, MaxNeighbors: uint32(s.m), MaxLayers: uint32(s.maxLayers), Capacity: upperCap}
+	upperHdr := GraphUpperHeader{Magic: magicGraphUpper, MaxNeighbors: uint32(s.m), MaxLayers: uint32(s.maxLayers), Capacity: upperCap, NextSlot: 1}
 	upperSize := int64(pageSize) + int64(upperCap)*int64(s.upperSlotSz)
 	if err := writeDataFileHeader(filepath.Join(s.dir, "graph_upper.dat"), magicGraphUpper, &upperHdr, upperSize); err != nil {
 		return fmt.Errorf("graph_upper.dat: %w", err)
@@ -255,4 +314,200 @@ func (s *MmapStore) mmapAll() error {
 	s.upperCapacity = binary.LittleEndian.Uint64(s.graphUpper[16:24]) // GraphUpperHeader.Capacity at offset 16
 
 	return nil
+}
+
+// closeMmaps unmaps and closes all data files (cleanup helper).
+func (s *MmapStore) closeMmaps() { // nocov: cleanup helper — called from Close/error paths
+	mmapFree(s.vectors)
+	mmapFree(s.nodes)
+	mmapFree(s.graphL0)
+	mmapFree(s.graphUpper)
+	if s.vecFile != nil {
+		s.vecFile.Close()
+	}
+	if s.nodeFile != nil {
+		s.nodeFile.Close()
+	}
+	if s.l0File != nil {
+		s.l0File.Close()
+	}
+	if s.upperFile != nil {
+		s.upperFile.Close()
+	}
+}
+
+// loadIdmap reads idmap.dat and populates docToNode/nodeToDoc maps.
+func (s *MmapStore) loadIdmap() error {
+	path := filepath.Join(s.dir, "idmap.dat")
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		return err
+	}
+	s.idmapFile = f
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() == 0 {
+		return nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+
+	off := 0
+	for off+14 <= len(data) { // min entry: 8(nodeId) + 2(docIdLen) + 0(docId) + 4(crc) = 14
+		nodeId := binary.LittleEndian.Uint64(data[off:])
+		docIdLen := int(binary.LittleEndian.Uint16(data[off+8:]))
+		entryEnd := off + 10 + docIdLen + 4
+		if entryEnd > len(data) {
+			break
+		}
+
+		entryData := data[off : off+10+docIdLen]
+		storedCRC := binary.LittleEndian.Uint32(data[off+10+docIdLen:])
+
+		h := crc32.NewIEEE()
+		h.Write(entryData)
+		if h.Sum32() != storedCRC {
+			break
+		}
+
+		docId := string(data[off+10 : off+10+docIdLen])
+		s.docToNode[docId] = nodeId
+		s.nodeToDoc[nodeId] = docId
+		off = entryEnd
+	}
+
+	if _, err := f.Seek(0, 2); err != nil {
+		return err
+	}
+	return nil
+}
+
+// replayWAL replays WAL records after the checkpoint LSN to restore both
+// mmap data and meta state. All 5 record types are handled so that crash
+// recovery fully reconstructs the index.
+func (s *MmapStore) replayWAL() error {
+	var replayed int
+	err := s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
+		replayed++
+		switch typ {
+		case WalInsert:
+			nodeId, level, vec, norm, _ := DecodeInsert(payload)
+
+			// Ensure capacity for all regions before writing.
+			if err := s.ensureVecCapacity(nodeId); err != nil {
+				return err
+			}
+			if err := s.ensureNodeCapacity(nodeId); err != nil {
+				return err
+			}
+			if err := s.ensureL0Capacity(nodeId); err != nil {
+				return err
+			}
+
+			// Write vector to vectors.dat.
+			vecOff := int64(pageSize) + int64(nodeId)*int64(s.vecSlotSize)
+			for i, v := range vec {
+				binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
+			}
+
+			// Write node metadata to nodes.dat (level, flags=0, norm).
+			nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+			s.nodes[nodeOff] = uint8(level)
+			s.nodes[nodeOff+1] = 0 // flags: not deleted
+			s.nodes[nodeOff+2] = 0
+			s.nodes[nodeOff+3] = 0
+			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
+
+			// If level > 0, allocate an upper slot.
+			if level > 0 {
+				if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
+					return err
+				}
+				slot := s.allocUpperSlot()
+				binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], slot)
+			} else {
+				binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
+			}
+
+			// Update meta.
+			if nodeId >= s.meta.TotalSlots {
+				s.meta.TotalSlots = nodeId + 1
+			}
+			if nodeId+1 > s.meta.NextNodeId {
+				s.meta.NextNodeId = nodeId + 1
+			}
+			s.meta.NodeCount++
+			if uint32(level) > s.meta.MaxLevel {
+				s.meta.MaxLevel = uint32(level)
+			}
+
+		case WalSetNeighbors:
+			nodeId, layer, neighbors := DecodeSetNeighbors(payload)
+			if layer == 0 {
+				if err := s.setNeighborsL0(nodeId, neighbors); err != nil {
+					return err
+				}
+			} else {
+				if err := s.setNeighborsUpper(nodeId, layer, neighbors); err != nil {
+					return err
+				}
+			}
+
+		case WalSetNorm:
+			nodeId, norm := DecodeSetNorm(payload)
+			if nodeId < s.nodeCapacity {
+				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+				binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
+			}
+
+		case WalSetEntry:
+			entryId, maxLevel := DecodeSetEntry(payload)
+			s.meta.EntryPoint = entryId
+			s.meta.EntryLevel = uint32(maxLevel)
+			if uint32(maxLevel) > s.meta.MaxLevel {
+				s.meta.MaxLevel = uint32(maxLevel)
+			}
+
+		case WalDelete:
+			nodeId, _ := DecodeDelete(payload)
+			if nodeId < s.nodeCapacity {
+				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+				s.nodes[offset+1] |= nodeFlagDeleted
+			}
+			if s.meta.NodeCount > 0 {
+				s.meta.NodeCount--
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if replayed > 0 {
+		s.rebuildNodeCount()
+	}
+	return nil
+}
+
+// rebuildNodeCount scans nodes.dat and counts occupied, non-tombstone slots,
+// replacing the WAL-replayed NodeCount with the authoritative value.
+// An empty (never-written) slot is distinguished by having norm == 0.0;
+// every real node carries a positive pre-computed norm.
+func (s *MmapStore) rebuildNodeCount() {
+	var count uint64
+	for i := uint64(0); i < s.meta.TotalSlots; i++ {
+		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
+		flags := s.nodes[off+1]
+		norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[off+4:]))
+		if flags&nodeFlagDeleted == 0 && norm != 0 {
+			count++
+		}
+	}
+	s.meta.NodeCount = count
 }

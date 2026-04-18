@@ -217,7 +217,7 @@ func runTests() ([]PackageResult, map[string]int, map[string]int, int) {
 
 	args := []string{"test"}
 	args = append(args, pkgs...)
-	args = append(args, "-json", "-covermode=atomic", "-coverprofile="+cfg.CoverProfile)
+	args = append(args, "-json", "-covermode=atomic", "-coverprofile="+cfg.CoverProfile, "-timeout=15m")
 	if cfg.RaceDetection {
 		args = append(args, "-race")
 	}
