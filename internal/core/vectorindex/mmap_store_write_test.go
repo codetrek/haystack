@@ -1,6 +1,7 @@
 package vectorindex
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -251,4 +252,56 @@ func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 	id, err := s2.NextNodeId()
 	requireNoError(t, err)
 	assert.Equal(t, uint64(5), id)
+}
+
+func TestDeferredSync_InsertSyncReopen(t *testing.T) {
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Dim: 4, M: 4}
+
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	requireNoError(t, s.SetSyncMode(SyncDeferred))
+
+	const n = 100
+	for i := 0; i < n; i++ {
+		v := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
+		requireNoError(t, s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)))
+		requireNoError(t, s.PutNode(uint64(i), 0, v))
+	}
+
+	requireNoError(t, s.Sync())
+	requireNoError(t, s.Close())
+
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	for i := 0; i < n; i++ {
+		v := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
+		got, err := s2.GetVector(uint64(i))
+		requireNoError(t, err)
+		assert.Equal(t, v, got, "vector %d mismatch after reopen", i)
+	}
+
+	nodeId, ok, err := s2.GetNodeId("doc-50")
+	requireNoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, uint64(50), nodeId)
+}
+
+func TestSetSyncMode_ErrorDuringActiveBatch(t *testing.T) {
+	s := openTestMmapStore(t)
+	defer s.Close()
+
+	requireNoError(t, s.SetSyncMode(SyncDeferred))
+
+	s.BeginBatch()
+	err := s.SetSyncMode(SyncImmediate)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "batch is active")
+
+	requireNoError(t, s.CommitBatch(false))
+
+	requireNoError(t, s.SetSyncMode(SyncImmediate))
 }

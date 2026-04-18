@@ -12,6 +12,14 @@ import (
 
 const defaultInitialCapacity = 1024
 
+// SyncMode controls fsync behavior in CommitBatch.
+type SyncMode int
+
+const (
+	SyncImmediate SyncMode = 0 // WAL flush + file sync + msync (default, durable)
+	SyncDeferred  SyncMode = 1 // WAL flush only (caller must call Sync() later)
+)
+
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
 	Dim                int // vector dimension (required)
@@ -55,6 +63,8 @@ type MmapStore struct {
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
 	idmapFile *os.File // idmap.dat append handle
+
+	syncMode SyncMode
 
 	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
 	muVec   sync.RWMutex
