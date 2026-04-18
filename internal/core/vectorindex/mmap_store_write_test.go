@@ -152,3 +152,63 @@ func TestMmapStoreDeleteNodeMapping(t *testing.T) {
 	requireNoError(t, err)
 	assert.False(t, ok)
 }
+
+func TestMmapStoreBatchWriteAndRead(t *testing.T) {
+	s := openTestMmapStore(t)
+	defer s.Close()
+
+	s.BeginBatch()
+	assert.Equal(t, 1, s.BatchDepth())
+
+	for i := uint64(0); i < 10; i++ {
+		vec := []float32{float32(i), 0, 0, 0}
+		requireNoError(t, s.PutNode(i, 0, vec))
+		requireNoError(t, s.SetNeighbors(i, 0, []uint64{(i + 1) % 10}))
+	}
+
+	requireNoError(t, s.CommitBatch(true))
+	assert.Equal(t, 0, s.BatchDepth())
+
+	// Verify all data is readable.
+	for i := uint64(0); i < 10; i++ {
+		got, err := s.GetVector(i)
+		requireNoError(t, err)
+		assert.Equal(t, []float32{float32(i), 0, 0, 0}, got)
+
+		nbs, err := s.GetNeighbors(i, 0)
+		requireNoError(t, err)
+		assert.Equal(t, []uint64{(i + 1) % 10}, nbs)
+	}
+}
+
+func TestMmapStoreBatchNesting(t *testing.T) {
+	s := openTestMmapStore(t)
+	defer s.Close()
+
+	s.BeginBatch()
+	assert.Equal(t, 1, s.BatchDepth())
+
+	s.BeginBatch()
+	assert.Equal(t, 2, s.BatchDepth())
+
+	requireNoError(t, s.CommitBatch(false))
+	assert.Equal(t, 1, s.BatchDepth())
+	assert.True(t, s.batchMode) // still in batch
+
+	requireNoError(t, s.CommitBatch(true))
+	assert.Equal(t, 0, s.BatchDepth())
+	assert.False(t, s.batchMode)
+}
+
+func TestMmapStoreDiscardBatch(t *testing.T) {
+	s := openTestMmapStore(t)
+	defer s.Close()
+
+	s.BeginBatch()
+	s.BeginBatch()
+	assert.Equal(t, 2, s.BatchDepth())
+
+	s.DiscardBatch()
+	assert.Equal(t, 0, s.BatchDepth())
+	assert.False(t, s.batchMode)
+}

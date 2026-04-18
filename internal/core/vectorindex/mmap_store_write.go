@@ -262,3 +262,59 @@ func (s *MmapStore) allocUpperSlot() uint32 {
 	binary.LittleEndian.PutUint64(s.graphUpper[24:32], slot+1)
 	return uint32(slot)
 }
+
+// --- BatchableStore implementation ---
+
+// BeginBatch enters batch mode, deferring sync until CommitBatch.
+func (s *MmapStore) BeginBatch() {
+	s.batchDepth++
+	s.batchMode = true
+}
+
+// CommitBatch exits one level of batch nesting. When depth reaches 0,
+// flushes WAL and optionally syncs all mmap regions.
+func (s *MmapStore) CommitBatch(sync bool) error {
+	s.batchDepth--
+	if s.batchDepth > 0 {
+		return nil
+	}
+	s.batchMode = false
+
+	if err := s.wal.Flush(); err != nil {
+		return fmt.Errorf("MmapStore.CommitBatch: WAL flush: %w", err)
+	}
+	if sync {
+		if err := s.wal.Sync(); err != nil {
+			return fmt.Errorf("MmapStore.CommitBatch: WAL sync: %w", err)
+		}
+		if err := s.syncAll(); err != nil {
+			return fmt.Errorf("MmapStore.CommitBatch: mmap sync: %w", err)
+		}
+	}
+	return nil
+}
+
+// DiscardBatch resets batch state. Note: mmap writes cannot be rolled back.
+func (s *MmapStore) DiscardBatch() {
+	s.batchDepth = 0
+	s.batchMode = false
+}
+
+// BatchDepth returns the current batch nesting depth.
+func (s *MmapStore) BatchDepth() int {
+	return s.batchDepth
+}
+
+// syncAll syncs all mmap regions to disk.
+func (s *MmapStore) syncAll() error {
+	if err := mmapSync(s.vectors); err != nil {
+		return err
+	}
+	if err := mmapSync(s.nodes); err != nil {
+		return err
+	}
+	if err := mmapSync(s.graphL0); err != nil {
+		return err
+	}
+	return mmapSync(s.graphUpper)
+}
