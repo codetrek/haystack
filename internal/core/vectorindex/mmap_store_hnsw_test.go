@@ -834,10 +834,11 @@ func recallAtKMapped(trueNN []int, approxResults []SearchResult, k int, nodeToBa
 }
 
 // buildNodeToBaseIdxMap builds a mapping from node ID → base vector index.
-func buildNodeToBaseIdxMap(store NodeStore, n int) map[uint64]int {
+// docFmt is the format string used for doc IDs (e.g. "doc-%d" or "%d").
+func buildNodeToBaseIdxMap(store NodeStore, n int, docFmt string) map[uint64]int {
 	m := make(map[uint64]int, n)
 	for i := 0; i < n; i++ {
-		nodeId, ok, _ := store.GetNodeId(fmt.Sprintf("doc-%d", i))
+		nodeId, ok, _ := store.GetNodeId(fmt.Sprintf(docFmt, i))
 		if ok {
 			m[nodeId] = i
 		}
@@ -878,7 +879,7 @@ func TestMmapHNSW_RecallAt10(t *testing.T) {
 	}
 
 	var memRecallSum float64
-	memMapping := buildNodeToBaseIdxMap(memStore, n)
+	memMapping := buildNodeToBaseIdxMap(memStore, n, "doc-%d")
 	for i, q := range queryVecs {
 		res, err := memIdx.Search(q, k)
 		if err != nil {
@@ -908,7 +909,7 @@ func TestMmapHNSW_RecallAt10(t *testing.T) {
 	}
 
 	var mmapRecallSum float64
-	mmapMapping := buildNodeToBaseIdxMap(mmapStore, n)
+	mmapMapping := buildNodeToBaseIdxMap(mmapStore, n, "doc-%d")
 	for i, q := range queryVecs {
 		res, err := mmapIdx.Search(q, k)
 		if err != nil {
@@ -977,7 +978,7 @@ func TestMmapHNSW_ExportRecall(t *testing.T) {
 	for i, q := range queryVecs {
 		groundTruth[i] = bruteForceKNN(q, baseVecs, k, CosineDistance)
 	}
-	mmapMapping := buildNodeToBaseIdxMap(mmapStore, n)
+	mmapMapping := buildNodeToBaseIdxMap(mmapStore, n, "doc-%d")
 	var recallSum float64
 	for i, q := range queryVecs {
 		res, err := mmapIdx.Search(q, k)

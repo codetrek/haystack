@@ -85,6 +85,14 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 
 	// Search and measure latency.
 	t.Log("Running search queries...")
+	nodeMapping := buildNodeToBaseIdxMap(store, len(vectors), "%d")
+	gtInt := make([][]int, len(groundTruth))
+	for i, gt := range groundTruth {
+		gtInt[i] = make([]int, len(gt))
+		for j, v := range gt {
+			gtInt[i][j] = int(v)
+		}
+	}
 	latencies := make([]time.Duration, len(queries))
 	recalls := make([]float64, len(queries))
 
@@ -97,20 +105,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 			t.Fatalf("search query %d: %v", qi, err)
 		}
 
-		// Compute recall@10: fraction of ground-truth neighbors found.
-		// Node IDs are 1-indexed (NextNodeId starts at 1), so vector index i
-		// has node ID i+1.
-		gtSet := make(map[uint64]bool, benchmarkK)
-		for _, idx := range groundTruth[qi] {
-			gtSet[uint64(idx)+1] = true // convert vector index to node ID
-		}
-		hits := 0
-		for _, r := range results {
-			if gtSet[r.ID] {
-				hits++
-			}
-		}
-		recalls[qi] = float64(hits) / float64(benchmarkK)
+		recalls[qi] = recallAtKMapped(gtInt[qi], results, benchmarkK, nodeMapping)
 	}
 
 	// Compute latency percentiles.
@@ -184,6 +179,7 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 
 	// Search and measure latency.
 	t.Log("Running search queries...")
+	nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 	latencies := make([]time.Duration, numQueries)
 	recalls := make([]float64, numQueries)
 
@@ -195,18 +191,7 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 			t.Fatalf("search query %d: %v", qi, err)
 		}
 
-		// Node IDs are 1-indexed, so vector index i has node ID i+1.
-		gtSet := make(map[uint64]bool, k)
-		for _, idx := range groundTruth[qi] {
-			gtSet[uint64(idx)+1] = true
-		}
-		hits := 0
-		for _, r := range results {
-			if gtSet[r.ID] {
-				hits++
-			}
-		}
-		recalls[qi] = float64(hits) / float64(k)
+		recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
 	}
 
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -389,6 +374,7 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 		}
 	}
 
+	nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 	var totalRecall float64
 	for i, v := range vecs {
 		results, err := idx.Search(v, k)
@@ -397,18 +383,7 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 		}
 
 		gt := bruteForceKNN(v, vecs, k, CosineDistance)
-		gtSet := make(map[uint64]bool, k)
-		for _, idx := range gt {
-			gtSet[uint64(idx)+1] = true // node IDs are 1-indexed
-		}
-
-		hits := 0
-		for _, r := range results {
-			if gtSet[r.ID] {
-				hits++
-			}
-		}
-		totalRecall += float64(hits) / float64(k)
+		totalRecall += recallAtKMapped(gt, results, k, nodeMapping)
 	}
 
 	meanRecall := totalRecall / float64(n)
@@ -481,6 +456,7 @@ func TestPersistenceRecall(t *testing.T) {
 	queryRng := rand.New(rand.NewSource(seed + 1))
 	queries := randomVectors(queryRng, numQueries, dim)
 
+	nodeMapping := buildNodeToBaseIdxMap(store2, n, "%d")
 	var totalRecall float64
 	for qi, q := range queries {
 		results, err := idx2.Search(q, k)
@@ -489,18 +465,7 @@ func TestPersistenceRecall(t *testing.T) {
 		}
 
 		gt := bruteForceKNN(q, vecs, k, CosineDistance)
-		gtSet := make(map[uint64]bool, k)
-		for _, idx := range gt {
-			gtSet[uint64(idx)+1] = true // node IDs are 1-indexed
-		}
-
-		hits := 0
-		for _, r := range results {
-			if gtSet[r.ID] {
-				hits++
-			}
-		}
-		totalRecall += float64(hits) / float64(k)
+		totalRecall += recallAtKMapped(gt, results, k, nodeMapping)
 	}
 
 	meanRecall := totalRecall / float64(numQueries)
@@ -663,6 +628,8 @@ func TestBenchmarkParametric(t *testing.T) {
 			t.Logf("Insert %d vectors: %v (%.2fms/op)", n, elapsed, float64(elapsed.Milliseconds())/float64(n))
 		})
 
+		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
+
 		// Search with different efSearch values
 		for _, ef := range efSearchValues {
 			t.Run(fmt.Sprintf("N=%d/efSearch=%d", n, ef), func(t *testing.T) {
@@ -681,18 +648,7 @@ func TestBenchmarkParametric(t *testing.T) {
 						t.Fatalf("search %d: %v", qi, err)
 					}
 
-					// Compute recall
-					gtSet := make(map[uint64]bool, k)
-					for _, vi := range groundTruth[qi] {
-						gtSet[uint64(vi)+1] = true // node IDs are 1-indexed
-					}
-					hits := 0
-					for _, r := range results {
-						if gtSet[r.ID] {
-							hits++
-						}
-					}
-					recalls[qi] = float64(hits) / float64(k)
+					recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
 				}
 
 				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -778,6 +734,8 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 			t.Logf("efConstruction=%d insert 40K: %v (%.2fms/op)", efc, elapsed, float64(elapsed.Milliseconds())/float64(n))
 		})
 
+		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
+
 		for _, efs := range efSearchValues {
 			t.Run(fmt.Sprintf("efC=%d/efS=%d", efc, efs), func(t *testing.T) {
 				idx.mu.Lock()
@@ -795,17 +753,7 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 						t.Fatalf("search %d: %v", qi, err)
 					}
 
-					gtSet := make(map[uint64]bool, k)
-					for _, vi := range groundTruth[qi] {
-						gtSet[uint64(vi)+1] = true
-					}
-					hits := 0
-					for _, r := range results {
-						if gtSet[r.ID] {
-							hits++
-						}
-					}
-					recalls[qi] = float64(hits) / float64(k)
+					recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
 				}
 
 				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -886,6 +834,8 @@ func TestBenchmarkMCompare(t *testing.T) {
 			t.Logf("M=%d insert 40K: %v (%.2fms/op)", m, elapsed, float64(elapsed.Milliseconds())/float64(n))
 		})
 
+		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
+
 		for _, efs := range efSearchValues {
 			t.Run(fmt.Sprintf("M=%d/efS=%d", m, efs), func(t *testing.T) {
 				idx.mu.Lock()
@@ -903,17 +853,7 @@ func TestBenchmarkMCompare(t *testing.T) {
 						t.Fatalf("search %d: %v", qi, err)
 					}
 
-					gtSet := make(map[uint64]bool, k)
-					for _, vi := range groundTruth[qi] {
-						gtSet[uint64(vi)+1] = true
-					}
-					hits := 0
-					for _, r := range results {
-						if gtSet[r.ID] {
-							hits++
-						}
-					}
-					recalls[qi] = float64(hits) / float64(k)
+					recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
 				}
 
 				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -1051,6 +991,8 @@ func TestBenchmarkSIFT(t *testing.T) {
 		t.Logf("Insert %d SIFT vectors: %v (%.2fms/op)", nBase, elapsed, float64(elapsed.Milliseconds())/float64(nBase))
 	})
 
+	nodeMapping := buildNodeToBaseIdxMap(store, nBase, "%d")
+
 	for _, efs := range efSearchValues {
 		t.Run(fmt.Sprintf("efSearch=%d", efs), func(t *testing.T) {
 			idx.mu.Lock()
@@ -1068,18 +1010,7 @@ func TestBenchmarkSIFT(t *testing.T) {
 					t.Fatalf("search %d: %v", qi, err)
 				}
 
-				// Ground truth IDs are 0-indexed, node IDs are 1-indexed
-				gtSet := make(map[uint64]bool, k)
-				for i := 0; i < k && i < len(gt[qi]); i++ {
-					gtSet[uint64(gt[qi][i])+1] = true
-				}
-				hits := 0
-				for _, r := range results {
-					if gtSet[r.ID] {
-						hits++
-					}
-				}
-				recalls[qi] = float64(hits) / float64(k)
+				recalls[qi] = recallAtKMapped(gt[qi], results, k, nodeMapping)
 			}
 
 			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -1095,6 +1026,9 @@ func TestBenchmarkSIFT(t *testing.T) {
 
 			t.Logf("SIFT 100K efSearch=%d: p50=%v p95=%v p99=%v recall@%d=%.4f",
 				efs, p50, p95, p99, k, meanRecall)
+
+			p99Ms := float64(p99.Microseconds()) / 1000.0
+			assert.Less(t, p99Ms, 5.0, "p99 search latency should be < 5ms")
 		})
 	}
 }

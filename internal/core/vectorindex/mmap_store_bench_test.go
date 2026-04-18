@@ -399,7 +399,7 @@ func TestRecallAt10_SIFT(t *testing.T) {
 		}
 	}
 
-	memMapping := buildNodeToBaseIdxMap(memStore, len(baseVecs))
+	memMapping := buildNodeToBaseIdxMap(memStore, len(baseVecs), "doc-%d")
 	var memRecallSum float64
 	for i, q := range queryVecs {
 		res, err := memIdx.Search(q, k)
@@ -428,7 +428,7 @@ func TestRecallAt10_SIFT(t *testing.T) {
 		}
 	}
 
-	mmapMapping := buildNodeToBaseIdxMap(mmapStore, len(baseVecs))
+	mmapMapping := buildNodeToBaseIdxMap(mmapStore, len(baseVecs), "doc-%d")
 	var mmapRecallSum float64
 	for i, q := range queryVecs {
 		res, err := mmapIdx.Search(q, k)
