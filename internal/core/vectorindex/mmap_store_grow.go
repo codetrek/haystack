@@ -65,7 +65,8 @@ func (s *MmapStore) growFile(which fileType, requiredCap uint64) error {
 }
 
 func (s *MmapStore) growVectors(requiredCap uint64) error {
-	// Caller holds muWrite; no additional lock needed.
+	// Caller holds muWrite. We also need muVec to block concurrent readers
+	// of s.vectors while remapFile replaces the slice.
 
 	// Re-check capacity.
 	if requiredCap <= s.vecCapacity {
@@ -79,11 +80,15 @@ func (s *MmapStore) growVectors(requiredCap uint64) error {
 		newCap *= 2
 	}
 
-	return s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, newCap, s.vecSlotSize, 8) // VectorsHeader.Capacity at offset 8
+	s.muVec.Lock()
+	err := s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, newCap, s.vecSlotSize, 8) // VectorsHeader.Capacity at offset 8
+	s.muVec.Unlock()
+	return err
 }
 
 func (s *MmapStore) growNodes(requiredCap uint64) error {
-	// Caller holds muWrite; no additional lock needed.
+	// Caller holds muWrite. We also need muNodes to block concurrent readers
+	// of s.nodes while remapFile replaces the slice.
 
 	if requiredCap <= s.nodeCapacity {
 		return nil
@@ -96,11 +101,15 @@ func (s *MmapStore) growNodes(requiredCap uint64) error {
 		newCap *= 2
 	}
 
-	return s.remapFile(s.nodeFile, &s.nodes, &s.nodeCapacity, newCap, nodeSlotSize, 8) // NodesHeader.Capacity at offset 8
+	s.muNodes.Lock()
+	err := s.remapFile(s.nodeFile, &s.nodes, &s.nodeCapacity, newCap, nodeSlotSize, 8) // NodesHeader.Capacity at offset 8
+	s.muNodes.Unlock()
+	return err
 }
 
 func (s *MmapStore) growL0(requiredCap uint64) error {
-	// Caller holds muWrite; no additional lock needed.
+	// Caller holds muWrite. We also need muGraph to block concurrent readers
+	// of s.graphL0 while remapFile replaces the slice.
 
 	if requiredCap <= s.l0Capacity {
 		return nil
@@ -113,11 +122,15 @@ func (s *MmapStore) growL0(requiredCap uint64) error {
 		newCap *= 2
 	}
 
-	return s.remapFile(s.l0File, &s.graphL0, &s.l0Capacity, newCap, s.l0SlotSize, 8) // GraphL0Header.Capacity at offset 8
+	s.muGraph.Lock()
+	err := s.remapFile(s.l0File, &s.graphL0, &s.l0Capacity, newCap, s.l0SlotSize, 8) // GraphL0Header.Capacity at offset 8
+	s.muGraph.Unlock()
+	return err
 }
 
 func (s *MmapStore) growUpper(requiredCap uint64) error {
-	// Caller holds muWrite; no additional lock needed.
+	// Caller holds muWrite. We also need muGraph to block concurrent readers
+	// of s.graphUpper while remapFile replaces the slice.
 
 	if requiredCap <= s.upperCapacity {
 		return nil
@@ -130,7 +143,10 @@ func (s *MmapStore) growUpper(requiredCap uint64) error {
 		newCap *= 2
 	}
 
-	return s.remapFile(s.upperFile, &s.graphUpper, &s.upperCapacity, newCap, s.upperSlotSz, 16) // GraphUpperHeader.Capacity at offset 16
+	s.muGraph.Lock()
+	err := s.remapFile(s.upperFile, &s.graphUpper, &s.upperCapacity, newCap, s.upperSlotSz, 16) // GraphUpperHeader.Capacity at offset 16
+	s.muGraph.Unlock()
+	return err
 }
 
 // remapFile is the common grow logic: munmap → ftruncate → update header capacity → re-mmap.
