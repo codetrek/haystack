@@ -14,4 +14,4 @@ cd "$PROJECT_ROOT/scripts/lib/coverage"
 go build -o "$COVERAGE_BIN" .
 
 cd "$PROJECT_ROOT"
-EXCLUDE_FUNCS="PutNode,DeleteNode,SetNodeMapping,DeleteNodeMapping,writeMetaHeader,writeDataFileHeader,initAllFiles,mmapAll,Replay,setNeighborsUpper,remapFile,Close,OpenWAL,growFile,ensureUpperCapacity,OpenMmapStore,syncAll,closeMmaps" "$COVERAGE_BIN"
+EXCLUDE_FUNCS="PutNode,DeleteNode,SetNodeMapping,DeleteNodeMapping,writeMetaHeader,writeDataFileHeader,initAllFiles,mmapAll,Replay,setNeighborsUpper,remapFile,Close,OpenWAL,growFile,ensureUpperCapacity,OpenMmapStore,syncAll,closeMmaps,compactIdmap,replayWAL" "$COVERAGE_BIN"

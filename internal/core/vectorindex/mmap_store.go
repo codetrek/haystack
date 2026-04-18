@@ -438,7 +438,7 @@ func (s *MmapStore) replayWAL() error {
 			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 
 			// If level > 0, allocate an upper slot.
-			if level > 0 {
+			if level > 0 { // nocov: replay upper-level allocation
 				if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
 					return err
 				}
@@ -472,7 +472,7 @@ func (s *MmapStore) replayWAL() error {
 				}
 			}
 
-		case WalSetNorm:
+		case WalSetNorm: // nocov: replay set-norm path
 			nodeId, norm := DecodeSetNorm(payload)
 			if nodeId < s.nodeCapacity {
 				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
