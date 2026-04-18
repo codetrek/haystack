@@ -261,7 +261,7 @@ func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
 
-	s.SetSyncMode(SyncDeferred)
+	requireNoError(t, s.SetSyncMode(SyncDeferred))
 
 	const n = 100
 	for i := 0; i < n; i++ {
@@ -288,4 +288,20 @@ func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 	requireNoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, uint64(50), nodeId)
+}
+
+func TestSetSyncMode_ErrorDuringActiveBatch(t *testing.T) {
+	s := openTestMmapStore(t)
+	defer s.Close()
+
+	requireNoError(t, s.SetSyncMode(SyncDeferred))
+
+	s.BeginBatch()
+	err := s.SetSyncMode(SyncImmediate)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "batch is active")
+
+	requireNoError(t, s.CommitBatch(false))
+
+	requireNoError(t, s.SetSyncMode(SyncImmediate))
 }

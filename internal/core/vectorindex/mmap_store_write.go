@@ -355,10 +355,15 @@ func (s *MmapStore) syncAll() error {
 }
 
 // SetSyncMode sets the sync strategy for CommitBatch.
-func (s *MmapStore) SetSyncMode(mode SyncMode) {
+// Returns an error if a batch is currently active.
+func (s *MmapStore) SetSyncMode(mode SyncMode) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
+	if s.batchDepth > 0 {
+		return fmt.Errorf("MmapStore.SetSyncMode: cannot change sync mode while batch is active (depth=%d)", s.batchDepth)
+	}
 	s.syncMode = mode
+	return nil
 }
 
 // Sync forces WAL sync + msync + checkpoint. Use after bulk inserts with SyncDeferred.

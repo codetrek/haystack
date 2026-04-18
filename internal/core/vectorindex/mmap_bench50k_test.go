@@ -63,7 +63,9 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 
 	// 5-6. Insert 50K vectors and measure time.
 	t.Log("Inserting 50K vectors into HNSW index (MmapStore-backed, deferred sync)...")
-	store.SetSyncMode(SyncDeferred)
+	if err := store.SetSyncMode(SyncDeferred); err != nil {
+		t.Fatalf("SetSyncMode(Deferred): %v", err)
+	}
 	insertStart := time.Now()
 	for i, v := range base {
 		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -80,7 +82,9 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 	if err := store.Sync(); err != nil {
 		t.Fatalf("store.Sync: %v", err)
 	}
-	store.SetSyncMode(SyncImmediate)
+	if err := store.SetSyncMode(SyncImmediate); err != nil {
+		t.Fatalf("SetSyncMode(Immediate): %v", err)
+	}
 
 	// 7. Memory stats.
 	var memStats runtime.MemStats
