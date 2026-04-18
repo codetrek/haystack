@@ -297,8 +297,8 @@ func (s *MmapStore) BeginBatch() {
 }
 
 // CommitBatch exits one level of batch nesting. When depth reaches 0,
-// flushes WAL and syncs all mmap regions. The sync parameter is kept for
-// interface compatibility; batch commits always sync to ensure durability.
+// flushes WAL. In SyncImmediate mode (default), also syncs WAL and msync's
+// all mmap regions. In SyncDeferred mode, only flushes the WAL buffer.
 func (s *MmapStore) CommitBatch(sync bool) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
@@ -309,13 +309,10 @@ func (s *MmapStore) CommitBatch(sync bool) error {
 	}
 	s.batchMode = false
 
-	// Batch commits always sync to ensure durability.
-	sync = true
-
 	if err := s.wal.Flush(); err != nil {
 		return fmt.Errorf("MmapStore.CommitBatch: WAL flush: %w", err)
 	}
-	if sync {
+	if s.syncMode == SyncImmediate {
 		if err := s.wal.Sync(); err != nil {
 			return fmt.Errorf("MmapStore.CommitBatch: WAL sync: %w", err)
 		}
@@ -355,6 +352,26 @@ func (s *MmapStore) syncAll() error {
 		return err
 	}
 	return mmapSync(s.graphUpper)
+}
+
+// SetSyncMode sets the sync strategy for CommitBatch.
+func (s *MmapStore) SetSyncMode(mode SyncMode) {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	s.syncMode = mode
+}
+
+// Sync forces WAL sync + msync + checkpoint. Use after bulk inserts with SyncDeferred.
+func (s *MmapStore) Sync() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	if err := s.wal.Flush(); err != nil {
+		return fmt.Errorf("MmapStore.Sync: WAL flush: %w", err)
+	}
+	if err := s.wal.Sync(); err != nil {
+		return fmt.Errorf("MmapStore.Sync: WAL sync: %w", err)
+	}
+	return s.checkpointLocked()
 }
 
 // maybeCheckpoint increments the ops counter and triggers a checkpoint
