@@ -359,3 +359,102 @@ func searchBench(b *testing.B, idx *HNSWIndex, queries [][]float32, k int) {
 		runtime.GC()
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task 4: Recall@10 verification (test, not benchmark)
+// ---------------------------------------------------------------------------
+
+// recallAtK computes recall@K: fraction of true top-K neighbors found in approximate results.
+func recallAtK(trueNN []int, approxResults []SearchResult, k int) float64 {
+	trueSet := make(map[int]bool, k)
+	for i := 0; i < k && i < len(trueNN); i++ {
+		trueSet[trueNN[i]] = true
+	}
+	hits := 0
+	for i := 0; i < k && i < len(approxResults); i++ {
+		if trueSet[int(approxResults[i].ID)] {
+			hits++
+		}
+	}
+	return float64(hits) / float64(k)
+}
+
+func TestRecallAt10_SIFT(t *testing.T) {
+	if !siftAvailable() {
+		t.Skip("SIFT data not available")
+	}
+
+	baseVecs, dim, err := loadSiftFvecs(filepath.Join(siftDir, "sift_base.fvecs"), 50000)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	queryVecs, _, err := loadSiftFvecs(filepath.Join(siftDir, "sift_query.fvecs"), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const k = 10
+	hnswSeed := int64(42)
+
+	// Build ground truth via brute force.
+	groundTruth := make([][]int, len(queryVecs))
+	for i, q := range queryVecs {
+		groundTruth[i] = bruteForceKNN(q, baseVecs, k, CosineDistance)
+	}
+
+	// Test MemStore recall.
+	memStore := NewMemNodeStore()
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range baseVecs {
+		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("MemStore insert %d: %v", i, err)
+		}
+	}
+
+	var memRecallSum float64
+	for i, q := range queryVecs {
+		res, err := memIdx.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		memRecallSum += recallAtK(groundTruth[i], res, k)
+	}
+	memRecall := memRecallSum / float64(len(queryVecs))
+	t.Logf("MemStore recall@10 = %.4f", memRecall)
+	assert.Greater(t, memRecall, 0.95, "MemStore recall@10 should be > 0.95")
+
+	// Test MmapStore recall.
+	dir := t.TempDir()
+	mmapStore, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 16})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mmapStore.Close()
+
+	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range baseVecs {
+		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("MmapStore insert %d: %v", i, err)
+		}
+	}
+
+	var mmapRecallSum float64
+	for i, q := range queryVecs {
+		res, err := mmapIdx.Search(q, k)
+		if err != nil {
+			t.Fatal(err)
+		}
+		mmapRecallSum += recallAtK(groundTruth[i], res, k)
+	}
+	mmapRecall := mmapRecallSum / float64(len(queryVecs))
+	t.Logf("MmapStore recall@10 = %.4f", mmapRecall)
+	assert.Greater(t, mmapRecall, 0.95, "MmapStore recall@10 should be > 0.95")
+
+	// Recall difference should be < 0.01.
+	diff := math.Abs(memRecall - mmapRecall)
+	t.Logf("Recall difference = %.4f", diff)
+	assert.Less(t, diff, 0.01, "MmapStore vs MemStore recall difference should be < 0.01")
+}
