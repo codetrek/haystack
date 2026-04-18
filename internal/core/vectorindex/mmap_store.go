@@ -73,6 +73,12 @@ type MmapStore struct {
 	nodeCapacity  uint64
 	l0Capacity    uint64
 	upperCapacity uint64
+
+	// Testing hooks — nil in production; zero overhead.
+	crashAfterWALWrite  func() // called after WAL Append in PutNode
+	crashAfterMsync     func() // called after syncAll in Checkpoint
+	crashAfterMeta      func() // called after writeMetaHeader in Checkpoint
+	crashBeforeTruncate func() // called before WAL Reset in Checkpoint
 }
 
 // OpenMmapStore opens or creates an mmap-backed store in dir.

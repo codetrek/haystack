@@ -28,6 +28,9 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, vector, norm, docId), s.batchMode); err != nil {
 		return fmt.Errorf("MmapStore.PutNode: WAL: %w", err)
 	}
+	if s.crashAfterWALWrite != nil {
+		s.crashAfterWALWrite()
+	}
 
 	// Ensure capacity for vectors, nodes, and L0 graph.
 	if err := s.ensureVecCapacity(id); err != nil {
@@ -376,12 +379,21 @@ func (s *MmapStore) checkpointLocked() error {
 	if err := s.syncAll(); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: msync: %w", err)
 	}
+	if s.crashAfterMsync != nil {
+		s.crashAfterMsync()
+	}
 	// 2. Record current WAL LSN into meta and write meta.bin atomically.
 	s.meta.WalCheckpointLSN = s.wal.LSN()
 	if err := writeMetaHeader(s.dir, &s.meta); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: meta: %w", err)
 	}
+	if s.crashAfterMeta != nil {
+		s.crashAfterMeta()
+	}
 	// 3. Truncate WAL (LSN is preserved inside WAL).
+	if s.crashBeforeTruncate != nil {
+		s.crashBeforeTruncate()
+	}
 	if err := s.wal.Reset(); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: WAL reset: %w", err)
 	}
