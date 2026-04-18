@@ -47,3 +47,26 @@ jobs:
       - name: Test and Coverage
         run: |
           ./.github/workflows/scripts/test_and_coverage.sh
+
+  cross-platform:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test (short)
+        run: go test -short -timeout 5m ./...
