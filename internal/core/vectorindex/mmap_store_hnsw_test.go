@@ -487,23 +487,8 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 
 		preResults = mmapHNSWSearchResults(t, idx, queries, k)
 
-		// Simulate crash: sync mmap but do NOT call Close (no checkpoint).
-		// The WAL contains all operations since last checkpoint (= all of them).
-		if err := store.wal.Flush(); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.wal.Sync(); err != nil {
-			t.Fatal(err)
-		}
-		if err := store.syncAll(); err != nil {
-			t.Fatal(err)
-		}
-		// Write meta to persist state, but don't truncate WAL.
-		if err := writeMetaHeader(dir, &store.meta); err != nil {
-			t.Fatal(err)
-		}
-
-		// Leak resources (simulating crash — no Close).
+		// Simulate crash: close file handles without syncing mmaps or
+		// writing meta. Data exists only in the WAL; recovery must replay it.
 		mmapFree(store.vectors)
 		mmapFree(store.nodes)
 		mmapFree(store.graphL0)
