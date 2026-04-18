@@ -1,6 +1,7 @@
 package vectorindex
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -298,6 +299,139 @@ func TestAutoCheckpoint_BatchMode(t *testing.T) {
 	}
 }
 
+func TestCrashRecovery_BasicReplay(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := 20
+	s.BeginBatch()
+	for i := 0; i < n; i++ {
+		vec := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
+		if err := s.PutNode(uint64(i), 0, vec); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate crash: close file handles without calling Close().
+	s.wal.Sync()
+	s.wal.Close()
+	s.idmapFile.Close()
+	mmapFree(s.vectors)
+	mmapFree(s.nodes)
+	mmapFree(s.graphL0)
+	mmapFree(s.graphUpper)
+	s.vecFile.Close()
+	s.nodeFile.Close()
+	s.l0File.Close()
+	s.upperFile.Close()
+
+	// Reopen — WAL replay should recover all data.
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < n; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		expected := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
+		for j := range expected {
+			if vec[j] != expected[j] {
+				t.Fatalf("vec[%d][%d]: got %f, want %f", i, j, vec[j], expected[j])
+			}
+		}
+	}
+
+	if s2.meta.NodeCount != uint64(n) {
+		t.Fatalf("NodeCount: got %d, want %d", s2.meta.NodeCount, n)
+	}
+
+	if err := s2.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write N=10 records and checkpoint.
+	s.BeginBatch()
+	for i := 0; i < 10; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write M=5 more records (post-checkpoint).
+	s.BeginBatch()
+	for i := 10; i < 15; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	// Crash.
+	s.wal.Sync()
+	s.wal.Close()
+	s.idmapFile.Close()
+	mmapFree(s.vectors)
+	mmapFree(s.nodes)
+	mmapFree(s.graphL0)
+	mmapFree(s.graphUpper)
+	s.vecFile.Close()
+	s.nodeFile.Close()
+	s.l0File.Close()
+	s.upperFile.Close()
+
+	// Reopen — should recover all 15 nodes.
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 15; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+
+	if s2.meta.NodeCount != 15 {
+		t.Fatalf("NodeCount: got %d, want 15", s2.meta.NodeCount)
+	}
+
+	if err := s2.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
@@ -305,7 +439,6 @@ func TestCheckpoint_LSNMonotonic(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write 3 records.
 	for i := 0; i < 3; i++ {
 		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
 			t.Fatal(err)
