@@ -305,9 +305,8 @@ type InsertItem struct {
 	Vector []float32
 }
 
-// InsertBatch inserts multiple items in a single Pebble batch. Individual
-// Insert calls nest inside the outer batch (depth 2) so they accumulate
-// writes without committing. The outer batch commits once at the end.
+// InsertBatch inserts multiple items in a single batch when the store
+// supports batching. The outer batch commits once at the end.
 func (h *HNSWIndex) InsertBatch(items []InsertItem) error {
 	bs, batchable := h.store.(BatchableStore)
 	if batchable {
