@@ -1186,3 +1186,124 @@ func TestMmapHNSW_UpperGraphGrowCrashRecovery(t *testing.T) {
 		assert.Greater(t, upperNodes, 0, "should have upper-layer nodes after recovery")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Task 6: MemStore → MmapStore export integration verification
+// ---------------------------------------------------------------------------
+
+// TestMmapHNSW_ExportMemStoreSearch verifies that exporting a MemStore-built
+// HNSW index to MmapStore produces identical search results.
+func TestMmapHNSW_ExportMemStoreSearch(t *testing.T) {
+	const (
+		n   = 1000
+		dim = 32
+		k   = 10
+		nq  = 20
+	)
+
+	rng := rand.New(rand.NewSource(42))
+	vecs := randomVectors(rng, n, dim)
+	queries := randomVectors(rng, nq, dim)
+	hnswSeed := int64(99)
+
+	// Build HNSW with MemStore.
+	memStore := NewMemNodeStore()
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range vecs {
+		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("MemStore insert %d: %v", i, err)
+		}
+	}
+
+	// Search with MemStore.
+	memResults := mmapHNSWSearchResults(t, memIdx, queries, k)
+
+	// Export to MmapStore.
+	dir := t.TempDir()
+	mmapStore, err := exportMemStoreToMmap(memStore, dir, dim, 16)
+	if err != nil {
+		t.Fatalf("exportMemStoreToMmap: %v", err)
+	}
+	defer mmapStore.Close()
+
+	// Build HNSW on exported MmapStore and search.
+	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+
+	mmapResults := mmapHNSWSearchResults(t, mmapIdx, queries, k)
+
+	// Verify results match (recall should be lossless since graph structure is identical).
+	assertSearchResultsMatch(t, "export", memResults, mmapResults)
+}
+
+// TestMmapHNSW_ExportThenInsertDelete verifies the exported MmapStore supports
+// continued insert and delete operations.
+func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
+	const (
+		n   = 500
+		dim = 32
+		k   = 10
+	)
+
+	rng := rand.New(rand.NewSource(42))
+	vecs := randomVectors(rng, n, dim)
+	hnswSeed := int64(99)
+
+	// Build with MemStore and export.
+	memStore := NewMemNodeStore()
+	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+	for i, v := range vecs {
+		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
+		}
+	}
+
+	dir := t.TempDir()
+	mmapStore, err := exportMemStoreToMmap(memStore, dir, dim, 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mmapStore.Close()
+
+	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+		WithRand(rand.New(rand.NewSource(hnswSeed))))
+
+	// Insert additional vectors.
+	extraVecs := randomVectors(rng, 50, dim)
+	for i, v := range extraVecs {
+		if err := mmapIdx.Insert(fmt.Sprintf("doc-extra-%d", i), v); err != nil {
+			t.Fatalf("extra insert %d: %v", i, err)
+		}
+	}
+
+	// Delete some original docs.
+	for i := 0; i < 10; i++ {
+		if err := mmapIdx.Delete(fmt.Sprintf("doc-%d", i)); err != nil {
+			t.Fatalf("delete doc-%d: %v", i, err)
+		}
+	}
+
+	// Search should still work.
+	query := randomVectors(rng, 1, dim)[0]
+	results, err := mmapIdx.Search(query, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != k {
+		t.Fatalf("expected %d results, got %d", k, len(results))
+	}
+
+	// Verify deleted docs are gone from mapping.
+	for i := 0; i < 10; i++ {
+		_, ok, _ := mmapStore.GetNodeId(fmt.Sprintf("doc-%d", i))
+		assert.False(t, ok, "deleted doc-%d should be unmapped", i)
+	}
+
+	// Verify extra docs are findable.
+	for i := 0; i < 50; i++ {
+		_, ok, _ := mmapStore.GetNodeId(fmt.Sprintf("doc-extra-%d", i))
+		assert.True(t, ok, "extra doc-%d should be mapped", i)
+	}
+}
