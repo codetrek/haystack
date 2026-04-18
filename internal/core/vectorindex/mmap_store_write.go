@@ -312,7 +312,7 @@ func (s *MmapStore) CommitBatch(sync bool) error {
 	if err := s.wal.Flush(); err != nil {
 		return fmt.Errorf("MmapStore.CommitBatch: WAL flush: %w", err)
 	}
-	if s.syncMode == SyncImmediate {
+	if sync && s.syncMode == SyncImmediate {
 		if err := s.wal.Sync(); err != nil {
 			return fmt.Errorf("MmapStore.CommitBatch: WAL sync: %w", err)
 		}
