@@ -455,20 +455,23 @@ func (s *MmapStore) compactIdmap() error {
 	}
 	f.Close()
 
+	// Close old handle before rename so Windows doesn't block the overwrite.
+	s.muDoc.Lock()
+	if err := s.idmapFile.Close(); err != nil {
+		s.muDoc.Unlock()
+		return fmt.Errorf("MmapStore.compactIdmap: close old idmap: %w", err)
+	}
+
 	if err := os.Rename(tmp, path); err != nil {
+		s.muDoc.Unlock()
 		return err
 	}
 
 	// Reopen idmap for append.
 	nf, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
-		return err
-	}
-	s.muDoc.Lock()
-	if err := s.idmapFile.Close(); err != nil {
 		s.muDoc.Unlock()
-		nf.Close()
-		return fmt.Errorf("MmapStore.compactIdmap: close old idmap: %w", err)
+		return err
 	}
 	s.idmapFile = nf
 	s.muDoc.Unlock()
