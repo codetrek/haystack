@@ -14,8 +14,9 @@ const defaultInitialCapacity = 1024
 
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
-	Dim int // vector dimension (required)
-	M   int // HNSW M parameter (required)
+	Dim                int // vector dimension (required)
+	M                  int // HNSW M parameter (required)
+	CheckpointInterval int // auto-checkpoint every N WAL appends (0 = default 1000)
 }
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
@@ -44,9 +45,11 @@ type MmapStore struct {
 	upperFile *os.File
 
 	// WAL and batch support
-	wal        *WAL
-	batchMode  bool
-	batchDepth int
+	wal                *WAL
+	batchMode          bool
+	batchDepth         int
+	opsSinceCheckpoint uint64
+	checkpointInterval uint64
 
 	// ID mapping (doc ↔ node)
 	docToNode map[string]uint64
@@ -70,6 +73,12 @@ type MmapStore struct {
 	nodeCapacity  uint64
 	l0Capacity    uint64
 	upperCapacity uint64
+
+	// Testing hooks — nil in production; zero overhead.
+	crashAfterWALWrite  func() // called after WAL Append in PutNode
+	crashAfterMsync     func() // called after syncAll in Checkpoint
+	crashAfterMeta      func() // called after writeMetaHeader in Checkpoint
+	crashBeforeTruncate func() // called before WAL Reset in Checkpoint
 }
 
 // OpenMmapStore opens or creates an mmap-backed store in dir.
@@ -97,6 +106,10 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		nodeToDoc:   make(map[uint64]string),
 	}
 	s.upperSlotSz = graphUpperSlotSize(opts.M, s.maxLayers)
+	s.checkpointInterval = 1000
+	if opts.CheckpointInterval > 0 {
+		s.checkpointInterval = uint64(opts.CheckpointInterval)
+	}
 
 	metaPath := filepath.Join(dir, "meta.bin")
 	if _, err := os.Stat(metaPath); os.IsNotExist(err) {
@@ -149,6 +162,17 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		return nil, fmt.Errorf("MmapStore: replay: %w", err)
 	}
 
+	// Checkpoint after replay to persist recovered state and truncate WAL,
+	// so subsequent Opens don't re-replay the same records.
+	if s.wal.LSN() > s.meta.WalCheckpointLSN {
+		if err := s.checkpointLocked(); err != nil { // nocov: post-replay checkpoint failure requires msync/rename to fail
+			s.idmapFile.Close()
+			wal.Close()
+			s.closeMmaps()
+			return nil, fmt.Errorf("MmapStore: post-replay checkpoint: %w", err)
+		}
+	}
+
 	return s, nil
 }
 
@@ -161,31 +185,20 @@ func (s *MmapStore) Close() error {
 		}
 	}
 
-	// 1. msync all mmap regions.
-	setErr(mmapSync(s.vectors))
-	setErr(mmapSync(s.nodes))
-	setErr(mmapSync(s.graphL0))
-	setErr(mmapSync(s.graphUpper))
+	// 1. Checkpoint: msync + writeMeta + WAL truncate + idmap compact.
+	setErr(s.checkpointLocked())
 
-	// 2. WAL sync.
-	if s.wal != nil {
-		setErr(s.wal.Sync())
-	}
-
-	// 3. Write final meta header.
-	setErr(writeMetaHeader(s.dir, &s.meta))
-
-	// 4. Close WAL.
+	// 2. Close WAL.
 	if s.wal != nil {
 		setErr(s.wal.Close())
 	}
 
-	// 5. Close idmap file.
+	// 3. Close idmap file (checkpoint already reopened it).
 	if s.idmapFile != nil {
 		setErr(s.idmapFile.Close())
 	}
 
-	// 6. munmap all.
+	// 4. munmap all.
 	setErr(mmapFree(s.vectors))
 	setErr(mmapFree(s.nodes))
 	setErr(mmapFree(s.graphL0))
@@ -196,7 +209,7 @@ func (s *MmapStore) Close() error {
 	s.graphL0 = nil
 	s.graphUpper = nil
 
-	// 7. Close all files.
+	// 5. Close all files.
 	setErr(s.vecFile.Close())
 	setErr(s.nodeFile.Close())
 	setErr(s.l0File.Close())

@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"os"
+	"path/filepath"
+	"sort"
 
 	"github.com/viterin/vek/vek32"
 )
@@ -25,6 +28,9 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	// WAL
 	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, vector, norm, docId), s.batchMode); err != nil {
 		return fmt.Errorf("MmapStore.PutNode: WAL: %w", err)
+	}
+	if s.crashAfterWALWrite != nil {
+		s.crashAfterWALWrite()
 	}
 
 	// Ensure capacity for vectors, nodes, and L0 graph.
@@ -78,7 +84,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 		s.meta.MaxLevel = uint32(level)
 	}
 
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // SetNeighbors stores the neighbor list for a node and layer.
@@ -90,10 +96,16 @@ func (s *MmapStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error
 		return fmt.Errorf("MmapStore.SetNeighbors: WAL: %w", err)
 	}
 
+	var err2 error
 	if layer == 0 {
-		return s.setNeighborsL0(id, neighbors)
+		err2 = s.setNeighborsL0(id, neighbors)
+	} else {
+		err2 = s.setNeighborsUpper(id, layer, neighbors)
 	}
-	return s.setNeighborsUpper(id, layer, neighbors)
+	if err2 != nil {
+		return err2
+	}
+	return s.maybeCheckpoint()
 }
 
 func (s *MmapStore) setNeighborsL0(id uint64, neighbors []uint64) error {
@@ -172,7 +184,7 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 	if !s.batchMode {
 		mmapSync(s.nodes)
 	}
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // SetEntryPoint sets the HNSW entry point and max layer.
@@ -189,7 +201,7 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	if uint32(maxLayer) > s.meta.MaxLevel {
 		s.meta.MaxLevel = uint32(maxLayer)
 	}
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // SetNodeMapping adds a docId ↔ nodeId mapping and persists it to idmap.dat.
@@ -258,7 +270,7 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 	if s.meta.NodeCount > 0 {
 		s.meta.NodeCount--
 	}
-	return nil
+	return s.maybeCheckpoint()
 }
 
 // readGraphUpperNextSlot reads the NextSlot field from graph_upper.dat header.
@@ -311,6 +323,9 @@ func (s *MmapStore) CommitBatch(sync bool) error {
 			return fmt.Errorf("MmapStore.CommitBatch: mmap sync: %w", err)
 		}
 	}
+	if s.opsSinceCheckpoint >= s.checkpointInterval {
+		return s.checkpointLocked()
+	}
 	return nil
 }
 
@@ -340,6 +355,127 @@ func (s *MmapStore) syncAll() error {
 		return err
 	}
 	return mmapSync(s.graphUpper)
+}
+
+// maybeCheckpoint increments the ops counter and triggers a checkpoint
+// if the threshold is reached. Caller must hold muWrite.
+func (s *MmapStore) maybeCheckpoint() error {
+	s.opsSinceCheckpoint++
+	if !s.batchMode && s.opsSinceCheckpoint >= s.checkpointInterval {
+		return s.checkpointLocked()
+	}
+	return nil
+}
+
+// Checkpoint persists the current state: msync all mmap regions, write
+// meta.bin with the current WAL LSN, truncate the WAL, and compact idmap.
+func (s *MmapStore) Checkpoint() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	return s.checkpointLocked()
+}
+
+func (s *MmapStore) checkpointLocked() error {
+	// 1. msync all mmap regions.
+	if err := s.syncAll(); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: msync: %w", err)
+	}
+	if s.crashAfterMsync != nil {
+		s.crashAfterMsync()
+	}
+	// 2. Record current WAL LSN into meta and write meta.bin atomically.
+	s.meta.WalCheckpointLSN = s.wal.LSN()
+	if err := writeMetaHeader(s.dir, &s.meta); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: meta: %w", err)
+	}
+	if s.crashAfterMeta != nil {
+		s.crashAfterMeta()
+	}
+	// 3. Truncate WAL (LSN is preserved inside WAL).
+	if s.crashBeforeTruncate != nil {
+		s.crashBeforeTruncate()
+	}
+	if err := s.wal.Reset(); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: WAL reset: %w", err)
+	}
+	// 4. Compact idmap.
+	if err := s.compactIdmap(); err != nil {
+		return fmt.Errorf("MmapStore.Checkpoint: idmap compact: %w", err)
+	}
+	// 5. Reset ops counter.
+	s.opsSinceCheckpoint = 0
+	return nil
+}
+
+// compactIdmap rewrites idmap.dat with only the current in-memory mappings,
+// removing stale entries from deleted nodes.
+func (s *MmapStore) compactIdmap() error {
+	path := filepath.Join(s.dir, "idmap.dat")
+	tmp := path + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+
+	s.muDoc.RLock()
+	// Sort by nodeId for deterministic output order.
+	type idEntry struct {
+		docId  string
+		nodeId uint64
+	}
+	entries := make([]idEntry, 0, len(s.docToNode))
+	for docId, nodeId := range s.docToNode {
+		entries = append(entries, idEntry{docId, nodeId})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].nodeId < entries[j].nodeId })
+	for _, e := range entries {
+		docId := e.docId
+		nodeId := e.nodeId
+		docBytes := []byte(docId)
+		entry := make([]byte, 10+len(docBytes)+4)
+		binary.LittleEndian.PutUint64(entry[0:], nodeId)
+		binary.LittleEndian.PutUint16(entry[8:], uint16(len(docBytes)))
+		copy(entry[10:], docBytes)
+		h := crc32.NewIEEE()
+		h.Write(entry[:10+len(docBytes)])
+		binary.LittleEndian.PutUint32(entry[10+len(docBytes):], h.Sum32())
+		if _, err := f.Write(entry); err != nil {
+			s.muDoc.RUnlock()
+			f.Close()
+			os.Remove(tmp)
+			return err
+		}
+	}
+	s.muDoc.RUnlock()
+
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	f.Close()
+
+	// Close old handle before rename so Windows doesn't block the overwrite.
+	s.muDoc.Lock()
+	if err := s.idmapFile.Close(); err != nil {
+		s.muDoc.Unlock()
+		return fmt.Errorf("MmapStore.compactIdmap: close old idmap: %w", err)
+	}
+
+	if err := os.Rename(tmp, path); err != nil {
+		s.muDoc.Unlock()
+		return err
+	}
+
+	// Reopen idmap for append.
+	nf, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		s.muDoc.Unlock()
+		return err
+	}
+	s.idmapFile = nf
+	s.muDoc.Unlock()
+	return nil
 }
 
 // NextNodeId returns the next available node ID (simple auto-increment).

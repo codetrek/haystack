@@ -179,6 +179,31 @@ func (w *WAL) Sync() error {
 	return w.file.Sync()
 }
 
+// LSN returns the current (last written) LSN.
+func (w *WAL) LSN() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.lsn
+}
+
+// Reset truncates the WAL file to 0 bytes, but preserves nextLSN so that
+// subsequent Append calls continue with monotonically increasing LSNs.
+func (w *WAL) Reset() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if err := w.buf.Flush(); err != nil {
+		return err
+	}
+	if err := w.file.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	w.buf.Reset(w.file)
+	return nil
+}
+
 // Close flushes and closes the WAL file.
 func (w *WAL) Close() error {
 	w.mu.Lock()
