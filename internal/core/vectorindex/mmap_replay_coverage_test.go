@@ -151,3 +151,47 @@ func TestReplayWAL_SetNorm(t *testing.T) {
 		t.Fatalf("norm = %f, want 42.5", norm)
 	}
 }
+
+// TestReplayWAL_SetEntry exercises the WalSetEntry branch in replayWAL
+// (mmap_store.go:482-488).
+func TestReplayWAL_SetEntry(t *testing.T) {
+	dir := t.TempDir()
+	const dim = 4
+
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 4, CheckpointInterval: 100_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert a few nodes so the store is non-trivial.
+	vec := []float32{1, 0, 0, 0}
+	for i := uint64(0); i < 3; i++ {
+		if err := s.PutNode(i, 0, vec); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Set node 2 as the entry point at level 3.
+	if err := s.SetEntryPoint(2, 3); err != nil {
+		t.Fatal(err)
+	}
+
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 4})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s2.Close()
+
+	id, level, err := s2.GetEntryPoint()
+	if err != nil {
+		t.Fatalf("GetEntryPoint: %v", err)
+	}
+	if id != 2 {
+		t.Fatalf("entry id = %d, want 2", id)
+	}
+	if level != 3 {
+		t.Fatalf("entry level = %d, want 3", level)
+	}
+}
