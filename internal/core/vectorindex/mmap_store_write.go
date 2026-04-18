@@ -48,6 +48,19 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	}
 	s.muVec.RUnlock()
 
+	// If level > 0, allocate an upper slot under muGraph write lock.
+	// This must happen before muNodes to respect lock ordering (muGraph → muNodes).
+	var upperSlotVal uint32
+	if level > 0 {
+		s.muGraph.Lock()
+		if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
+			s.muGraph.Unlock()
+			return err
+		}
+		upperSlotVal = s.allocUpperSlot()
+		s.muGraph.Unlock()
+	}
+
 	// Write node metadata (level, norm, upper slot).
 	s.muNodes.RLock()
 	nodeOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
@@ -56,18 +69,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	s.nodes[nodeOff+2] = 0          // padding
 	s.nodes[nodeOff+3] = 0          // padding
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
-
-	// If level > 0, allocate an upper slot.
-	if level > 0 {
-		if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
-			s.muNodes.RUnlock()
-			return err
-		}
-		slot := s.allocUpperSlot()
-		binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], slot)
-	} else {
-		binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
-	}
+	binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], upperSlotVal)
 
 	if !s.batchMode {
 		mmapSync(s.nodes)
