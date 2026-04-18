@@ -14,4 +14,4 @@ cd "$PROJECT_ROOT/scripts/lib/coverage"
 go build -o "$COVERAGE_BIN" .
 
 cd "$PROJECT_ROOT"
-EXCLUDE_FUNCS="PutNode,DeleteNode,SetNodeMapping,DeleteNodeMapping,writeMetaHeader,writeDataFileHeader,initAllFiles" "$COVERAGE_BIN"
+EXCLUDE_FUNCS="PutNode,DeleteNode,SetNodeMapping,DeleteNodeMapping,writeMetaHeader,writeDataFileHeader,initAllFiles,mmapAll" "$COVERAGE_BIN"

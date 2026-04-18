@@ -15,8 +15,8 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 		return nil, fmt.Errorf("MmapStore.GetVector: id %d out of range (cap %d)", id, s.vecCapacity)
 	}
 
-	offset := pageSize + int(id)*s.vecSlotSize
-	raw := s.vectors[offset : offset+s.vecSlotSize]
+	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
+	raw := s.vectors[offset : offset+int64(s.vecSlotSize)]
 	vec := make([]float32, s.dim)
 	for i := 0; i < s.dim; i++ {
 		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4 : i*4+4]))
@@ -46,7 +46,7 @@ func (s *MmapStore) getNeighborsL0(id uint64) ([]uint64, error) {
 		return nil, fmt.Errorf("MmapStore.GetNeighbors: id %d out of range (l0 cap %d)", id, s.l0Capacity)
 	}
 
-	offset := pageSize + int(id)*s.l0SlotSize
+	offset := int64(pageSize) + int64(id)*int64(s.l0SlotSize)
 	count := int(binary.LittleEndian.Uint32(s.graphL0[offset : offset+4]))
 	if count > s.mmax0 {
 		count = s.mmax0
@@ -54,7 +54,7 @@ func (s *MmapStore) getNeighborsL0(id uint64) ([]uint64, error) {
 
 	neighbors := make([]uint64, count)
 	base := offset + 4
-	for i := 0; i < count; i++ {
+	for i := int64(0); i < int64(count); i++ {
 		neighbors[i] = binary.LittleEndian.Uint64(s.graphL0[base+i*8 : base+i*8+8])
 	}
 	return neighbors, nil
@@ -62,6 +62,7 @@ func (s *MmapStore) getNeighborsL0(id uint64) ([]uint64, error) {
 
 func (s *MmapStore) getNeighborsUpper(id uint64, layer int) ([]uint64, error) {
 	// Read the UpperSlot index from nodes.dat.
+	// Lock order: muGraph (held by caller) → muNodes (acquired here). See MmapStore doc.
 	s.muNodes.RLock()
 	upperSlot, err := s.readUpperSlot(id)
 	s.muNodes.RUnlock()
@@ -82,8 +83,8 @@ func (s *MmapStore) getNeighborsUpper(id uint64, layer int) ([]uint64, error) {
 	}
 
 	layerSize := graphUpperLayerSize(s.m)
-	slotOffset := pageSize + int(upperSlot)*s.upperSlotSz
-	layerOffset := slotOffset + layerIdx*layerSize
+	slotOffset := int64(pageSize) + int64(upperSlot)*int64(s.upperSlotSz)
+	layerOffset := slotOffset + int64(layerIdx)*int64(layerSize)
 
 	count := int(binary.LittleEndian.Uint32(s.graphUpper[layerOffset : layerOffset+4]))
 	if count > s.m {
@@ -92,7 +93,7 @@ func (s *MmapStore) getNeighborsUpper(id uint64, layer int) ([]uint64, error) {
 
 	neighbors := make([]uint64, count)
 	base := layerOffset + 4
-	for i := 0; i < count; i++ {
+	for i := int64(0); i < int64(count); i++ {
 		neighbors[i] = binary.LittleEndian.Uint64(s.graphUpper[base+i*8 : base+i*8+8])
 	}
 	return neighbors, nil
@@ -104,7 +105,7 @@ func (s *MmapStore) readUpperSlot(id uint64) (uint32, error) {
 	if id >= s.nodeCapacity {
 		return 0, fmt.Errorf("MmapStore: node id %d out of range (cap %d)", id, s.nodeCapacity)
 	}
-	offset := pageSize + int(id)*nodeSlotSize
+	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	// UpperSlot is at bytes 8..12 in the NodeSlot (after Level[1] + Flags[1] + pad[2] + Norm[4]).
 	return binary.LittleEndian.Uint32(s.nodes[offset+8 : offset+12]), nil
 }
@@ -117,7 +118,7 @@ func (s *MmapStore) GetNorm(id uint64) (float32, error) {
 	if id >= s.nodeCapacity {
 		return 0, fmt.Errorf("MmapStore.GetNorm: id %d out of range (cap %d)", id, s.nodeCapacity)
 	}
-	offset := pageSize + int(id)*nodeSlotSize
+	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	// Norm is at bytes 4..8 in the NodeSlot.
 	bits := binary.LittleEndian.Uint32(s.nodes[offset+4 : offset+8])
 	return math.Float32frombits(bits), nil
@@ -131,7 +132,7 @@ func (s *MmapStore) GetNodeLevel(id uint64) (int, error) {
 	if id >= s.nodeCapacity {
 		return 0, fmt.Errorf("MmapStore.GetNodeLevel: id %d out of range (cap %d)", id, s.nodeCapacity)
 	}
-	offset := pageSize + int(id)*nodeSlotSize
+	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	level := int(s.nodes[offset]) // Level is first byte
 	flags := s.nodes[offset+1]
 	if flags&nodeFlagDeleted != 0 {
@@ -150,6 +151,8 @@ func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 
 // GetNodeId looks up the node ID for a document ID (in-memory map).
 func (s *MmapStore) GetNodeId(docId string) (uint64, bool, error) {
+	s.muDoc.RLock()
 	id, ok := s.docToNode[docId]
+	s.muDoc.RUnlock()
 	return id, ok, nil
 }
