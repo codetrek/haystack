@@ -15,6 +15,7 @@ require (
 	github.com/mark3labs/mcp-go v0.32.0
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/stretchr/testify v1.10.0
+	github.com/viterin/vek v0.4.3
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gopkg.in/yaml.v3 v3.0.1
 )
@@ -49,7 +50,6 @@ require (
 	github.com/spf13/cast v1.8.0 // indirect
 	github.com/vcaesar/cedar v0.30.0 // indirect
 	github.com/viterin/partial v1.1.0 // indirect
-	github.com/viterin/vek v0.4.3 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
 	golang.org/x/net v0.40.0 // indirect

@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -28,11 +27,8 @@ const (
 )
 
 // TestBenchmarkSearchLatency loads pre-generated fixtures, builds an HNSW index
-// backed by PebbleNodeStore (disk-backed), and measures search latency and
-// recall against brute-force ground truth.
-//
-// PebbleNodeStore is used instead of MemNodeStore because 100K 384-d vectors
-// exceed 8GB RAM with the in-memory store. Pebble keeps memory bounded.
+// backed by MemNodeStore, and measures search latency and recall against
+// brute-force ground truth.
 //
 // Run gen-testdata first:
 //
@@ -60,17 +56,14 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 
 	t.Logf("Loaded %d vectors, %d queries, %d ground truth sets", len(vectors), len(queries), len(groundTruth))
 
-	// Build HNSW index with PebbleNodeStore (disk-backed).
-	db := openTestDB(t)
-	defer db.Close()
-	store := NewPebbleNodeStore(db, 1)
+	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, CosineDistance,
 		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
 	)
 
-	t.Log("Inserting vectors into HNSW index (Pebble-backed)...")
+	t.Log("Inserting vectors into HNSW index...")
 	insertStart := time.Now()
 	for i, v := range vectors {
 		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -81,7 +74,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 		}
 	}
 	insertElapsed := time.Since(insertStart).Round(time.Millisecond)
-	t.Logf("Index built in %v (Pebble insert is slower than in-memory but uses bounded RAM)", insertElapsed)
+	t.Logf("Index built in %v", insertElapsed)
 
 	// Search and measure latency.
 	t.Log("Running search queries...")
@@ -138,10 +131,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 }
 
 // TestBenchmarkSearchLatency10K is a quick in-memory benchmark with 10K
-// generated vectors. No fixture files needed — vectors are produced inline
-// from a fixed seed. Useful as a fast sanity check for search quality.
-//
-//	go test ./internal/core/vectorindex/ -run TestBenchmark10K -v
+// generated vectors.
 func TestBenchmarkSearchLatency10K(t *testing.T) {
 	const (
 		n          = 10000
@@ -290,65 +280,10 @@ func BenchmarkHNSWSearch(b *testing.B) {
 	}
 }
 
-func openBenchDB(b *testing.B) *pebble.DB {
-	dir := b.TempDir()
-	db, err := pebble.Open(filepath.Join(dir, "bench.db"), &pebble.Options{})
-	if err != nil {
-		b.Fatal(err)
-	}
-	return db
-}
-
-// BenchmarkHNSWInsertPebble measures the throughput of inserting 128-dim vectors
-// into an HNSW index backed by PebbleNodeStore (one-at-a-time).
-func BenchmarkHNSWInsertPebble(b *testing.B) {
-	const dim = 128
-	rng := rand.New(rand.NewSource(42))
-	vecs := randomVectors(rng, b.N, dim)
-
-	db := openBenchDB(b)
-	defer db.Close()
-	store := NewPebbleNodeStore(db, 1)
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
-
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		if err := idx.Insert(fmt.Sprintf("%d", i), vecs[i]); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-// BenchmarkHNSWInsertBatchPebble measures the throughput of batched insertion
-// of 128-dim vectors into an HNSW index backed by PebbleNodeStore.
-func BenchmarkHNSWInsertBatchPebble(b *testing.B) {
-	const dim = 128
-	rng := rand.New(rand.NewSource(42))
-	vecs := randomVectors(rng, b.N, dim)
-
-	db := openBenchDB(b)
-	defer db.Close()
-	store := NewPebbleNodeStore(db, 1)
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
-
-	items := make([]InsertItem, b.N)
-	for i := range items {
-		items[i] = InsertItem{DocId: fmt.Sprintf("%d", i), Vector: vecs[i]}
-	}
-
-	b.ResetTimer()
-	if err := idx.InsertBatch(items); err != nil {
-		b.Fatal(err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Recall@10 test with 1000 vectors
 // ---------------------------------------------------------------------------
 
-// TestRecallAt10_1000Vectors inserts 1000 random 128-dim vectors, then searches
-// each vector and computes recall@10 using brute-force ground truth.
-// Mean recall@10 must be >= 0.95.
 func TestRecallAt10_1000Vectors(t *testing.T) {
 	const (
 		n    = 1000
@@ -391,88 +326,6 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 
 	if meanRecall < 0.95 {
 		t.Errorf("mean recall@%d = %.4f, want >= 0.95", k, meanRecall)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Persistence test
-// ---------------------------------------------------------------------------
-
-// TestPersistenceRecall builds an HNSW index on PebbleNodeStore, closes and
-// reopens the database, then verifies recall@10 >= 0.95 against brute-force.
-func TestPersistenceRecall(t *testing.T) {
-	const (
-		n    = 200
-		dim  = 128
-		k    = 10
-		seed = 42
-	)
-
-	rng := rand.New(rand.NewSource(seed))
-	vecs := randomVectors(rng, n, dim)
-
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "persistence_recall.db")
-
-	// Phase 1: build the index and close the DB.
-	db1, err := pebble.Open(dbPath, &pebble.Options{})
-	if err != nil {
-		t.Fatalf("open pebble (phase 1): %v", err)
-	}
-
-	store1 := NewPebbleNodeStore(db1, 1)
-	idx1 := NewHNSWIndex(store1, CosineDistance,
-		WithEfConstruction(200),
-		WithEfSearch(128),
-		WithRand(rand.New(rand.NewSource(seed))),
-	)
-
-	for i, v := range vecs {
-		if err := idx1.Insert(fmt.Sprintf("%d", i), v); err != nil {
-			t.Fatalf("insert vector %d: %v", i, err)
-		}
-	}
-
-	if err := db1.Close(); err != nil {
-		t.Fatalf("close pebble (phase 1): %v", err)
-	}
-
-	// Phase 2: reopen the DB and build a new HNSWIndex on the same data.
-	db2, err := pebble.Open(dbPath, &pebble.Options{})
-	if err != nil {
-		t.Fatalf("open pebble (phase 2): %v", err)
-	}
-	defer db2.Close()
-
-	store2 := NewPebbleNodeStore(db2, 1)
-	idx2 := NewHNSWIndex(store2, CosineDistance,
-		WithCosineDistance(),
-		WithEfConstruction(200),
-		WithEfSearch(128),
-	)
-
-	// Compute recall@10 using brute-force ground truth.
-	numQueries := 50
-	queryRng := rand.New(rand.NewSource(seed + 1))
-	queries := randomVectors(queryRng, numQueries, dim)
-
-	nodeMapping := buildNodeToBaseIdxMap(store2, n, "%d")
-	var totalRecall float64
-	for qi, q := range queries {
-		results, err := idx2.Search(q, k)
-		if err != nil {
-			t.Fatalf("search query %d: %v", qi, err)
-		}
-
-		gt := bruteForceKNN(q, vecs, k, CosineDistance)
-		totalRecall += recallAtKMapped(gt, results, k, nodeMapping)
-	}
-
-	meanRecall := totalRecall / float64(numQueries)
-	t.Logf("Persistence recall@%d over %d queries: %.4f", k, numQueries, meanRecall)
-
-	if meanRecall < 0.95 {
-		t.Errorf("persistence recall@%d = %.4f, want >= 0.95", k, meanRecall)
 	}
 }
 
@@ -562,7 +415,6 @@ func TestEdgeCases(t *testing.T) {
 }
 
 // TestBenchmarkParametric runs benchmarks at different scales and efSearch values.
-// Usage: go test -tags benchmark -v -run TestBenchmarkParametric -timeout 60m ./internal/core/vectorindex/
 func TestBenchmarkParametric(t *testing.T) {
 	scales := []int{1000, 5000, 10000, 20000, 40000}
 	efSearchValues := []int{64, 128, 200, 400}
@@ -572,7 +424,6 @@ func TestBenchmarkParametric(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 
 	for _, n := range scales {
-		// Generate vectors for this scale
 		vectors := make([][]float32, n)
 		for i := range vectors {
 			v := make([]float32, dim)
@@ -582,7 +433,6 @@ func TestBenchmarkParametric(t *testing.T) {
 			vectors[i] = v
 		}
 
-		// Generate queries
 		nQueries := 50
 		queries := make([][]float32, nQueries)
 		for i := range queries {
@@ -593,7 +443,6 @@ func TestBenchmarkParametric(t *testing.T) {
 			queries[i] = q
 		}
 
-		// Compute brute-force ground truth
 		groundTruth := make([][]int, nQueries)
 		for qi, q := range queries {
 			type distIdx struct {
@@ -612,7 +461,6 @@ func TestBenchmarkParametric(t *testing.T) {
 			groundTruth[qi] = gt
 		}
 
-		// Build index once per scale
 		store := NewMemNodeStore()
 		idx := NewHNSWIndex(store, CosineDistance)
 
@@ -630,7 +478,6 @@ func TestBenchmarkParametric(t *testing.T) {
 
 		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 
-		// Search with different efSearch values
 		for _, ef := range efSearchValues {
 			t.Run(fmt.Sprintf("N=%d/efSearch=%d", n, ef), func(t *testing.T) {
 				idx.mu.Lock()
@@ -679,7 +526,6 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 
 	rng := rand.New(rand.NewSource(42))
 
-	// Generate vectors
 	vectors := make([][]float32, n)
 	for i := range vectors {
 		v := make([]float32, dim)
@@ -689,7 +535,6 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 		vectors[i] = v
 	}
 
-	// Generate queries
 	nQueries := 50
 	queries := make([][]float32, nQueries)
 	for i := range queries {
@@ -700,7 +545,6 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 		queries[i] = q
 	}
 
-	// Brute-force ground truth
 	groundTruth := make([][]int, nQueries)
 	for qi, q := range queries {
 		type distIdx struct {
@@ -896,9 +740,6 @@ func loadFvecs(path string, limit int) ([][]float32, error) {
 }
 
 // loadIvecs reads a .ivecs file (ground truth): each record is [k(int32), ids(k × int32)].
-// Currently unused — we compute brute-force ground truth instead because SIFT's
-// built-in ground truth is for the full 1M dataset, not our 100K subset.
-// Kept for future use when testing with the full 1M dataset.
 func loadIvecs(path string, limit int) ([][]int32, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -922,7 +763,6 @@ func loadIvecs(path string, limit int) ([][]int32, error) {
 }
 
 // TestBenchmarkSIFT runs HNSW benchmark on real SIFT-128 data.
-// Usage: go test -tags benchmark -v -run TestBenchmarkSIFT -timeout 60m ./internal/core/vectorindex/
 func TestBenchmarkSIFT(t *testing.T) {
 	siftDir := "testdata/sift/sift"
 	basePath := filepath.Join(siftDir, "sift_base.fvecs")
@@ -932,7 +772,6 @@ func TestBenchmarkSIFT(t *testing.T) {
 		t.Skip("SIFT dataset not found — download from ftp://ftp.irisa.fr/local/texmex/corpus/sift.tar.gz")
 	}
 
-	// Load first 100K base vectors (out of 1M)
 	nBase := 100000
 	t.Logf("Loading %d SIFT base vectors...", nBase)
 	base, err := loadFvecs(basePath, nBase)
@@ -941,15 +780,12 @@ func TestBenchmarkSIFT(t *testing.T) {
 	}
 	t.Logf("Loaded %d vectors, dim=%d", len(base), len(base[0]))
 
-	// Load queries
 	queries, err := loadFvecs(queryPath, 100)
 	if err != nil {
 		t.Fatalf("load queries: %v", err)
 	}
 	t.Logf("Loaded %d queries", len(queries))
 
-	// Compute brute-force ground truth over the loaded 100K subset
-	// (SIFT's built-in ground truth is for 1M, not usable with 100K subset)
 	k := 10
 	t.Logf("Computing brute-force ground truth for %d queries over %d vectors...", len(queries), nBase)
 	gt := make([][]int, len(queries))
@@ -972,11 +808,9 @@ func TestBenchmarkSIFT(t *testing.T) {
 	t.Logf("Ground truth computed")
 	efSearchValues := []int{128, 200, 400}
 
-	// Note: SIFT uses Euclidean distance
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, EuclideanDistance)
 
-	// Insert
 	t.Run("insert", func(t *testing.T) {
 		start := time.Now()
 		for i, v := range base {
@@ -1034,22 +868,29 @@ func TestBenchmarkSIFT(t *testing.T) {
 }
 
 // BenchmarkMmapStoreGetVector measures mmap read latency.
-// Target: < 1μs per GetVector call.
 func BenchmarkMmapStoreGetVector(b *testing.B) {
-	dir := b.TempDir()
-	ms, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 128, M: 16})
-	if err != nil {
-		b.Fatalf("open: %v", err)
-	}
-	defer ms.Close()
-
+	store := NewMemNodeStore()
 	for i := 0; i < 1000; i++ {
 		v := make([]float32, 128)
 		for j := range v {
 			v[j] = float32(i*128 + j)
 		}
-		ms.PutNode(uint64(i), 0, v)
+		store.PutNode(uint64(i), 0, v)
+		store.SetNeighbors(uint64(i), 0, nil)
+		store.SetNodeMapping(fmt.Sprintf("doc%d", i), uint64(i))
 	}
+
+	dir := b.TempDir()
+	err := ExportMemStoreToMmap(store, 1000, 128, dir)
+	if err != nil {
+		b.Fatalf("export: %v", err)
+	}
+
+	ms, err := OpenMmapStore(dir, 128)
+	if err != nil {
+		b.Fatalf("open: %v", err)
+	}
+	defer ms.Close()
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

@@ -2,10 +2,8 @@ package vectorindex
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 
-	"github.com/cockroachdb/pebble"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -36,33 +34,6 @@ func TestHNSWUpsertEntryPoint(t *testing.T) {
 	results, err = idx.Search([]float32{0, 1, 0}, 2)
 	assert.NoError(t, err)
 	assert.Len(t, results, 2, "should have 2 nodes total")
-}
-
-func TestHNSWUpsertWithPebble(t *testing.T) {
-	db := openTestDB(t)
-	defer db.Close()
-	store := NewPebbleNodeStore(db, 1)
-	idx := NewHNSWIndex(store, CosineDistance)
-
-	err := idx.Insert("doc1", []float32{1, 0, 0})
-	assert.NoError(t, err)
-	err = idx.Insert("doc2", []float32{0, 1, 0})
-	assert.NoError(t, err)
-
-	// Upsert doc1
-	err = idx.Insert("doc1", []float32{0, 0, 1})
-	assert.NoError(t, err)
-
-	// Verify updated vector
-	results, err := idx.Search([]float32{0, 0, 1}, 1)
-	assert.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.InDelta(t, 0.0, results[0].Distance, 0.01)
-
-	// No orphans
-	results, err = idx.Search([]float32{1, 1, 1}, 10)
-	assert.NoError(t, err)
-	assert.Len(t, results, 2, "should have exactly 2 nodes, no orphans")
 }
 
 func TestHNSWInsertBatchDuplicateDocId(t *testing.T) {
@@ -115,42 +86,4 @@ func TestHNSWInsertBatchPartialFailure(t *testing.T) {
 	results, err := idx.Search([]float32{1, 0, 0}, 10)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(results), "existing node should survive failed insert")
-}
-
-func TestHNSWUpsertPersistRestart(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test.db")
-
-	// Phase 1: Insert + Upsert
-	db1, err := pebble.Open(dbPath, &pebble.Options{})
-	assert.NoError(t, err)
-	store1 := NewPebbleNodeStore(db1, 1)
-	idx1 := NewHNSWIndex(store1, CosineDistance)
-
-	err = idx1.Insert("doc1", []float32{1, 0, 0})
-	assert.NoError(t, err)
-	err = idx1.Insert("doc2", []float32{0, 1, 0})
-	assert.NoError(t, err)
-	err = idx1.Insert("doc1", []float32{0, 0, 1}) // upsert
-	assert.NoError(t, err)
-
-	db1.Close()
-
-	// Phase 2: Reopen and verify
-	db2, err := pebble.Open(dbPath, &pebble.Options{})
-	assert.NoError(t, err)
-	defer db2.Close()
-	store2 := NewPebbleNodeStore(db2, 1)
-	idx2 := NewHNSWIndex(store2, CosineDistance)
-
-	// Updated vector should be findable
-	results, err := idx2.Search([]float32{0, 0, 1}, 1)
-	assert.NoError(t, err)
-	assert.Len(t, results, 1)
-	assert.InDelta(t, 0.0, results[0].Distance, 0.01, "after restart, upserted vector intact")
-
-	// No orphans
-	results, err = idx2.Search([]float32{1, 1, 1}, 10)
-	assert.NoError(t, err)
-	assert.Len(t, results, 2, "after restart, exactly 2 nodes, no orphans")
 }

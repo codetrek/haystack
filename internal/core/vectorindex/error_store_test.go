@@ -410,29 +410,6 @@ func TestInsertBatchPropagatesError(t *testing.T) {
 	assert.Contains(t, err.Error(), "PutNode")
 }
 
-// =====================================================================
-// PebbleNodeStore DeleteNode — count-read error paths
-//
-// store.go:510-512 (batch path) and store.go:570-572 (non-batch path)
-// are the "else if err != pebble.ErrNotFound" branches on the count Get.
-// These are hard to hit via PebbleNodeStore directly because they require
-// a non-ErrNotFound, non-nil error from Get specifically on the count key.
-// We cover them here by verifying the code structure through the existing
-// poisoned-batch and read-only tests which hit them indirectly.
-//
-// The errorStore tests above cover the equivalent HNSW-level Delete paths.
-// =====================================================================
-
-// =====================================================================
-// PebbleNodeStore PutNode — count-read error in batch path
-// This is already covered by TestPutNodeBatchGetCountError in
-// error_path_test.go via poisoned batch.
-// =====================================================================
-
-// =====================================================================
-// Additional edge cases
-// =====================================================================
-
 // Delete a doc that was never inserted — should be a no-op.
 func TestDeleteNonExistentDoc(t *testing.T) {
 	es := newErrorStore()
