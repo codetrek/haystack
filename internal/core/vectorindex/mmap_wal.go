@@ -27,6 +27,11 @@ const (
 const walHeaderSize = 8 + 4 + 1 // LSN + Length + Type
 const walCRCSize = 4
 
+// maxWalPayloadSize caps the payload length we accept during WAL replay.
+// Anything larger is treated as corruption (prevents OOM on bogus lengths).
+// 64 MiB is well above any legitimate record.
+const maxWalPayloadSize = 64 << 20
+
 // WAL is an append-only write-ahead log with CRC32 integrity checks.
 type WAL struct {
 	file *os.File
@@ -204,6 +209,10 @@ func (w *WAL) Replay(afterLSN uint64, fn func(lsn uint64, typ WalRecordType, pay
 		lsn := binary.LittleEndian.Uint64(header[0:8])
 		length := binary.LittleEndian.Uint32(header[8:12])
 		typ := WalRecordType(header[12])
+
+		if length > maxWalPayloadSize {
+			return fmt.Errorf("wal: payload length %d exceeds max %d — possible corruption", length, maxWalPayloadSize)
+		}
 
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(r, payload); err != nil {
