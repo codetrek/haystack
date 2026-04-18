@@ -364,21 +364,6 @@ func searchBench(b *testing.B, idx *HNSWIndex, queries [][]float32, k int) {
 // Task 4: Recall@10 verification (test, not benchmark)
 // ---------------------------------------------------------------------------
 
-// recallAtK computes recall@K: fraction of true top-K neighbors found in approximate results.
-func recallAtK(trueNN []int, approxResults []SearchResult, k int) float64 {
-	trueSet := make(map[int]bool, k)
-	for i := 0; i < k && i < len(trueNN); i++ {
-		trueSet[trueNN[i]] = true
-	}
-	hits := 0
-	for i := 0; i < k && i < len(approxResults); i++ {
-		if trueSet[int(approxResults[i].ID)] {
-			hits++
-		}
-	}
-	return float64(hits) / float64(k)
-}
-
 // TestRecallAt10_SIFT requires SIFT dataset; run locally with -tags benchmark.
 func TestRecallAt10_SIFT(t *testing.T) {
 	if !siftAvailable() {
@@ -414,13 +399,14 @@ func TestRecallAt10_SIFT(t *testing.T) {
 		}
 	}
 
+	memMapping := buildNodeToBaseIdxMap(memStore, len(baseVecs))
 	var memRecallSum float64
 	for i, q := range queryVecs {
 		res, err := memIdx.Search(q, k)
 		if err != nil {
 			t.Fatal(err)
 		}
-		memRecallSum += recallAtK(groundTruth[i], res, k)
+		memRecallSum += recallAtKMapped(groundTruth[i], res, k, memMapping)
 	}
 	memRecall := memRecallSum / float64(len(queryVecs))
 	t.Logf("MemStore recall@10 = %.4f", memRecall)
@@ -442,13 +428,14 @@ func TestRecallAt10_SIFT(t *testing.T) {
 		}
 	}
 
+	mmapMapping := buildNodeToBaseIdxMap(mmapStore, len(baseVecs))
 	var mmapRecallSum float64
 	for i, q := range queryVecs {
 		res, err := mmapIdx.Search(q, k)
 		if err != nil {
 			t.Fatal(err)
 		}
-		mmapRecallSum += recallAtK(groundTruth[i], res, k)
+		mmapRecallSum += recallAtKMapped(groundTruth[i], res, k, mmapMapping)
 	}
 	mmapRecall := mmapRecallSum / float64(len(queryVecs))
 	t.Logf("MmapStore recall@10 = %.4f", mmapRecall)
