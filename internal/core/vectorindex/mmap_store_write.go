@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/viterin/vek/vek32"
 )
@@ -417,7 +418,19 @@ func (s *MmapStore) compactIdmap() error {
 	}
 
 	s.muDoc.RLock()
+	// Sort by nodeId for deterministic output order.
+	type idEntry struct {
+		docId  string
+		nodeId uint64
+	}
+	entries := make([]idEntry, 0, len(s.docToNode))
 	for docId, nodeId := range s.docToNode {
+		entries = append(entries, idEntry{docId, nodeId})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].nodeId < entries[j].nodeId })
+	for _, e := range entries {
+		docId := e.docId
+		nodeId := e.nodeId
 		docBytes := []byte(docId)
 		entry := make([]byte, 10+len(docBytes)+4)
 		binary.LittleEndian.PutUint64(entry[0:], nodeId)
