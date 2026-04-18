@@ -1,7 +1,9 @@
 package vectorindex
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -463,4 +465,375 @@ func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// simulateCrash closes all file handles without calling Close().
+func simulateCrash(s *MmapStore) {
+	s.wal.Sync()
+	s.wal.Close()
+	if s.idmapFile != nil {
+		s.idmapFile.Close()
+	}
+	mmapFree(s.vectors)
+	mmapFree(s.nodes)
+	mmapFree(s.graphL0)
+	mmapFree(s.graphUpper)
+	s.vecFile.Close()
+	s.nodeFile.Close()
+	s.l0File.Close()
+	s.upperFile.Close()
+}
+
+// --- 8 Crash Point Tests (Task 6) ---
+
+// 6a: WAL written, msync not done → WAL replay recovers data.
+func TestCrashPoint_AfterWALWrite(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write 5 nodes normally.
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Checkpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now write node 5 with crash hook — after WAL write, before mmap write.
+	crashed := false
+	s.crashAfterWALWrite = func() {
+		s.wal.Sync()
+		crashed = true
+		panic("crash after WAL write")
+	}
+
+	func() {
+		defer func() { recover() }()
+		s.PutNode(5, 0, []float32{5, 0, 0, 1})
+	}()
+
+	if !crashed {
+		t.Fatal("hook did not fire")
+	}
+	s.crashAfterWALWrite = nil
+	simulateCrash(s)
+
+	// Reopen — WAL replay should recover node 5.
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i <= 5; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+	s2.Close()
+}
+
+// 6b: Checkpoint msync done, meta.bin not written → old checkpoint LSN, WAL replays.
+func TestCrashPoint_AfterMsync(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	s.crashAfterMsync = func() {
+		panic("crash after msync")
+	}
+
+	func() {
+		defer func() { recover() }()
+		s.Checkpoint()
+	}()
+	s.crashAfterMsync = nil
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+	s2.Close()
+}
+
+// 6c: meta.bin written, WAL not truncated → old WAL records skipped by LSN filter.
+func TestCrashPoint_AfterMeta(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	s.crashBeforeTruncate = func() {
+		panic("crash before truncate")
+	}
+
+	func() {
+		defer func() { recover() }()
+		s.Checkpoint()
+	}()
+	s.crashBeforeTruncate = nil
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+	s2.Close()
+}
+
+// 6d: Partial WAL record — incomplete bytes appended to wal.bin.
+func TestCrashPoint_PartialWALRecord(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// Reopen, write more, close raw, append junk.
+	s, err = OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 5; i < 8; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.wal.Sync()
+	simulateCrash(s)
+
+	walPath := filepath.Join(dir, "wal.bin")
+	f, _ := os.OpenFile(walPath, os.O_WRONLY|os.O_APPEND, 0644)
+	f.Write([]byte{0xFF, 0xFE, 0xFD, 0xFC, 0xFB})
+	f.Close()
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+	s2.Close()
+}
+
+// 6e: Partial meta.bin write — meta truncated to 32 bytes (corrupt).
+func TestCrashPoint_PartialMeta(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+
+	metaPath := filepath.Join(dir, "meta.bin")
+	f, _ := os.OpenFile(metaPath, os.O_WRONLY, 0644)
+	f.Truncate(32)
+	f.Close()
+
+	_, err = OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err == nil {
+		t.Fatal("expected error on corrupt meta.bin")
+	}
+}
+
+// 6f: grow during write, crash before meta update → replay re-grows.
+func TestCrashPoint_GrowMidWrite(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	n := 1030
+	s.BeginBatch()
+	for i := 0; i < n; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	s.wal.Sync()
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < n; i++ {
+		vec, err := s2.GetVector(uint64(i))
+		if err != nil {
+			t.Fatalf("GetVector(%d): %v", i, err)
+		}
+		if vec[0] != float32(i) {
+			t.Fatalf("vec[%d][0]: got %f, want %f", i, vec[0], float32(i))
+		}
+	}
+	s2.Close()
+}
+
+// 6g: SetNeighbors WAL written, crash before msync.
+func TestCrashPoint_SetNeighborsCrash(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetNeighbors(0, 0, []uint64{1, 2, 3}); err != nil {
+		t.Fatal(err)
+	}
+
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nbs, err := s2.GetNeighbors(0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nbs) != 3 || nbs[0] != 1 || nbs[1] != 2 || nbs[2] != 3 {
+		t.Fatalf("neighbors: got %v, want [1 2 3]", nbs)
+	}
+	s2.Close()
+}
+
+// 6h: DeleteNode WAL written, crash before msync.
+func TestCrashPoint_DeleteNodeCrash(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.BeginBatch()
+	for i := 0; i < 5; i++ {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.CommitBatch(true); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteNode(2); err != nil {
+		t.Fatal(err)
+	}
+
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	nodeOff := int64(pageSize) + 2*int64(nodeSlotSize)
+	flags := s2.nodes[nodeOff+1]
+	if flags&nodeFlagDeleted == 0 {
+		t.Fatal("node 2 should be deleted after replay")
+	}
+
+	for _, id := range []uint64{0, 1, 3, 4} {
+		noff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
+		nflags := s2.nodes[noff+1]
+		if nflags&nodeFlagDeleted != 0 {
+			t.Fatalf("node %d should not be deleted", id)
+		}
+		norm := math.Float32frombits(binary.LittleEndian.Uint32(s2.nodes[noff+4:]))
+		if norm == 0 {
+			t.Fatalf("node %d norm should be non-zero", id)
+		}
+	}
+
+	s2.Close()
 }
