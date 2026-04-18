@@ -318,3 +318,11 @@ func (s *MmapStore) syncAll() error {
 	}
 	return mmapSync(s.graphUpper)
 }
+
+// NextNodeId returns the next available node ID (simple auto-increment).
+// Thread safety: callers must serialize via HNSW h.mu (Insert holds it).
+func (s *MmapStore) NextNodeId() (uint64, error) {
+	id := s.meta.NextNodeId
+	s.meta.NextNodeId++
+	return id, nil
+}

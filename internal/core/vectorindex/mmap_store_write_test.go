@@ -212,3 +212,43 @@ func TestMmapStoreDiscardBatch(t *testing.T) {
 	assert.Equal(t, 0, s.BatchDepth())
 	assert.False(t, s.batchMode)
 }
+
+func TestMmapStoreNextNodeId(t *testing.T) {
+	s := openTestMmapStore(t)
+	defer s.Close()
+
+	id0, err := s.NextNodeId()
+	requireNoError(t, err)
+	assert.Equal(t, uint64(0), id0)
+
+	id1, err := s.NextNodeId()
+	requireNoError(t, err)
+	assert.Equal(t, uint64(1), id1)
+
+	id2, err := s.NextNodeId()
+	requireNoError(t, err)
+	assert.Equal(t, uint64(2), id2)
+}
+
+func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Dim: 4, M: 4}
+
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		_, err := s.NextNodeId()
+		requireNoError(t, err)
+	}
+	requireNoError(t, s.Close())
+
+	// Reopen — NextNodeId should continue from 5.
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	id, err := s2.NextNodeId()
+	requireNoError(t, err)
+	assert.Equal(t, uint64(5), id)
+}
