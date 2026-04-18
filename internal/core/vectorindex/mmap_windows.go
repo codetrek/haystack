@@ -38,6 +38,9 @@ func mmapPlatform(fd uintptr, offset int64, length int, flags int) ([]byte, erro
 }
 
 func munmapPlatform(data []byte) error {
+	if len(data) == 0 {
+		return nil
+	}
 	addr := uintptr(unsafe.Pointer(&data[0]))
 	return syscall.UnmapViewOfFile(addr)
 }
