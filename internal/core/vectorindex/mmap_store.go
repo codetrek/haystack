@@ -416,6 +416,10 @@ func (s *MmapStore) loadIdmap() error {
 // recovery fully reconstructs the index.
 func (s *MmapStore) replayWAL() error {
 	var replayed int
+	prevBatchMode := s.batchMode
+	s.batchMode = true
+	defer func() { s.batchMode = prevBatchMode }()
+
 	err := s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
 		replayed++
 		switch typ {
@@ -514,6 +518,9 @@ func (s *MmapStore) replayWAL() error {
 	}
 	if replayed > 0 {
 		s.rebuildNodeCount()
+		if err := s.syncAll(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
