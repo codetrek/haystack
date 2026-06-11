@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/codetrek/haystack/searchcore/engine"
 	"github.com/codetrek/haystack/searchcore/tokenizer"
 	"github.com/stretchr/testify/assert"
 )
@@ -115,12 +116,12 @@ func TestTokenizeForIndex_CJK(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. SimpleContentSearchEngine CJK compilation and line matching
+// 2. Engine CJK compilation and line matching
 // ---------------------------------------------------------------------------
 
 func TestCJKCompileAndLineMatch(t *testing.T) {
 	t.Run("pure Chinese query compiles and matches", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("中华人民", false)
 		assert.NoError(t, err)
 
@@ -129,7 +130,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 	})
 
 	t.Run("Chinese query does not match unrelated content", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("中华人民", false)
 		assert.NoError(t, err)
 
@@ -138,7 +139,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 	})
 
 	t.Run("mixed CJK-ASCII query matches mixed content", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("Go语言", false)
 		assert.NoError(t, err)
 
@@ -147,7 +148,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 	})
 
 	t.Run("ASCII-only query still matches in CJK content", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("Google", false)
 		assert.NoError(t, err)
 
@@ -156,7 +157,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 	})
 
 	t.Run("Chinese term in exact phrase", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("\"编程语言\"", false)
 		assert.NoError(t, err)
 
@@ -165,7 +166,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 	})
 
 	t.Run("Chinese OR query", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("中华人民 | 编程语言", false)
 		assert.NoError(t, err)
 
@@ -180,7 +181,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 		// "的" is a Chinese stop word. When tokenized for search, it produces
 		// no keywords. The engine.Compile should return an error since
 		// the query resolves to no valid terms.
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("的", false)
 
 		// If compile succeeds (stop word still passed as regex), check that
@@ -202,7 +203,7 @@ func TestCJKCompileAndLineMatch(t *testing.T) {
 
 func TestSearchInContent_CJK(t *testing.T) {
 	t.Run("pure Chinese content search", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("成立", false)
 		assert.NoError(t, err)
 
@@ -214,7 +215,7 @@ func TestSearchInContent_CJK(t *testing.T) {
 	})
 
 	t.Run("mixed CJK-ASCII content search", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("编程", false)
 		assert.NoError(t, err)
 
@@ -226,7 +227,7 @@ func TestSearchInContent_CJK(t *testing.T) {
 	})
 
 	t.Run("CJK content with before/after context", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("目标", false)
 		assert.NoError(t, err)
 
@@ -239,7 +240,7 @@ func TestSearchInContent_CJK(t *testing.T) {
 	})
 
 	t.Run("multiple CJK matches in file", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("测试", false)
 		assert.NoError(t, err)
 
@@ -250,7 +251,7 @@ func TestSearchInContent_CJK(t *testing.T) {
 	})
 
 	t.Run("CJK filename search does not crash", func(t *testing.T) {
-		eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("说明", false)
 		assert.NoError(t, err)
 
@@ -268,7 +269,9 @@ func TestSearchInContent_CJK(t *testing.T) {
 
 func TestASCIIBehaviorPreserved(t *testing.T) {
 	t.Run("simple ASCII search still works", func(t *testing.T) {
-		eng := CreateSimpleEngine(t, "function", true, 24, 32)
+		eng := newTestEngine(24, 32, false)
+		err := eng.Compile("function", true)
+		assert.NoError(t, err)
 		matches := eng.IsLineMatch("func main() { function() }")
 		assert.True(t, len(matches) > 0)
 	})
@@ -288,7 +291,9 @@ func TestASCIIBehaviorPreserved(t *testing.T) {
 	})
 
 	t.Run("ASCII exact phrase still works", func(t *testing.T) {
-		eng := CreateSimpleEngine(t, "\"hello world\"", true, 24, 32)
+		eng := newTestEngine(24, 32, false)
+		err := eng.Compile("\"hello world\"", true)
+		assert.NoError(t, err)
 		matches := eng.IsLineMatch("say hello world today")
 		assert.True(t, len(matches) > 0)
 

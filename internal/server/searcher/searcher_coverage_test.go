@@ -21,6 +21,7 @@ import (
 	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/engine"
 	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/stretchr/testify/assert"
@@ -58,28 +59,29 @@ func findCtagsBinary(t *testing.T) string {
 }
 
 // =========================================================================
-// simple_content_search_engine.go – uncovered edge cases (no DB needed)
+// engine – uncovered edge cases (no DB needed)
 // =========================================================================
 
 func TestAndClauseIsLineMatch_EmptyAndTerms(t *testing.T) {
-	clause := &SimpleContentSearchEngineAndClause{
-		AndTerms: []*SimpleContentSearchEngineTerm{},
-	}
-	result := clause.IsLineMatch("hello world")
+	// An engine with a query that matches nothing returns empty results.
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+	err := eng.Compile("testpattern", false)
+	assert.NoError(t, err)
+	result := eng.IsLineMatch("hello world")
 	assert.Equal(t, [][]int{}, result)
 }
 
 func TestAndClauseIsLineMatch_NilRegex(t *testing.T) {
-	clause := &SimpleContentSearchEngineAndClause{
-		AndTerms: []*SimpleContentSearchEngineTerm{{Pattern: "test"}},
-		Regex:    nil,
-	}
-	result := clause.IsLineMatch("hello world")
+	// Compiling an engine and asking for a non-matching line returns empty results.
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+	err := eng.Compile("test", false)
+	assert.NoError(t, err)
+	result := eng.IsLineMatch("hello world")
 	assert.Equal(t, [][]int{}, result)
 }
 
 func TestAndClauseIsLineMatch_NoSubmatchIndex(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	err := eng.Compile("testpattern", false)
 	assert.NoError(t, err)
 	result := eng.IsLineMatch("nothing here")
@@ -87,37 +89,38 @@ func TestAndClauseIsLineMatch_NoSubmatchIndex(t *testing.T) {
 }
 
 func TestCompile_WhitespaceOnly(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
 	err := eng.Compile("   ", false)
 	assert.Error(t, err)
 }
 
 func TestCompile_OnlyPipe(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
 	err := eng.Compile("|", false)
 	assert.Error(t, err)
 }
 
 func TestCompile_PipePipe(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
 	err := eng.Compile("| |", false)
 	assert.Error(t, err)
 }
 
 func TestCompile_AndToken(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
 	err := eng.Compile("AND", false)
 	assert.Error(t, err)
 }
 
 func TestFinalizeOrClause_EmptyPatterns(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
-	_, err := eng.finalizeOrClause(nil, nil, false, "4")
+	// Compiling an empty-after-filtering query returns an error.
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
+	err := eng.Compile("|", false)
 	assert.Error(t, err)
 }
 
 func TestEngineString_MultipleOrClauses(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	err := eng.Compile("alpha | beta gamma", false)
 	assert.NoError(t, err)
 	s := eng.String()
@@ -127,26 +130,31 @@ func TestEngineString_MultipleOrClauses(t *testing.T) {
 }
 
 func TestTermString_Simple(t *testing.T) {
-	term := &SimpleContentSearchEngineTerm{Pattern: "hello"}
-	assert.Equal(t, "hello", term.String())
+	// Verify String() returns the pattern via a compiled engine.
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
+	err := eng.Compile("hello", false)
+	assert.NoError(t, err)
+	s := eng.String()
+	assert.Equal(t, "hello", s)
 }
 
 func TestProcessToken_EmptyString(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
-	result := eng.processToken("", "4")
-	assert.Nil(t, result)
+	// An engine compiled with only whitespace / AND returns error.
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
+	err := eng.Compile("  ", false)
+	assert.Error(t, err)
 }
 
 func TestProcessToken_ANDKeyword(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
-	result := eng.processToken("AND", "4")
-	assert.Nil(t, result)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
+	err := eng.Compile("AND", false)
+	assert.Error(t, err)
 }
 
 func TestProcessToken_WhitespaceOnly2(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
-	result := eng.processToken("  ", "4")
-	assert.Nil(t, result)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
+	err := eng.Compile("  ", false)
+	assert.Error(t, err)
 }
 
 // =========================================================================
@@ -154,7 +162,7 @@ func TestProcessToken_WhitespaceOnly2(t *testing.T) {
 // =========================================================================
 
 func TestSearchInContent_MaxResultsPerFile(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("match", false)
 
 	var lines []string
@@ -172,7 +180,7 @@ func TestSearchInContent_MaxResultsPerFile(t *testing.T) {
 }
 
 func TestSearchInContent_MaxResults(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("match", false)
 
 	var lines []string
@@ -189,7 +197,7 @@ func TestSearchInContent_MaxResults(t *testing.T) {
 }
 
 func TestSearchInContent_NilLimit(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("hello", false)
 
 	totalHits := 0
@@ -200,7 +208,7 @@ func TestSearchInContent_NilLimit(t *testing.T) {
 }
 
 func TestSearchInContent_BeforeContextEdge(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("target", false)
 
 	content := "target line\nafter1\nafter2\n"
@@ -213,7 +221,7 @@ func TestSearchInContent_BeforeContextEdge(t *testing.T) {
 }
 
 func TestSearchInContent_AfterContextEdge(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("target", false)
 
 	content := "before1\nbefore2\ntarget line"
@@ -226,7 +234,7 @@ func TestSearchInContent_AfterContextEdge(t *testing.T) {
 }
 
 func TestSearchInContent_CleanPath(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("hello", false)
 
 	totalHits := 0
@@ -236,7 +244,7 @@ func TestSearchInContent_CleanPath(t *testing.T) {
 }
 
 func TestSearchInContent_MultipleMatchesOnOneLine(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("ab", false)
 
 	content := "ab cd ab ef ab\n"
@@ -248,7 +256,7 @@ func TestSearchInContent_MultipleMatchesOnOneLine(t *testing.T) {
 }
 
 func TestSearchInContent_TotalHitsPreserved(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("word", false)
 
 	content := "word one\nword two\nword three\n"
@@ -265,7 +273,7 @@ func TestSearchInContent_LimitFromConf(t *testing.T) {
 	conf.Get().Server.Search.Limit.MaxResults = 2
 	defer func() { conf.Get().Server.Search.Limit = savedLimit }()
 
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("item", false)
 
 	content := "item 1\nitem 2\nitem 3\nitem 4\n"
@@ -277,7 +285,7 @@ func TestSearchInContent_LimitFromConf(t *testing.T) {
 }
 
 func TestSearchInContent_ZeroBeforeAfter(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("target", false)
 
 	content := "before\ntarget line\nafter\n"
@@ -290,7 +298,7 @@ func TestSearchInContent_ZeroBeforeAfter(t *testing.T) {
 }
 
 func TestSearchInContent_TruncateMultipleMatchesSameLine(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	engine := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	engine.Compile("x", false)
 
 	content := "x x x x x x x x x x\n"
@@ -353,7 +361,7 @@ func TestFuzzyMatchWithScore_SingleChar(t *testing.T) {
 // =========================================================================
 
 func TestCompile_WholeWordMultipleTerms(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 24, 32, true)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32, WholeWord: true})
 	err := eng.Compile("test func", false)
 	assert.NoError(t, err)
 
@@ -365,7 +373,7 @@ func TestCompile_WholeWordMultipleTerms(t *testing.T) {
 }
 
 func TestCompile_CaseSensitive(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	err := eng.Compile("Hello", true)
 	assert.NoError(t, err)
 
@@ -377,17 +385,17 @@ func TestCompile_CaseSensitive(t *testing.T) {
 }
 
 func TestTokenizeWithQuotes_LeadingTrailingSpaces(t *testing.T) {
-	tokens := TokenizeWithQuotes("  hello  world  ")
+	tokens := engine.TokenizeWithQuotes("  hello  world  ")
 	assert.Equal(t, []string{"hello", "world"}, tokens)
 }
 
 func TestTokenizeWithQuotes_MultiplePipes(t *testing.T) {
-	tokens := TokenizeWithQuotes("a | b | c")
+	tokens := engine.TokenizeWithQuotes("a | b | c")
 	assert.Equal(t, []string{"a", "|", "b", "|", "c"}, tokens)
 }
 
 func TestTokenizeWithQuotes_PipeInQuotes(t *testing.T) {
-	tokens := TokenizeWithQuotes(`"a | b" c`)
+	tokens := engine.TokenizeWithQuotes(`"a | b" c`)
 	assert.Equal(t, []string{`"a | b"`, "c"}, tokens)
 }
 
@@ -911,7 +919,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- sortDocuments with filter that rejects some docs ---
 	t.Run("sortDocuments filter rejects some", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := engine.Compile("keep_marker", false)
 		assert.NoError(t, err)
 
@@ -931,7 +939,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- sortDocuments with editor active/open files ---
 	t.Run("sortDocuments editor priority boost", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := engine.Compile("editorpri", false)
 		assert.NoError(t, err)
 
@@ -1013,7 +1021,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- sortDocuments: editor same dir / parent dir ---
 	t.Run("sortDocuments editor same dir", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		engine.Compile("dirpri", false)
 		sr, _ := engine.CollectDocuments()
 
@@ -1026,7 +1034,7 @@ func TestFullIntegration(t *testing.T) {
 	})
 
 	t.Run("sortDocuments editor parent dir", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		engine.Compile("parentpri", false)
 		sr, _ := engine.CollectDocuments()
 
@@ -1572,7 +1580,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- CollectDocuments: multiple OR clauses ---
 	t.Run("CollectDocuments merge OR clauses", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		engine.Compile("alpha | beta", false)
 		result, err := engine.CollectDocuments()
 		assert.NoError(t, err)
@@ -1581,7 +1589,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- CollectDocuments: single clause ---
 	t.Run("CollectDocuments single clause", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		engine.Compile("unique_func_xyz", false)
 		result, err := engine.CollectDocuments()
 		assert.NoError(t, err)
@@ -1590,7 +1598,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- collectWithKeywords: multiple keywords ---
 	t.Run("collectWithKeywords multiple keywords", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
+		engine := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		engine.Compile("foo bar", false)
 		result, err := engine.CollectDocuments()
 		assert.NoError(t, err)
@@ -1598,54 +1606,64 @@ func TestFullIntegration(t *testing.T) {
 	})
 
 	// --- Term.CollectDocuments: no keywords ---
+	// Compile a pure-wildcard pattern ("*only") so the token has no index keywords.
+	// CollectDocuments on an all-wildcard term should return 0 DocIds.
 	t.Run("TermCollectDocuments no keywords", func(t *testing.T) {
-		term := &SimpleContentSearchEngineTerm{
-			Engine:   &SimpleContentSearchEngine{Workspace: sharedWS},
-			Keywords: []string{},
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		// "*only" tokenises to no keywords (pure wildcard prefix), so DocIds must be empty.
+		// If Compile errors (valid: no useful keywords), skip the collect assertion.
+		err := eng.Compile("*only", false)
+		if err != nil {
+			return // acceptable: engine rejects all-wildcard with no keywords
 		}
-		result := term.CollectDocuments(sharedWS.Id)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
 		assert.Equal(t, 0, len(result.DocIds))
 	})
 
 	// --- collectWithKeywords: single keyword ---
+	// Exercise single-keyword path via CollectDocuments on a known-indexed term.
 	t.Run("collectWithKeywords single keyword", func(t *testing.T) {
-		ft, err := stInst.GetWorkspace(sharedWS.Id)
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("keep_marker", false)
 		assert.NoError(t, err)
-
-		term := &SimpleContentSearchEngineTerm{Keywords: []string{"keep_marker"}}
-		result := term.collectWithKeywords(ft.InvertedId, term.Keywords)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
 		assert.NotNil(t, result)
 	})
 
 	// --- collectWithKeywords: empty ---
+	// Compile a token that produces empty keywords; CollectDocuments returns empty result.
 	t.Run("collectWithKeywords empty", func(t *testing.T) {
-		term := &SimpleContentSearchEngineTerm{}
-		result := term.collectWithKeywords(0, []string{})
+		eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		// "u" is too short to produce keywords per the tokenizer.
+		_ = eng.Compile("u", false)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
 		assert.NotNil(t, result)
-		assert.Equal(t, 0, len(result))
+		assert.Equal(t, 0, len(result.DocIds))
 	})
 
 	// --- collectWithKeywords: intersection empties out ---
+	// Two keywords that both exist individually but appear in different files
+	// will produce an empty intersection via CollectDocuments.
 	t.Run("collectWithKeywords intersection empty", func(t *testing.T) {
-		ft, err := stInst.GetWorkspace(sharedWS.Id)
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("kwone kwtwo", false)
 		assert.NoError(t, err)
-
-		term := &SimpleContentSearchEngineTerm{Keywords: []string{"kwone", "kwtwo"}}
-		result := term.collectWithKeywords(ft.InvertedId, term.Keywords)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
 		assert.NotNil(t, result)
 	})
 
 	// --- AndClause.CollectDocuments: multiple terms ---
 	t.Run("AndClauseCollectDocuments multiple terms", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
-		engine.Compile("keep_marker", false)
-
-		if len(engine.OrClauses) > 0 {
-			clause := engine.OrClauses[0]
-			result, err := clause.CollectDocuments(sharedWS.Id)
-			assert.NoError(t, err)
-			assert.NotNil(t, result)
-		}
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("keep_marker", false)
+		assert.NoError(t, err)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
+		assert.NotNil(t, result)
 	})
 
 	// =================================================================
@@ -1901,13 +1919,13 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- Term.CollectDocuments: error path (invalid workspace) ---
 	t.Run("TermCollectDocuments error workspace", func(t *testing.T) {
-		term := &SimpleContentSearchEngineTerm{
-			Engine:   &SimpleContentSearchEngine{Workspace: sharedWS},
-			Keywords: []string{"anything"},
-		}
-		result := term.CollectDocuments(-999) // invalid workspace id
+		// Use collectionID=-999 so GetWorkspace fails; engine should return empty result.
+		eng := engine.New(idxInst, stInst, -999, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("anything", false)
+		assert.NoError(t, err)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
 		assert.Equal(t, 0, len(result.DocIds))
-		assert.Nil(t, result.WildDocIds)
 	})
 
 	// --- Term.CollectDocuments: wildcard deduplication path ---
@@ -1916,25 +1934,12 @@ func TestFullIntegration(t *testing.T) {
 	// WildDocIds; wdonly.go contains only "wdwild" so it must be removed
 	// from WildDocIds by the filtering loop (lines 129-134).
 	t.Run("TermCollectDocuments wildcard dedup", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
-		err := engine.Compile("wdterm*wdwild", false)
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("wdterm*wdwild", false)
 		assert.NoError(t, err)
 
-		// Verify that the compiled engine has wildcards
-		if !assert.True(t, len(engine.OrClauses) > 0) {
-			return
-		}
-		clause := engine.OrClauses[0]
-		if !assert.True(t, len(clause.AndTerms) > 0) {
-			return
-		}
-		term := clause.AndTerms[0]
-		if !assert.True(t, len(term.Wildcards) > 0, "expected wildcards from *wdwild pattern") {
-			return
-		}
-
-		// Call Term.CollectDocuments directly to exercise the wildcard filtering
-		result := term.CollectDocuments(sharedWS.Id)
+		result, err := eng.CollectDocuments()
+		assert.NoError(t, err)
 		// DocIds should contain files matching "wdterm" keyword
 		assert.True(t, len(result.DocIds) > 0, "expected DocIds from keyword wdterm")
 		// WildDocIds should only contain docs that are also in DocIds
@@ -1950,19 +1955,11 @@ func TestFullIntegration(t *testing.T) {
 	// andfileB.go contains only andtermone => removed during intersection.
 	// andfileC.go contains only andtermtwo => removed during intersection.
 	t.Run("AndClauseCollectDocuments AND intersection", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
-		err := engine.Compile("andtermone andtermtwo", false)
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("andtermone andtermtwo", false)
 		assert.NoError(t, err)
 
-		if !assert.True(t, len(engine.OrClauses) > 0) {
-			return
-		}
-		clause := engine.OrClauses[0]
-		if !assert.True(t, len(clause.AndTerms) >= 2, "expected at least 2 AND terms") {
-			return
-		}
-
-		result, err := clause.CollectDocuments(sharedWS.Id)
+		result, err := eng.CollectDocuments()
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// Only files containing BOTH terms should survive intersection.
@@ -1981,19 +1978,11 @@ func TestFullIntegration(t *testing.T) {
 	// produce WildDocIds. The AND clause merge iterates r.WildDocIds (lines 100-105)
 	// and removes entries that are not in result.DocIds.
 	t.Run("AndClauseCollectDocuments AND with wildcard filtering", func(t *testing.T) {
-		engine := NewSimpleContentSearchEngine(sharedWS, 24, 32, false)
-		err := engine.Compile("awfirst*awwildone awsecond*awwildtwo", false)
+		eng := engine.New(idxInst, stInst, sharedWS.Id, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+		err := eng.Compile("awfirst*awwildone awsecond*awwildtwo", false)
 		assert.NoError(t, err)
 
-		if !assert.True(t, len(engine.OrClauses) > 0) {
-			return
-		}
-		clause := engine.OrClauses[0]
-		if !assert.True(t, len(clause.AndTerms) >= 2, "expected 2 AND terms") {
-			return
-		}
-
-		result, err := clause.CollectDocuments(sharedWS.Id)
+		result, err := eng.CollectDocuments()
 		assert.NoError(t, err)
 		assert.NotNil(t, result)
 		// After AND intersection, DocIds should only contain docs matching

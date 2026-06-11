@@ -20,6 +20,7 @@ import (
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/internal/utils"
 	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/engine"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
 
 	"github.com/lithammer/fuzzysearch/fuzzy"
@@ -229,12 +230,13 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	}
 
 	// Compile the query
-	engine := NewSimpleContentSearchEngine(workspace,
-		conf.Get().Server.Search.MaxWildcardLength,
-		conf.Get().Server.Search.MaxKeywordDistance,
-		req.WholeWord)
+	eng := engine.New(idxInst, stInst, workspace.Id, engine.Options{
+		MaxWildcardLength:  conf.Get().Server.Search.MaxWildcardLength,
+		MaxKeywordDistance: conf.Get().Server.Search.MaxKeywordDistance,
+		WholeWord:          req.WholeWord,
+	})
 
-	err := engine.Compile(req.Query, req.CaseSensitive)
+	err := eng.Compile(req.Query, req.CaseSensitive)
 	if err != nil {
 		log.Println("[Searcher] Failed to compile query:", err)
 		return []types.SearchContentResult{}, false
@@ -270,7 +272,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			unsavedFilePaths[normalizedPath] = true
 
 			// Search in unsaved file content
-			unsavedResult, err := searchInContent(unsavedFile.Path, strings.NewReader(unsavedFile.Content), engine, beforeAfter, req.Limit, &totalHits)
+			unsavedResult, err := searchInContent(unsavedFile.Path, strings.NewReader(unsavedFile.Content), eng, beforeAfter, req.Limit, &totalHits)
 			if err != nil {
 				log.Printf("[Searcher] Failed to search in unsaved file %s: %v", unsavedFile.Path, err)
 				continue
@@ -295,7 +297,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	}
 
 	// Collect the all related documents
-	results, err := engine.CollectDocuments()
+	results, err := eng.CollectDocuments()
 	if err != nil {
 		return []types.SearchContentResult{}, false
 	}
@@ -334,7 +336,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			continue
 		}
 
-		fileMatch, err := searchInContent(doc.RelPath, file, engine, beforeAfter, req.Limit, &totalHits)
+		fileMatch, err := searchInContent(doc.RelPath, file, eng, beforeAfter, req.Limit, &totalHits)
 		file.Close()
 		if err != nil {
 			log.Printf("[Searcher] Failed to search in file %s: %v", doc.RelPath, err)
@@ -356,7 +358,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	return finalResults, totalHits >= limit.MaxResults
 }
 
-func searchInContent(relPath string, reader io.Reader, engine *SimpleContentSearchEngine, beforeAfter int, limit *types.SearchLimit, totalHits *int) (types.SearchContentResult, error) {
+func searchInContent(relPath string, reader io.Reader, eng *engine.Engine, beforeAfter int, limit *types.SearchLimit, totalHits *int) (types.SearchContentResult, error) {
 	fileMatch := types.SearchContentResult{
 		File:  filepath.Clean(relPath),
 		Lines: []types.LineMatch{},
@@ -383,7 +385,7 @@ func searchInContent(relPath string, reader io.Reader, engine *SimpleContentSear
 		if beforeAfter > 0 {
 			lines = append(lines, line)
 		}
-		matches := engine.IsLineMatch(line)
+		matches := eng.IsLineMatch(line)
 		if len(matches) > 0 {
 			for _, match := range matches {
 				fileMatch.Lines = append(fileMatch.Lines, types.LineMatch{
