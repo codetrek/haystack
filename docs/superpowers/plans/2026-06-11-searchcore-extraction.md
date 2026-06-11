@@ -52,8 +52,8 @@ searchcore/
 `tokenizer`/`types` 进库;haystack 全量改名改用并删除两份副本;`storage` 瘦身;`idtable` 实例式进库。
 P1 结束后整个仓库编译/测试绿,且 `internal/core/pebble`、`internal/utils/queue`、`internal/core/idtable` 已删除。
 
-**并行:** Task 1.2(tokenizer)、1.3(types)、1.4(kv/pebblekv)、1.5(queue)互相独立可并行;
-1.6(rename sweep)依赖 1.4+1.5;1.7(idtable)依赖 1.4+1.6。
+**并行:** Task 1.2(tokenizer)、1.4(kv/pebblekv)、1.5(queue)互相独立可并行;
+1.6(rename sweep)依赖 1.4+1.5;1.7(idtable)依赖 1.4+1.6。(原 1.3 types 已取消,见下。)
 
 ---
 
@@ -150,39 +150,17 @@ git commit -m "refactor(searchcore): move tokenizer into module (P1.2)"
 
 ---
 
-### Task 1.3: 搬 types 子集进库 〔并行〕
+### Task 1.3: ~~搬 types 子集进库~~ — 已取消(YAGNI,延后)
 
-**Files:**
-- Create: `searchcore/types/`(从 `internal/shared/types` 拣出搜索/文档相关类型)
-- Modify: 引用这些类型的 haystack 文件
+**执行期核实结论(2026-06-11):** `idtable`/`invertedindex`/`documents` 生产代码**均不引用
+`internal/shared/types`** —— 它们各自定义自有类型(`documents.Document`、`invertedindex.SearchResult`
+等);`shared/types/document.go` 只有 `DocumentUpdateRequest/DeleteRequest` 等**请求类型**,由
+httpapi/client 层使用,不进库。因此 P1 阶段没有 types 的真实消费者,提前迁移属投机(违反 YAGNI)。
 
-- [ ] **Step 1: 甄别需进库的类型**
+**决定:** 本任务取消。types 迁移**延后到真正需要的阶段**——预计 P5(engine 可能需要
+搜索请求/结果类型);届时只搬该阶段实际引用的类型,或由 engine/库包自定义。后续阶段开工时按
+实际 import 决定。
 
-Run: `ls internal/shared/types/ && grep -nE "^type " internal/shared/types/*.go`
-判定:`document.go`(Document/相关)、`search.go`(SearchResult/SearchLimit/SearchContentRequest 等)中**被 searchcore 包用到**的类型进库;`workspace.go`/app 专属类型留 haystack。
-> 注:仅迁移 searchcore 各包真正需要的类型;haystack 专属(如 Editor、workspace 设置)留 `internal/shared/types`。具体清单在执行时按 `documents`/`invertedindex`/`engine` 的实际引用确定。
-
-- [ ] **Step 2: 移动选定类型到 `searchcore/types/`(package types)**
-
-把选定 type 定义移入 `searchcore/types/`,保持字段/JSON tag 不变(序列化兼容)。
-
-- [ ] **Step 3: haystack 侧改引用**
-
-haystack 仍需这些类型处,改 import 为 `searchcore/types`;若 haystack 有别名/再导出需求,在 `internal/shared/types` 做 type alias(`type Document = scoretypes.Document`)以减少改动面。
-
-- [ ] **Step 4: 验证**
-
-Run: `(cd searchcore && go build ./types/...) && go build ./... && go test ./internal/shared/... `
-Expected: 全 OK
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A
-git commit -m "refactor(searchcore): move shared search/document types into module (P1.3)"
-```
-
----
 
 ### Task 1.4: 移 pebble → kv + kv/pebblekv 〔并行〕
 
@@ -233,76 +211,17 @@ git mv internal/core/pebble searchcore/kv/pebblekv
 - 删掉 pebblekv 内原来的 `DB`/`Batch` 接口定义(已移到 kv 包);
 - `PebbleDB`/`PebbleBatch` 改为实现 `kv.Store`/`kv.Batch`:`NewBatch` 返回类型改 `kv.Batch`;
 - `OpenDB` 改名 `Open`,返回 `(kv.Store, error)`;
-- import `github.com/codetrek/haystack/searchcore/kv`。
+- import `github.com/codetrek/haystack/searchcore/kv`;迁移并修正 pebblekv 自带测试。
+- 验证:`(cd searchcore && go test ./kv/...)` PASS。
 
-- [ ] **Step 4: 验证 pebblekv 测试**
+- [ ] **Step 4: 全量改用 + 删旧(否则 haystack 不编译)〔本步把原 1.6 的 pebble 部分并入,保证结束即绿〕**
 
-Run: `cd searchcore && go test ./kv/...`
-Expected: PASS(原 pebble 测试随之迁移)
+移走 pebble 后,haystack 所有原 `internal/core/pebble` importer 立即失效,必须在同一任务内全部改用:
+- import `.../internal/core/pebble` → `.../searchcore/kv`;需要 `pebblekv.Open` 处再 import `.../searchcore/kv/pebblekv`;
+- 类型 `pebble.DB`→`kv.Store`、`pebble.Batch`→`kv.Batch`、`pebble.PebbleDB`/`PebbleBatch`(若被引用)→ pebblekv 具体类型;
+- `pebble.OpenDB(...)`→`pebblekv.Open(...)`(仅 `internal/core/storage/storage.go`)。
 
-- [ ] **Step 5: Commit**
-
-```bash
-git add -A
-git commit -m "refactor(searchcore): kv.Store/Batch interfaces + pebblekv impl (P1.4)"
-```
-
----
-
-### Task 1.5: 移 queue → searchcore/queue 〔并行〕
-
-**Files:**
-- Move: `internal/utils/queue/` → `searchcore/queue/`
-- Modify: `searchcore/queue/mpsc.go`(加 Queue 接口)
-
-- [ ] **Step 1: git mv queue**
-
-```bash
-git mv internal/utils/queue searchcore/queue
-```
-(package 名 `queue` 不变)
-
-- [ ] **Step 2: 加 Queue 注入接口,*Mpsc 实现之**
-
-在 `searchcore/queue/mpsc.go` 增:
-```go
-// Queue 是异步任务队列的注入接口；*Mpsc 实现之。
-type Queue interface {
-	Add(task Task)
-	RunTask(task Task) error
-}
-```
-(`*Mpsc` 已有 `Add`/`RunTask`,自动满足)
-
-- [ ] **Step 3: 验证 queue 测试**
-
-Run: `cd searchcore && go test ./queue/...`
-Expected: PASS
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add -A
-git commit -m "refactor(searchcore): move queue into module + Queue interface (P1.5)"
-```
-
----
-
-### Task 1.6: rename sweep + 删副本 + storage 瘦身 〔依赖 1.4,1.5〕
-
-**Files(改 import / 类型名):** 所有原导入 `internal/core/pebble` 的文件(21,含测试)、所有原导入
-`internal/utils/queue` 的文件(14,含测试)。
-**Files(删除):** `internal/core/pebble`(已 git mv 走)、`internal/utils/queue`(已 git mv 走)——确认无残留。
-**Files(瘦身):** `internal/core/storage/storage.go`、`internal/core/storage/types.go`。
-
-- [ ] **Step 1: pebble importer 全量改名**
-
-对每个仍在 haystack 的文件(documents/idtable/invertedindex/symbols/workspace/server/testutil/storage):
-- import `.../internal/core/pebble` → `.../searchcore/kv`(用 pebblekv.Open 处额外 import `.../searchcore/kv/pebblekv`);
-- 类型 `pebble.DB` → `kv.Store`、`pebble.Batch` → `kv.Batch`、`pebble.PebbleDB`/`PebbleBatch`(若被引用)→ 经 pebblekv;
-- `pebble.OpenDB(...)` → `pebblekv.Open(...)`(仅 `internal/core/storage/storage.go`)。
-
-精确文件清单:
+精确文件清单(含 _test.go 中引用处):
 ```
 internal/core/documents/{batch_write,document_internal,storage}.go
 internal/core/idtable/idtable.go
@@ -313,14 +232,89 @@ internal/core/workspace/internal/storage.go
 internal/server/server.go
 internal/testutil/testutil.go
 internal/core/storage/storage.go
-+ 上述包的 _test.go 中引用 pebble 处
+```
+（`storage/types.go` 的 key-type 常量本步**不动**——documents/inverted/idtable/symbols/workspace 仍引用,
+各包迁移时再切到库内常量;P1 仅保证编译。）
+
+- [ ] **Step 5: gofmt + 全量验证(绿)**
+
+```bash
+gofmt -w internal/ searchcore/
+gofmt -l internal/ searchcore/   # 必须为空
+test ! -d internal/core/pebble && echo "pebble 副本已移除"
+go build ./... && (cd searchcore && go build ./...)
+go test ./internal/core/... ./internal/server/... -count=1
+```
+Expected: gofmt 干净;build OK;测试 PASS。
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A
+git commit -m "refactor(searchcore): kv interfaces + pebblekv; haystack 全量改用, 删 pebble (P1.4)"
 ```
 
-- [ ] **Step 2: queue importer 全量改名**
+---
 
-文件:`internal/core/{documents,invertedindex,symbols}/storage.go`、`internal/server/server.go`、
-`internal/testutil/testutil.go`(+ 相关 _test.go)。仅改 import 路径
-`.../internal/utils/queue` → `.../searchcore/queue`(包名 `queue` 不变,类型 `*queue.Mpsc` 等不变)。
+### Task 1.5: 移 queue → searchcore/queue + 全量改用 + 删旧
+
+**Files:** move `internal/utils/queue/`→`searchcore/queue/`;加 Queue 接口;改全部 queue importer;删旧。
+
+- [ ] **Step 1: git mv queue + Queue 接口**
+
+```bash
+git mv internal/utils/queue searchcore/queue
+```
+(package 名 `queue` 不变)在 `searchcore/queue/mpsc.go` 增:
+```go
+// Queue 是异步任务队列的注入接口；*Mpsc 实现之。
+type Queue interface {
+	Add(task Task)
+	RunTask(task Task) error
+}
+```
+(`*Mpsc` 已有 `Add`/`RunTask`,自动满足)
+验证:`(cd searchcore && go test ./queue/...)` PASS。
+
+- [ ] **Step 2: 全量改用 + 删旧（同一任务内,保证结束即绿）**
+
+改全部原 `internal/utils/queue` importer 的 import 路径 → `.../searchcore/queue`(包名 `queue` 不变,
+`*queue.Mpsc` 等类型引用不变,仅 import 行变)。文件:
+```
+internal/core/{documents,invertedindex,symbols}/storage.go
+internal/server/server.go
+internal/testutil/testutil.go
++ 相关 _test.go
+```
+
+- [ ] **Step 3: gofmt + 验证(绿)**
+
+```bash
+gofmt -w internal/ searchcore/
+gofmt -l internal/ searchcore/   # 必须为空
+test ! -d internal/utils/queue && echo "queue 副本已移除"
+go build ./... && (cd searchcore && go build ./...)
+go test ./internal/core/... ./internal/server/... -count=1
+```
+Expected: 全 PASS。
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "refactor(searchcore): move queue into module + Queue interface; 全量改用, 删 queue (P1.5)"
+```
+
+---
+
+### Task 1.6: ~~rename sweep~~ — 已折叠进 1.4(pebble)与 1.5(queue)
+
+原计划把"移动"与"改用 import"分开,但移走包会立即破坏 haystack 编译。为保证每个任务结束即绿,
+sweep 已并入各自的移动任务(1.4 处理 pebble 的 21 处、1.5 处理 queue 的 14 处)。`storage` 的完整
+瘦身(移除 doc/inverted/idtable 等 key-type 常量)随对应包迁移逐步完成,最终只剩 symbols(30-33)+
+版本迁移 `Open`。本任务取消。
+
+<details><summary>(原 1.6 文字存档,已不执行)</summary>
 
 - [ ] **Step 3: storage 瘦身**
 
@@ -348,9 +342,11 @@ git add -A
 git commit -m "refactor: haystack 全量改用 searchcore/kv+queue, 删 pebble/queue 副本 (P1.6)"
 ```
 
+</details>
+
 ---
 
-### Task 1.7: idtable 实例式进库 〔依赖 1.4,1.6〕
+### Task 1.7: idtable 实例式进库 〔依赖 1.4〕
 
 **Files:**
 - Move: `internal/core/idtable/` → `searchcore/idtable/`
