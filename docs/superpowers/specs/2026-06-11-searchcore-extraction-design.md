@@ -2,7 +2,7 @@
 
 - 日期：2026-06-11
 - 状态：已确认，待生成实现计划
-- 分支：`feat/searchcore-extraction`
+- 分支：`worktree-searchcore`（worktree: `.claude/worktrees/searchcore`）
 
 ## 1. 背景与目标
 
