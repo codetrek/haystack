@@ -35,15 +35,6 @@ type PebbleDB struct {
 
 // Open opens a Pebble database at the specified path and returns a kv.Store.
 func Open(path string, cacheSize int64) (kv.Store, error) {
-	return openDB(path, cacheSize)
-}
-
-// OpenDB is an alias for Open kept for backward compatibility with tests.
-func OpenDB(path string, cacheSize int64) (kv.Store, error) {
-	return openDB(path, cacheSize)
-}
-
-func openDB(path string, cacheSize int64) (kv.Store, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %v", err)

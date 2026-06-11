@@ -87,7 +87,7 @@ func setupClosedDbEnv(t *testing.T) func() {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 
-	closedDB, err := pebblekv.OpenDB(filepath.Join(tmpDir, "closed"), 0)
+	closedDB, err := pebblekv.Open(filepath.Join(tmpDir, "closed"), 0)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("failed to open pebble for closed-db test: %v", err)

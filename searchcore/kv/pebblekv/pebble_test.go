@@ -34,9 +34,9 @@ func (e *errBatchWriter) Close() error {
 	return nil
 }
 
-func TestOpenDB_And_BasicOps(t *testing.T) {
+func TestOpen_And_BasicOps(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	assert.NotNil(t, db)
 	defer db.Close()
@@ -61,7 +61,7 @@ func TestOpenDB_And_BasicOps(t *testing.T) {
 
 func TestDB_IsClosed(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 
 	assert.False(t, db.IsClosed())
@@ -71,7 +71,7 @@ func TestDB_IsClosed(t *testing.T) {
 
 func TestDB_CloseDouble(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	assert.NoError(t, db.Close())
 	assert.Error(t, db.Close()) // second close should error
@@ -79,7 +79,7 @@ func TestDB_CloseDouble(t *testing.T) {
 
 func TestDB_OpsAfterClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	db.Close()
 
@@ -91,7 +91,7 @@ func TestDB_OpsAfterClose(t *testing.T) {
 
 func TestDB_GetIncrementalId(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -110,7 +110,7 @@ func TestDB_GetIncrementalId(t *testing.T) {
 
 func TestDB_Scan(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -130,7 +130,7 @@ func TestDB_Scan(t *testing.T) {
 
 func TestDB_ScanRange(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -150,7 +150,7 @@ func TestDB_ScanRange(t *testing.T) {
 
 func TestDB_Scan_StopEarly(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -168,7 +168,7 @@ func TestDB_Scan_StopEarly(t *testing.T) {
 
 func TestDB_ScheduleCompact(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 
 	// Add some data first
@@ -184,7 +184,7 @@ func TestDB_ScheduleCompact(t *testing.T) {
 
 func TestBatch_BasicOps(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -199,7 +199,7 @@ func TestBatch_BasicOps(t *testing.T) {
 
 func TestBatch_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -215,7 +215,7 @@ func TestBatch_Delete(t *testing.T) {
 
 func TestBatch_DeleteRange(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -237,7 +237,7 @@ func TestBatch_DeleteRange(t *testing.T) {
 
 func TestBatch_DeletePrefix(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -257,7 +257,7 @@ func TestBatch_DeletePrefix(t *testing.T) {
 
 func TestBatch_Reset(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -273,7 +273,7 @@ func TestBatch_Reset(t *testing.T) {
 
 func TestBatch_AutoCommit(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -289,7 +289,7 @@ func TestBatch_AutoCommit(t *testing.T) {
 
 func TestBatch_Count(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -302,7 +302,7 @@ func TestBatch_Count(t *testing.T) {
 
 func TestBatch_Close(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -312,7 +312,7 @@ func TestBatch_Close(t *testing.T) {
 
 func TestDB_ScanAfterClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	db.Close()
 
@@ -322,7 +322,7 @@ func TestDB_ScanAfterClose(t *testing.T) {
 
 func TestDB_ScanRangeAfterClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	db.Close()
 
@@ -332,7 +332,7 @@ func TestDB_ScanRangeAfterClose(t *testing.T) {
 
 func TestDB_GetIncrementalIdAfterClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	db.Close()
 
@@ -342,7 +342,7 @@ func TestDB_GetIncrementalIdAfterClose(t *testing.T) {
 
 func TestDB_NewBatchAndOps(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
@@ -452,7 +452,7 @@ func TestDB_DeleteErrorFromUnderlying(t *testing.T) {
 
 func TestDB_ScanRange_StopEarly(t *testing.T) {
 	tmpDir := t.TempDir()
-	db, err := OpenDB(tmpDir+"/testdb", 4*1024*1024)
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
 	assert.NoError(t, err)
 	defer db.Close()
 
