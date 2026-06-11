@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/core/symbols"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/internal/utils"
 )
@@ -86,8 +85,7 @@ func Create(workspacePath string) (*Workspace, error) {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	workspace := workspacePaths[workspacePath]
-	if workspace != nil {
+	if workspacePaths[workspacePath] != nil {
 		return nil, fmt.Errorf("workspace already exists")
 	}
 
@@ -107,43 +105,36 @@ func Create(workspacePath string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace path must be a directory")
 	}
 
-	var id int
-	// Try 10 times to generate a unique workspace id
-	for range 10 {
-		id, err = internal.GetNextId()
-		if err != nil {
-			return nil, err
-		}
-
-		if _, ok := workspaces[id]; !ok {
-			break
-		}
+	// catalog.Create allocates the id, persists the Record, and calls
+	// docs.Create — no separate docStoreInst.Create call needed.
+	col, err := catalog.Create(workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workspace record: %w", err)
 	}
 
-	if _, ok := workspaces[id]; ok {
-		return nil, fmt.Errorf("failed to generate unique workspace id")
-	}
-
-	workspace = &Workspace{
-		Id:               id,
+	meta := col.Meta()
+	workspace := &Workspace{
+		Id:               meta.ID,
 		Path:             workspacePath,
 		UseGlobalFilters: true,
-		CreatedAt:        time.Now(),
-		LastAccessed:     time.Now(),
+		CreatedAt:        meta.CreatedAt,
+		LastAccessed:     meta.LastAccessed,
 	}
 
-	if err := workspace.Save(); err != nil {
-		return nil, err
+	// Persist UseGlobalFilters=true into the record's Extra field.
+	workspace.mutex.Lock()
+	rec := meta
+	rec.Extra = encodeExtra(workspace.UseGlobalFilters, workspace.Filters)
+	workspace.mutex.Unlock()
+	if err := catalog.Save(rec); err != nil {
+		log.Printf("[Workspace] Warning: failed to save extra for new workspace %d: %v", workspace.Id, err)
 	}
 
 	workspaces[workspace.Id] = workspace
 	workspacePaths[workspace.Path] = workspace
 
-	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
+	log.Printf("[Workspace] New workspace created: %v, path: %v", workspace.Id, workspacePath)
 
-	if docStoreInst != nil {
-		docStoreInst.Create(workspace.Id, workspacePath)
-	}
 	symbols.Create(workspace.Id, workspacePath)
 	return workspace, nil
 }
@@ -161,10 +152,12 @@ func Delete(workspaceId int) error {
 	delete(workspaces, workspaceId)
 	delete(workspacePaths, workspace.Path)
 
-	internal.Delete(workspaceId)
-	if docStoreInst != nil {
-		docStoreInst.Delete(workspaceId)
+	// catalog.Delete removes the record AND calls docs.Delete — no separate
+	// docStoreInst.Delete call needed.
+	if err := catalog.Delete(workspaceId); err != nil {
+		return fmt.Errorf("failed to delete workspace from catalog: %w", err)
 	}
+
 	symbols.Delete(workspace.Id)
 
 	return nil
@@ -205,7 +198,8 @@ func Move(id int, newPath string) (*Workspace, error) {
 
 	oldPath := workspace.Path
 	workspace.Path = newPath
-	workspace.Save()
+	workspace.LastAccessed = time.Now()
+	workspace.Save() //nolint:errcheck — best-effort; catalog.Save guards the rename
 
 	workspacePaths[newPath] = workspace
 	delete(workspacePaths, oldPath)

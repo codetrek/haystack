@@ -16,6 +16,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
@@ -113,7 +114,12 @@ This is a test project.`,
 		}
 		indexer.SetDocStore(st)
 		workspace.SetDocStore(st)
-		if !assert.NoError(t, workspace.Init(db)) {
+		workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck
+		cat, catErr := collection.New(db, st, collection.Options{})
+		if !assert.NoError(t, catErr) {
+			return
+		}
+		if !assert.NoError(t, workspace.Init(cat)) {
 			return
 		}
 		if !assert.NoError(t, symbols.Init(db, mpsc, idx)) {

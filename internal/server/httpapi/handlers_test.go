@@ -21,6 +21,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
@@ -80,7 +81,12 @@ func TestMain(m *testing.M) {
 	}
 	indexer.SetIdAllocator(alloc)
 
-	err = workspace.Init(db)
+	workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		panic("Failed to init collection catalog: " + err.Error())
+	}
+	err = workspace.Init(cat)
 	if err != nil {
 		panic("Failed to init workspace: " + err.Error())
 	}

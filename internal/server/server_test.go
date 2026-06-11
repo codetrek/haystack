@@ -24,6 +24,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
@@ -224,7 +225,12 @@ func startTestServer(t *testing.T) func() {
 	indexer.SetDocStore(st)
 	workspace.SetDocStore(st)
 
-	err = workspace.Init(db)
+	workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck — non-fatal in test
+
+	cat, err := collection.New(db, st, collection.Options{})
+	assert.NoError(t, err)
+
+	err = workspace.Init(cat)
 	assert.NoError(t, err)
 
 	err = symbols.Init(db, mpsc, idx)

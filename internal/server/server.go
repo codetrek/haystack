@@ -15,6 +15,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
@@ -31,7 +32,9 @@ var (
 	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) (*documents.Store, error) {
 		return documents.New(db, mpsc, idx, documents.Options{})
 	}
-	workspaceInit = func(db kv.Store) error { return workspace.Init(db) }
+	// workspaceInit receives the fully-constructed Catalog so the workspace
+	// package no longer needs its own kv.Store reference.
+	workspaceInit = func(cat *collection.Catalog) error { return workspace.Init(cat) }
 	symbolsInit   = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
 		return symbols.Init(db, mpsc, idx)
 	}
@@ -97,7 +100,19 @@ func run() error {
 	indexer.SetDocStore(st)
 	workspace.SetDocStore(st)
 
-	if err := workspaceInit(db); err != nil {
+	// Migrate any legacy workspace records BEFORE constructing the Catalog so
+	// that collection.New sees only the new-format JSON.
+	if err := workspace.MigrateLegacyRecords(db, collection.Options{}); err != nil {
+		log.Printf("[Server] Warning: workspace migration error (non-fatal): %v", err)
+	}
+
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		running.Shutdown()
+		return fmt.Errorf("error initializing collection catalog: %w", err)
+	}
+
+	if err := workspaceInit(cat); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing workspace: %w", err)
 	}

@@ -1,13 +1,11 @@
 package workspace
 
 import (
-	"encoding/json"
 	"log"
 	"sync"
 
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/utils"
-	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/collection"
 )
 
 var (
@@ -15,36 +13,39 @@ var (
 	workspacePaths map[string]*Workspace
 
 	mutex sync.RWMutex
+
+	// catalog is the backing Catalog injected by Init.
+	catalog *collection.Catalog
 )
 
-func Init(database kv.Store) error {
+// Init wires the workspace package to an already-constructed Catalog.
+// It builds the in-memory *Workspace maps from cat.List(); runtime indexing
+// state starts fresh for every record.
+func Init(cat *collection.Catalog) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	internal.Init(database)
+	catalog = cat
 
 	workspaces = make(map[int]*Workspace)
 	workspacePaths = make(map[string]*Workspace)
-	allWorkspaces, err := internal.ScanAll()
-	if err != nil {
-		return err
-	}
 
-	for id, data := range allWorkspaces {
-		space := Workspace{
-			Id:               id,
-			UseGlobalFilters: true,
+	for _, r := range cat.List() {
+		useGlobal, filters := decodeExtra(r.Extra)
+
+		ws := &Workspace{
+			Id:               r.ID,
+			Path:             utils.NormalizePath(r.Name),
+			UseGlobalFilters: useGlobal,
+			Filters:          filters,
+			CreatedAt:        r.CreatedAt,
+			LastAccessed:     r.LastAccessed,
+			LastFullSync:     r.LastFullSync,
 		}
 
-		if err := json.Unmarshal([]byte(data), &space); err == nil {
-			space.Path = utils.NormalizePath(space.Path)
-			workspaces[space.Id] = &space
-			workspacePaths[space.Path] = workspaces[space.Id]
-			log.Printf("[Workspace] Found workspace: %v, path: %v", space.Id, space.Path)
-		} else {
-			log.Printf("[Workspace] Error unmarshalling workspace: %v", err)
-			// TODO: Delete the malformed workspace
-		}
+		workspaces[ws.Id] = ws
+		workspacePaths[ws.Path] = ws
+		log.Printf("[Workspace] Found workspace: %v, path: %v", ws.Id, ws.Path)
 	}
 
 	return nil

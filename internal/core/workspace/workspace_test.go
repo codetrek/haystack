@@ -11,8 +11,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/queue"
 )
@@ -413,33 +413,63 @@ func TestSave_Deleted(t *testing.T) {
 	}
 }
 
-func TestSave_DbPutError(t *testing.T) {
-	// Set up a temporary directory and open a real DB.
-	tempDir, err := os.MkdirTemp("", "haystack-test-save-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
+// TestSave_CatalogPutError verifies that Save returns an error when the
+// underlying catalog.Save fails (closed database).
+func TestSave_CatalogPutError(t *testing.T) {
+	tempDir := t.TempDir()
 	conf.Get().Global.DataPath = tempDir
 
 	db, err := storage.Open(filepath.Join(tempDir, "data"), 0)
 	if err != nil {
-		t.Fatalf("Failed to open storage: %v", err)
+		t.Fatalf("storage.Open: %v", err)
 	}
 
-	// Initialize the internal package with this DB.
-	internal.Init(db)
+	q := queue.NewMpsc("test-save-q")
+	q.Start()
+
+	// Use nil invertedindex so there are no background goroutines that require
+	// the DB to stay open after we close it.
+	st, err := documents.New(db, q, nil, documents.Options{})
+	if err != nil {
+		q.Stop()
+		db.Close()
+		t.Fatalf("documents.New: %v", err)
+	}
+
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		st.CloseAndWait()
+		q.Stop()
+		db.Close()
+		t.Fatalf("collection.New: %v", err)
+	}
+
+	oldCat := catalog
+	catalog = cat
+	defer func() { catalog = oldCat }()
+
+	// Create a workspace record so catalog has id=1 in its in-memory index.
+	col, err := cat.Create("/test/save-dbput")
+	if err != nil {
+		st.CloseAndWait()
+		q.Stop()
+		db.Close()
+		t.Fatalf("cat.Create: %v", err)
+	}
+	meta := col.Meta()
 
 	ws := &Workspace{
-		Id:               1,
-		Path:             "/test/save-dbput",
-		UseGlobalFilters: true,
-		CreatedAt:        time.Now(),
-		LastAccessed:     time.Now(),
+		Id:           meta.ID,
+		Path:         "/test/save-dbput",
+		CreatedAt:    time.Now(),
+		LastAccessed: time.Now(),
 	}
 
-	// Close the DB so that db.Put() returns an error.
+	// Drain the queue and stop all background workers before closing the DB.
+	st.CloseAndWait()
+	q.Stop()
+
+	// Now close the DB so that db.Put() returns an error on the next Save.
 	db.Close()
 
 	err = ws.Save()

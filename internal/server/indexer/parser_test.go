@@ -12,6 +12,7 @@ import (
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
@@ -44,7 +45,12 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
-	if err := workspace.Init(env.DB); err != nil {
+	workspace.MigrateLegacyRecords(env.DB, collection.Options{}) //nolint:errcheck
+	cat, err := collection.New(env.DB, st, collection.Options{})
+	if err != nil {
+		t.Fatalf("collection.New: %v", err)
+	}
+	if err := workspace.Init(cat); err != nil {
 		t.Fatalf("workspace.Init: %v", err)
 	}
 

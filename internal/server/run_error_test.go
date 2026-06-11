@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/kv"
@@ -23,8 +24,8 @@ func noopDocNew(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.S
 	return nil, nil
 }
 
-// noopInitDBOnly is a no-op Init replacement for kv.Store only.
-func noopInitDBOnly(_ kv.Store) error { return nil }
+// noopInitCat is a no-op Init replacement for *collection.Catalog.
+func noopInitCat(_ *collection.Catalog) error { return nil }
 
 // saveAndMockInits saves the four Init function variables, replaces them all
 // with no-ops, and returns a restore function.
@@ -36,7 +37,7 @@ func saveAndMockInits() func() {
 
 	invertedindexInit = noopInitII
 	documentsNew = noopDocNew
-	workspaceInit = noopInitDBOnly
+	workspaceInit = noopInitCat
 	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error { return nil }
 
 	return func() {
@@ -89,7 +90,7 @@ func TestRun_WorkspaceInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	workspaceInit = func(_ kv.Store) error {
+	workspaceInit = func(_ *collection.Catalog) error {
 		return errFake
 	}
 

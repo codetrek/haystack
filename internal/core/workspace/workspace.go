@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 )
 
@@ -106,13 +106,29 @@ func (w *Workspace) StartIndexing() error {
 	return nil
 }
 
+// Save persists the workspace metadata to the Catalog.
 func (w *Workspace) Save() error {
-	json, err := w.Serialize()
-	if err != nil {
-		return err
+	w.mutex.Lock()
+	if w.deleted {
+		w.mutex.Unlock()
+		return fmt.Errorf("workspace is deleted")
+	}
+	// Snapshot fields under the lock.
+	rec := collection.Record{
+		ID:           w.Id,
+		Name:         w.Path,
+		CreatedAt:    w.CreatedAt,
+		LastAccessed: w.LastAccessed,
+		LastFullSync: w.LastFullSync,
+		Extra:        encodeExtra(w.UseGlobalFilters, w.Filters),
+	}
+	w.mutex.Unlock()
+
+	if catalog == nil {
+		return fmt.Errorf("workspace catalog not initialised")
 	}
 
-	return internal.Save(w.Id, string(json))
+	return catalog.Save(&rec)
 }
 
 func (w *Workspace) GetLastFullSync() time.Time {
@@ -190,6 +206,19 @@ func (w *Workspace) IsDeleted() bool {
 	return w.deleted
 }
 
+// wsOnDisk is the legacy JSON shape emitted by Serialize. Kept for API
+// compatibility with any callers that consume the output (e.g. tests that
+// unmarshal the blob).
+type wsOnDisk struct {
+	Id               int            `json:"id"`
+	Path             string         `json:"path"`
+	UseGlobalFilters bool           `json:"use_global_filters"`
+	Filters          *types.Filters `json:"filters,omitempty"`
+	CreatedAt        time.Time      `json:"created_time"`
+	LastAccessed     time.Time      `json:"last_accessed_time"`
+	LastFullSync     time.Time      `json:"last_full_sync_time"`
+}
+
 func (w *Workspace) Serialize() ([]byte, error) {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
@@ -198,5 +227,13 @@ func (w *Workspace) Serialize() ([]byte, error) {
 		return nil, fmt.Errorf("workspace is deleted")
 	}
 
-	return json.Marshal(w)
+	return json.Marshal(wsOnDisk{
+		Id:               w.Id,
+		Path:             w.Path,
+		UseGlobalFilters: w.UseGlobalFilters,
+		Filters:          w.Filters,
+		CreatedAt:        w.CreatedAt,
+		LastAccessed:     w.LastAccessed,
+		LastFullSync:     w.LastFullSync,
+	})
 }
