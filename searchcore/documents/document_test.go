@@ -45,9 +45,9 @@ func TestGetDocument_DecodeError(t *testing.T) {
 	mustCreateWorkspace(t, env.St, 1)
 
 	// Write invalid (non-JSON) data directly to the document meta key
-	// so DecodeDocumentMetaValue will fail.
+	// so decodeDocumentMetaValue will fail.
 	docid := "corrupt-doc"
-	key := EncodeDocumentMetaKey(1, docid)
+	key := env.St.encodeDocumentMetaKey(1, docid)
 	err := env.DB.Put(key, []byte("this is not valid json"))
 	if !assert.NoError(t, err) {
 		return
@@ -138,7 +138,7 @@ func TestGetDocumentWords_Missing(t *testing.T) {
 
 	mustCreateWorkspace(t, env.St, 1)
 
-	words, err := env.St.GetDocumentWords(1, "nonexistent")
+	words, err := env.St.getDocumentWords(1, "nonexistent")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -162,7 +162,7 @@ func TestGetDocumentWords_RoundTrip(t *testing.T) {
 		return
 	}
 
-	words, err := env.St.GetDocumentWords(1, "doc1")
+	words, err := env.St.getDocumentWords(1, "doc1")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -208,7 +208,7 @@ func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
 	assert.NotZero(t, got.LastSyncTime, "LastSyncTime should be set by saveDocument")
 
 	// Verify words
-	words, err := env.St.GetDocumentWords(1, "d1")
+	words, err := env.St.getDocumentWords(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -416,7 +416,7 @@ func TestDeleteDocument_ExistingDoc(t *testing.T) {
 	}
 	assert.Nil(t, got, "document should be deleted")
 
-	words, err := env.St.GetDocumentWords(1, "d1")
+	words, err := env.St.getDocumentWords(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}

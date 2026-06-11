@@ -5,6 +5,9 @@ import (
 	"log"
 )
 
+// Document represents an indexed source file with its metadata and keywords.
+// ID is the document identifier (an MD5 hash of the file path); it is not
+// persisted — it is populated by GetDocument from the key after a lookup.
 type Document struct {
 	ID           string `json:"-"`
 	RelPath      string `json:"rel_path"`
@@ -17,21 +20,11 @@ type Document struct {
 	PathWords []string `json:"-"` // words in the document relative-path
 }
 
-// As the Document already breakdown into keywords, we can use the document full-path as the document id
-// and store the document id and its keywords in the storage, below is the process:
-//   - Create a reading snapshot of the storage to allow concurrent read operations
-//   - Document full-path is converted to a md5 hash value, and used as the document id
-//   - A new entry is created in the storage:
-//       key: "doc:<workspace_id>|<document_id>"
-//       value: <Document>
-//   - For each keyword in the document, a new entry is created in the storage:
-//       key: "kw:<workspace_id>|<keyword>|<document_count>|<document_hash>"
-//       value: <document_ids>
-
-// GetDocument returns a document from the database
-// It returns nil if the document does not exist
+// GetDocument returns a document from the store.
+// Returns nil, nil if the document does not exist.
+// If includeWords is true, the document's Words field is populated.
 func (s *Store) GetDocument(workspaceid int, docid string, includeWords bool) (*Document, error) {
-	data, err := s.db.Get(EncodeDocumentMetaKey(workspaceid, docid))
+	data, err := s.db.Get(s.encodeDocumentMetaKey(workspaceid, docid))
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +33,7 @@ func (s *Store) GetDocument(workspaceid int, docid string, includeWords bool) (*
 		return nil, nil
 	}
 
-	doc, err := DecodeDocumentMetaValue(data)
+	doc, err := decodeDocumentMetaValue(data)
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +41,7 @@ func (s *Store) GetDocument(workspaceid int, docid string, includeWords bool) (*
 	doc.ID = docid
 
 	if includeWords {
-		words, err := s.GetDocumentWords(workspaceid, docid)
+		words, err := s.getDocumentWords(workspaceid, docid)
 		if err != nil {
 			return nil, err
 		}
@@ -59,10 +52,10 @@ func (s *Store) GetDocument(workspaceid int, docid string, includeWords bool) (*
 	return doc, nil
 }
 
-// GetDocumentWords returns the words of a document
-// It returns an empty array if the document does not exist
-func (s *Store) GetDocumentWords(workspaceid int, docid string) ([]string, error) {
-	words, err := s.db.Get(EncodeDocumentWordsKey(workspaceid, docid))
+// getDocumentWords returns the words of a document.
+// Returns an empty slice if the document does not exist.
+func (s *Store) getDocumentWords(workspaceid int, docid string) ([]string, error) {
+	words, err := s.db.Get(s.encodeDocumentWordsKey(workspaceid, docid))
 	if err != nil {
 		return nil, err
 	}
@@ -71,11 +64,11 @@ func (s *Store) GetDocumentWords(workspaceid int, docid string) ([]string, error
 		return []string{}, nil
 	}
 
-	return DecodeDocumentWordsValue(string(words)), nil
+	return decodeDocumentWordsValue(string(words)), nil
 }
 
-// SaveNewDocuments saves new documents to the database
-// It also updates the pending writes cache to merge with other documents and flush later
+// SaveNewDocuments persists a batch of new documents and updates the
+// in-memory document counter and the inverted index.
 func (s *Store) SaveNewDocuments(workspaceid int, docs []*Document) error {
 	return s.q.RunFunc(func() error {
 		if s.db.IsClosed() {
@@ -94,10 +87,10 @@ func (s *Store) SaveNewDocuments(workspaceid int, docs []*Document) error {
 			return err
 		}
 
-		batch := NewBatch(s.db)
+		batch := newBatch(s.db)
 		for _, doc := range docs {
 			s.indexDocument(ft.InvertedId, doc.ID, doc.Words, nil)
-			saveDocument(batch, workspaceid, doc)
+			s.saveDocument(batch, workspaceid, doc)
 		}
 		err = batch.Commit()
 		if err != nil {
@@ -113,8 +106,8 @@ func (s *Store) SaveNewDocuments(workspaceid int, docs []*Document) error {
 	})
 }
 
-// UpdateDocuments updates the words of a document
-// It also updates the pending writes cache to merge with other documents and flush later
+// UpdateDocuments updates words and metadata for a batch of existing documents.
+// It also updates the inverted index with the diff between old and new words.
 func (s *Store) UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 	return s.q.RunFunc(func() error {
 		if s.db.IsClosed() {
@@ -133,10 +126,10 @@ func (s *Store) UpdateDocuments(workspaceid int, updatedDocs []*Document) error 
 			return err
 		}
 
-		batch := NewBatch(s.db)
+		batch := newBatch(s.db)
 		for _, updatedDoc := range updatedDocs {
 			// Get the current document words from the database
-			oldWords, err := s.GetDocumentWords(workspaceid, updatedDoc.ID)
+			oldWords, err := s.getDocumentWords(workspaceid, updatedDoc.ID)
 			if err != nil {
 				continue
 			}
@@ -144,7 +137,7 @@ func (s *Store) UpdateDocuments(workspaceid int, updatedDocs []*Document) error 
 			s.indexDocument(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
 
 			// Save the updated document
-			saveDocument(batch, workspaceid, updatedDoc)
+			s.saveDocument(batch, workspaceid, updatedDoc)
 		}
 		err = batch.Commit()
 		if err != nil {
@@ -155,8 +148,8 @@ func (s *Store) UpdateDocuments(workspaceid int, updatedDocs []*Document) error 
 	})
 }
 
-// DeleteDocument deletes a document from the database
-// It will delete the document from the keywords index and the document meta
+// DeleteDocument removes a document, its words, and its path entry from the
+// store, and notifies the inverted index of the removal.
 func (s *Store) DeleteDocument(workspaceId int, docId string) error {
 	return s.q.RunFunc(func() error {
 		if s.db.IsClosed() {
@@ -185,10 +178,10 @@ func (s *Store) DeleteDocument(workspaceId int, docId string) error {
 		s.indexDocument(ft.InvertedId, docId, []string{}, doc.Words)
 
 		// delete the document meta and words
-		batch := NewBatch(s.db)
-		batch.Delete(EncodeDocumentMetaKey(workspaceId, docId))
-		batch.Delete(EncodeDocumentWordsKey(workspaceId, docId))
-		batch.Delete(EncodeDocumentPathKey(workspaceId, docId))
+		batch := newBatch(s.db)
+		batch.Delete(s.encodeDocumentMetaKey(workspaceId, docId))
+		batch.Delete(s.encodeDocumentWordsKey(workspaceId, docId))
+		batch.Delete(s.encodeDocumentPathKey(workspaceId, docId))
 		err = batch.Commit()
 		if err != nil {
 			log.Println("[Documents] Failed to delete document:", err)

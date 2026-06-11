@@ -6,6 +6,16 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+// newTestStore returns a minimal *Store with default key-type bytes for codec tests.
+func newTestStore() *Store {
+	return &Store{
+		keyTypeDocWorkspace: DefaultKeyTypeDocWorkspace,
+		keyTypeDocWords:     DefaultKeyTypeDocWords,
+		keyTypeDocMeta:      DefaultKeyTypeDocMeta,
+		keyTypeDocPath:      DefaultKeyTypeDocPath,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // ParseWorkspaceId
 // ---------------------------------------------------------------------------
@@ -21,58 +31,64 @@ func TestParseWorkspaceId_Invalid(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// EncodeDocumentPathKey / DecodeDocumentPathKey
+// encodeDocumentPathKey / decodeDocumentPathKey
 // ---------------------------------------------------------------------------
 
 func TestDocumentPathKey_RoundTrip(t *testing.T) {
-	key := EncodeDocumentPathKey(5, "docABC")
-	wsid, docid := DecodeDocumentPathKey(string(key))
+	s := newTestStore()
+	key := s.encodeDocumentPathKey(5, "docABC")
+	wsid, docid := s.decodeDocumentPathKey(string(key))
 	assert.Equal(t, 5, wsid)
 	assert.Equal(t, "docABC", docid)
 }
 
 func TestDecodeDocumentPathKey_WrongType(t *testing.T) {
+	s := newTestStore()
 	// key with wrong type byte
-	wsid, docid := DecodeDocumentPathKey("X5|docABC")
+	wsid, docid := s.decodeDocumentPathKey("X5|docABC")
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
 func TestDecodeDocumentPathKey_NoPipe(t *testing.T) {
-	key := []byte{KeyTypeDocPath}
+	s := newTestStore()
+	key := []byte{DefaultKeyTypeDocPath}
 	key = append(key, []byte("nopipe")...)
-	wsid, docid := DecodeDocumentPathKey(string(key))
+	wsid, docid := s.decodeDocumentPathKey(string(key))
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
 // ---------------------------------------------------------------------------
-// EncodeDocumentMetaKey / DecodeDocumentMetaKey
+// encodeDocumentMetaKey / decodeDocumentMetaKey
 // ---------------------------------------------------------------------------
 
 func TestDocumentMetaKey_RoundTrip(t *testing.T) {
-	key := EncodeDocumentMetaKey(10, "meta123")
-	wsid, docid := DecodeDocumentMetaKey(string(key))
+	s := newTestStore()
+	key := s.encodeDocumentMetaKey(10, "meta123")
+	wsid, docid := s.decodeDocumentMetaKey(string(key))
 	assert.Equal(t, 10, wsid)
 	assert.Equal(t, "meta123", docid)
 }
 
 func TestDecodeDocumentMetaKey_WrongType(t *testing.T) {
-	wsid, docid := DecodeDocumentMetaKey("Z10|meta123")
+	s := newTestStore()
+	wsid, docid := s.decodeDocumentMetaKey("Z10|meta123")
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
 func TestDecodeDocumentMetaKey_NoPipe(t *testing.T) {
-	key := []byte{KeyTypeDocMeta}
+	s := newTestStore()
+	key := []byte{DefaultKeyTypeDocMeta}
 	key = append(key, []byte("nopipe")...)
-	wsid, docid := DecodeDocumentMetaKey(string(key))
+	wsid, docid := s.decodeDocumentMetaKey(string(key))
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
 // ---------------------------------------------------------------------------
-// EncodeDocumentMetaValue / DecodeDocumentMetaValue
+// encodeDocumentMetaValue / decodeDocumentMetaValue
 // ---------------------------------------------------------------------------
 
 func TestDocumentMetaValue_RoundTrip(t *testing.T) {
@@ -83,12 +99,12 @@ func TestDocumentMetaValue_RoundTrip(t *testing.T) {
 		ModifiedTime: 12345,
 		LastSyncTime: 67890,
 	}
-	data, err := EncodeDocumentMetaValue(doc)
+	data, err := encodeDocumentMetaValue(doc)
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	decoded, err := DecodeDocumentMetaValue(data)
+	decoded, err := decodeDocumentMetaValue(data)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -100,97 +116,104 @@ func TestDocumentMetaValue_RoundTrip(t *testing.T) {
 }
 
 func TestDecodeDocumentMetaValue_InvalidJSON(t *testing.T) {
-	_, err := DecodeDocumentMetaValue([]byte("{invalid"))
+	_, err := decodeDocumentMetaValue([]byte("{invalid"))
 	assert.Error(t, err)
 }
 
 // ---------------------------------------------------------------------------
-// EncodeDocumentWordsKey / DecodeDocumentWordsKey
+// encodeDocumentWordsKey / decodeDocumentWordsKey
 // ---------------------------------------------------------------------------
 
 func TestDocumentWordsKey_RoundTrip(t *testing.T) {
-	key := EncodeDocumentWordsKey(7, "wdoc")
-	wsid, docid := DecodeDocumentWordsKey(string(key))
+	s := newTestStore()
+	key := s.encodeDocumentWordsKey(7, "wdoc")
+	wsid, docid := s.decodeDocumentWordsKey(string(key))
 	assert.Equal(t, 7, wsid)
 	assert.Equal(t, "wdoc", docid)
 }
 
 func TestDecodeDocumentWordsKey_WrongType(t *testing.T) {
-	wsid, docid := DecodeDocumentWordsKey("Q7|wdoc")
+	s := newTestStore()
+	wsid, docid := s.decodeDocumentWordsKey("Q7|wdoc")
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
 func TestDecodeDocumentWordsKey_NoPipe(t *testing.T) {
-	key := []byte{KeyTypeDocWords}
+	s := newTestStore()
+	key := []byte{DefaultKeyTypeDocWords}
 	key = append(key, []byte("nopipe")...)
-	wsid, docid := DecodeDocumentWordsKey(string(key))
+	wsid, docid := s.decodeDocumentWordsKey(string(key))
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
 // ---------------------------------------------------------------------------
-// EncodeDocumentWordsValue / DecodeDocumentWordsValue
+// encodeDocumentWordsValue / decodeDocumentWordsValue
 // ---------------------------------------------------------------------------
 
 func TestDocumentWordsValue_RoundTrip(t *testing.T) {
 	words := []string{"alpha", "beta", "gamma"}
-	encoded := EncodeDocumentWordsValue(words)
-	decoded := DecodeDocumentWordsValue(string(encoded))
+	encoded := encodeDocumentWordsValue(words)
+	decoded := decodeDocumentWordsValue(string(encoded))
 	assert.Equal(t, words, decoded)
 }
 
 func TestDecodeDocumentWordsValue_Empty(t *testing.T) {
-	decoded := DecodeDocumentWordsValue("")
+	decoded := decodeDocumentWordsValue("")
 	assert.Empty(t, decoded)
 }
 
 func TestDocumentWordsValue_SingleWord(t *testing.T) {
 	words := []string{"single"}
-	encoded := EncodeDocumentWordsValue(words)
-	decoded := DecodeDocumentWordsValue(string(encoded))
+	encoded := encodeDocumentWordsValue(words)
+	decoded := decodeDocumentWordsValue(string(encoded))
 	assert.Equal(t, words, decoded)
 }
 
 // ---------------------------------------------------------------------------
-// EncodeMetaKey / DecodeFTMetaKey
+// encodeMetaKey / decodeFTMetaKey
 // ---------------------------------------------------------------------------
 
 func TestFTMetaKey_RoundTrip(t *testing.T) {
-	key := EncodeMetaKey(3)
-	wsid := DecodeFTMetaKey(string(key))
+	s := newTestStore()
+	key := s.encodeMetaKey(3)
+	wsid := s.decodeFTMetaKey(string(key))
 	assert.Equal(t, 3, wsid)
 }
 
 func TestDecodeFTMetaKey_WrongType(t *testing.T) {
-	wsid := DecodeFTMetaKey("Z3")
+	s := newTestStore()
+	wsid := s.decodeFTMetaKey("Z3")
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 }
 
 func TestDecodeFTMetaKey_InvalidNumber(t *testing.T) {
-	key := []byte{KeyTypeDocWorkspace}
+	s := newTestStore()
+	key := []byte{DefaultKeyTypeDocWorkspace}
 	key = append(key, []byte("abc")...)
-	wsid := DecodeFTMetaKey(string(key))
+	wsid := s.decodeFTMetaKey(string(key))
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 }
 
 func TestDecodeFTMetaKey_EmptyKey(t *testing.T) {
-	wsid := DecodeFTMetaKey("")
+	s := newTestStore()
+	wsid := s.decodeFTMetaKey("")
 	assert.Equal(t, InvalidWorkspaceId, wsid)
 }
 
 // ---------------------------------------------------------------------------
-// EncodeFTMetaValue / DecodeFTMetaValue
+// encodeFTMetaValue / decodeFTMetaValue
 // ---------------------------------------------------------------------------
 
 func TestFTMetaValue_RoundTrip(t *testing.T) {
-	ws := Workspace{
+	ws := workspace{
 		WorkspaceId: 5,
 		InvertedId:  10,
 		Desc:        "my workspace",
 	}
-	encoded := EncodeFTMetaValue(ws)
-	decoded, err := DecodeFTMetaValue(encoded)
+	encoded := encodeFTMetaValue(ws)
+	decoded, err := decodeFTMetaValue(encoded)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -200,6 +223,6 @@ func TestFTMetaValue_RoundTrip(t *testing.T) {
 }
 
 func TestDecodeFTMetaValue_InvalidJSON(t *testing.T) {
-	_, err := DecodeFTMetaValue([]byte("{bad"))
+	_, err := decodeFTMetaValue([]byte("{bad"))
 	assert.Error(t, err)
 }

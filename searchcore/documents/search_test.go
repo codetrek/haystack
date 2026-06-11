@@ -161,11 +161,11 @@ func TestScanFiles_EmptyDocIdSkipped(t *testing.T) {
 	}
 
 	// Insert a key with the right prefix but an empty docid.
-	// EncodeDocumentPathKey(1, "") produces the prefix "\x0d1|", which
+	// encodeDocumentPathKey(1, "") produces the prefix "\x0d1|", which
 	// is also a valid key with an empty docid after the pipe separator.
-	// DecodeDocumentPathKey will return docid="" for this key, triggering
+	// decodeDocumentPathKey will return docid="" for this key, triggering
 	// the `if docid == ""` branch that should skip the entry.
-	badKey := EncodeDocumentPathKey(1, "")
+	badKey := env.St.encodeDocumentPathKey(1, "")
 	err = env.DB.Put(badKey, []byte("phantom.go"))
 	if !assert.NoError(t, err) {
 		return

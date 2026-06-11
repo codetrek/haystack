@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/searchcore/documents"
 )
 
 // ---------------------------------------------------------------------------

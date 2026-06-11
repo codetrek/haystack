@@ -7,11 +7,11 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/documents"
 )
 
 var (
@@ -107,6 +107,7 @@ func Sync(workspace *workspace.Workspace, forceRefresh bool) error {
 func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 	mu.Lock()
 	pa := parser
+	st := stInst
 	mu.Unlock()
 
 	fullPath := filepath.Join(workspace.Path, relPath)
@@ -115,7 +116,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 		return err
 	}
 
-	doc, err := stInst.GetDocument(workspace.Id, docid, false)
+	doc, err := st.GetDocument(workspace.Id, docid, false)
 	if err != nil {
 		return err
 	}
@@ -145,12 +146,16 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 }
 
 func RemoveFile(workspace *workspace.Workspace, relPath string) error {
+	mu.Lock()
+	st := stInst
+	mu.Unlock()
+
 	docid, err := GetDocumentId(relPath)
 	if err != nil {
 		return err
 	}
 
-	if err := stInst.DeleteDocument(workspace.Id, docid); err != nil {
+	if err := st.DeleteDocument(workspace.Id, docid); err != nil {
 		return err
 	}
 

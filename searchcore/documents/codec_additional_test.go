@@ -14,27 +14,31 @@ func TestParseWorkspaceId(t *testing.T) {
 }
 
 func TestEncodeDecodeDocumentPathKey(t *testing.T) {
-	key := EncodeDocumentPathKey(5, "doc123")
-	wsId, docId := DecodeDocumentPathKey(string(key))
+	s := newTestStore()
+	key := s.encodeDocumentPathKey(5, "doc123")
+	wsId, docId := s.decodeDocumentPathKey(string(key))
 	assert.Equal(t, 5, wsId)
 	assert.Equal(t, "doc123", docId)
 }
 
 func TestDecodeDocumentPathKey_Invalid(t *testing.T) {
-	wsId, docId := DecodeDocumentPathKey("invalid")
+	s := newTestStore()
+	wsId, docId := s.decodeDocumentPathKey("invalid")
 	assert.Equal(t, InvalidWorkspaceId, wsId)
 	assert.Equal(t, "", docId)
 }
 
 func TestEncodeDecodeDocumentMetaKey(t *testing.T) {
-	key := EncodeDocumentMetaKey(3, "meta456")
-	wsId, docId := DecodeDocumentMetaKey(string(key))
+	s := newTestStore()
+	key := s.encodeDocumentMetaKey(3, "meta456")
+	wsId, docId := s.decodeDocumentMetaKey(string(key))
 	assert.Equal(t, 3, wsId)
 	assert.Equal(t, "meta456", docId)
 }
 
 func TestDecodeDocumentMetaKey_Invalid(t *testing.T) {
-	wsId, docId := DecodeDocumentMetaKey("bad")
+	s := newTestStore()
+	wsId, docId := s.decodeDocumentMetaKey("bad")
 	assert.Equal(t, InvalidWorkspaceId, wsId)
 	assert.Equal(t, "", docId)
 }
@@ -48,10 +52,10 @@ func TestEncodeDecodeDocumentMetaValue(t *testing.T) {
 		LastSyncTime: 789012,
 	}
 
-	data, err := EncodeDocumentMetaValue(doc)
+	data, err := encodeDocumentMetaValue(doc)
 	assert.NoError(t, err)
 
-	decoded, err := DecodeDocumentMetaValue(data)
+	decoded, err := decodeDocumentMetaValue(data)
 	assert.NoError(t, err)
 	assert.Equal(t, "src/main.go", decoded.RelPath)
 	assert.Equal(t, int64(1024), decoded.Size)
@@ -59,58 +63,62 @@ func TestEncodeDecodeDocumentMetaValue(t *testing.T) {
 }
 
 func TestDecodeDocumentMetaValue_Invalid(t *testing.T) {
-	_, err := DecodeDocumentMetaValue([]byte("not json"))
+	_, err := decodeDocumentMetaValue([]byte("not json"))
 	assert.Error(t, err)
 }
 
 func TestEncodeDecodeDocumentWordsKey(t *testing.T) {
-	key := EncodeDocumentWordsKey(7, "words789")
-	wsId, docId := DecodeDocumentWordsKey(string(key))
+	s := newTestStore()
+	key := s.encodeDocumentWordsKey(7, "words789")
+	wsId, docId := s.decodeDocumentWordsKey(string(key))
 	assert.Equal(t, 7, wsId)
 	assert.Equal(t, "words789", docId)
 }
 
 func TestDecodeDocumentWordsKey_Invalid(t *testing.T) {
-	wsId, docId := DecodeDocumentWordsKey("bad")
+	s := newTestStore()
+	wsId, docId := s.decodeDocumentWordsKey("bad")
 	assert.Equal(t, InvalidWorkspaceId, wsId)
 	assert.Equal(t, "", docId)
 }
 
 func TestEncodeDecodeDocumentWordsValue(t *testing.T) {
 	words := []string{"hello", "world", "test"}
-	encoded := EncodeDocumentWordsValue(words)
-	decoded := DecodeDocumentWordsValue(string(encoded))
+	encoded := encodeDocumentWordsValue(words)
+	decoded := decodeDocumentWordsValue(string(encoded))
 	assert.Equal(t, words, decoded)
 }
 
 func TestDecodeDocumentWordsValue_EmptyString(t *testing.T) {
-	decoded := DecodeDocumentWordsValue("")
+	decoded := decodeDocumentWordsValue("")
 	assert.Equal(t, []string{}, decoded)
 }
 
 func TestEncodeDecodeMetaKey(t *testing.T) {
-	key := EncodeMetaKey(10)
-	wsId := DecodeFTMetaKey(string(key))
+	s := newTestStore()
+	key := s.encodeMetaKey(10)
+	wsId := s.decodeFTMetaKey(string(key))
 	assert.Equal(t, 10, wsId)
 }
 
 func TestDecodeFTMetaKey_Invalid(t *testing.T) {
-	assert.Equal(t, InvalidWorkspaceId, DecodeFTMetaKey("bad"))
+	s := newTestStore()
+	assert.Equal(t, InvalidWorkspaceId, s.decodeFTMetaKey("bad"))
 }
 
 func TestEncodeDecodeFTMetaValue(t *testing.T) {
-	ws := Workspace{
+	ws := workspace{
 		WorkspaceId: 42,
 		InvertedId:  99,
 	}
-	encoded := EncodeFTMetaValue(ws)
-	decoded, err := DecodeFTMetaValue(encoded)
+	encoded := encodeFTMetaValue(ws)
+	decoded, err := decodeFTMetaValue(encoded)
 	assert.NoError(t, err)
 	assert.Equal(t, 42, decoded.WorkspaceId)
 	assert.Equal(t, 99, decoded.InvertedId)
 }
 
 func TestDecodeFTMetaValue_Invalid(t *testing.T) {
-	_, err := DecodeFTMetaValue([]byte("bad json"))
+	_, err := decodeFTMetaValue([]byte("bad json"))
 	assert.Error(t, err)
 }

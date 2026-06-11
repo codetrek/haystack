@@ -6,25 +6,23 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/storage"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
 	"github.com/codetrek/haystack/searchcore/queue"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNew(t *testing.T) {
-	// Set up a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "haystack-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Set configuration
-	conf.Get().Global.DataPath = tempDir
-
-	// Test initialization
-	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
+	db, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
 
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()
@@ -41,16 +39,6 @@ func TestNew(t *testing.T) {
 		t.Errorf("Storage directory was not created")
 	}
 
-	// Verify the version file
-	versionPath := filepath.Join(storagePath, "version")
-	versionData, err := os.ReadFile(versionPath)
-	if err != nil {
-		t.Errorf("Failed to read version file: %v", err)
-	}
-	if string(versionData) != storage.StorageVersion {
-		t.Errorf("Version mismatch, got %s, want %s", string(versionData), storage.StorageVersion)
-	}
-
 	// Verify if the database is open
 	if db == nil {
 		t.Error("Database was not initialized")
@@ -62,18 +50,16 @@ func TestNew(t *testing.T) {
 }
 
 func TestCloseAndWait(t *testing.T) {
-	// Set up a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "haystack-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Set configuration
-	conf.Get().Global.DataPath = tempDir
-
-	// Initialize
-	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
+	db, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
+	if err != nil {
+		t.Fatalf("Failed to open db: %v", err)
+	}
 
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()
@@ -118,7 +104,7 @@ func TestCreate_InvertedIndexCreateTableError(t *testing.T) {
 	// The inverted index's CreateTable calls db.GetIncrementalId which does
 	// strconv.Atoi on the stored value — corrupting it makes Atoi fail,
 	// which propagates as an error from CreateTable.
-	nextTableIdKey := []byte{storage.KeyTypeInvertedNextTableId}
+	nextTableIdKey := []byte{invertedindex.DefaultKeyTypeNextId}
 	err := env.DB.Put(nextTableIdKey, []byte("not-a-number"))
 	if !assert.NoError(t, err) {
 		return
