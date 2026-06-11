@@ -326,19 +326,27 @@ func (d *mockDB) GetIncrementalId(key []byte) (int, error) {
 	return 0, nil
 }
 
+// newTestIndexWithDB creates a minimal *Index backed by the given store.
+// It does NOT start the flush goroutine or KeywordsMerger — suitable for
+// unit tests that exercise mergeKeywordsIndex directly.
+func newTestIndexWithDB(store kv.Store) *Index {
+	return &Index{
+		db:             store,
+		pendingWrites:  map[int]*PendingTableWrites{},
+		pendingDeletes: map[int]*PendingTableWrites{},
+		opts:           Options{},
+	}
+}
+
 // TestMergeKeywordsIndexEmptyInput tests merging with an empty initial state
 func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
-	// Save and defer-restore original functions
-	originalDB := db
-	defer func() { db = originalDB }()
-
 	// Create a mock database for testing
-	mockDB := &mockDB{
+	mdb := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Empty database, no keys to scan
 		},
 	}
-	db = mockDB
+	idx := newTestIndexWithDB(mdb)
 
 	// Set up test data
 	input := Merging{
@@ -349,7 +357,7 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 	}
 
 	// Run the function
-	result := mergeKeywordsIndex(input, 10)
+	result := idx.mergeKeywordsIndex(input, 10)
 
 	// Validate results
 	if result.NextIter != "" {
@@ -368,12 +376,9 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 
 // TestMergeKeywordsIndexSingleTable tests merging keywords from a single table
 func TestMergeKeywordsIndexSingleTable(t *testing.T) {
-	// Save and defer-restore original functions
-	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
 	originalNewBatch := NewBatch
 	defer func() {
-		db = originalDB
 		writeInvertedIndex = originalWriteKeywordIndex
 		NewBatch = originalNewBatch
 	}()
@@ -391,7 +396,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 	}
 
 	// Mock database with test data - using real key/value formats
-	db = &mockDB{
+	mdb := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Create real formatted keys and values
 			keys := [][]byte{
@@ -414,6 +419,8 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 		},
 	}
 
+	idx := newTestIndexWithDB(mdb)
+
 	// Set up test data
 	input := Merging{
 		NextIter:        string(KeyTypeRow),
@@ -423,7 +430,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 	}
 
 	// Run function
-	result := mergeKeywordsIndex(input, 6)
+	result := idx.mergeKeywordsIndex(input, 6)
 
 	// Validate results
 	if result.NextIter != "" {
@@ -480,12 +487,9 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 // TestMergeKeywordsIndexMultipleTables tests merging keywords from multiple tables
 func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
-	// Save and defer-restore original functions
-	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
 	originalNewBatch := NewBatch
 	defer func() {
-		db = originalDB
 		writeInvertedIndex = originalWriteKeywordIndex
 		NewBatch = originalNewBatch
 	}()
@@ -525,7 +529,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	}
 
 	// Mock database with test data for multiple tables - using real key/value formats
-	db = &mockDB{
+	mdb := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Create real formatted keys and values
 			keys := [][]byte{
@@ -549,6 +553,8 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 		},
 	}
 
+	idx := newTestIndexWithDB(mdb)
+
 	// Set up test data
 	input := Merging{
 		NextIter:        string(KeyTypeRow),
@@ -558,7 +564,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	}
 
 	// Run function
-	result := mergeKeywordsIndex(input, 6)
+	result := idx.mergeKeywordsIndex(input, 6)
 
 	// Validate results
 	if result.NextIter != "" {
@@ -688,12 +694,9 @@ func (m *mockBatchWriteWithFuncs) DeletePrefix(prefix []byte) error {
 
 // TestMergeKeywordsIndexTimeout tests the timeout behavior of mergeKeywordsIndex
 func TestMergeKeywordsIndexTimeout(t *testing.T) {
-	// Save and defer-restore original functions
-	originalDB := db
 	originalWriteKeywordIndex := writeInvertedIndex
 	originalNewBatch := NewBatch
 	defer func() {
-		db = originalDB
 		writeInvertedIndex = originalWriteKeywordIndex
 		NewBatch = originalNewBatch
 	}()
@@ -712,7 +715,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 
 	// Set up scanner to process a lot of entries
 	var iterationCount int
-	db = &mockDB{
+	mdb := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Process items slowly to trigger timeout
 			for i := 0; i < 100; i++ {
@@ -747,6 +750,8 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 		}
 	}
 
+	idx := newTestIndexWithDB(mdb)
+
 	// Run the function
 	input := Merging{
 		NextIter:        string(KeyTypeRow),
@@ -755,7 +760,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 		TotalRowsAfter:  0,
 	}
 
-	result := mergeKeywordsIndex(input, 5)
+	result := idx.mergeKeywordsIndex(input, 5)
 
 	// Verify we hit the timeout (NextIter should be non-empty)
 	if result.NextIter == "" {
@@ -785,6 +790,7 @@ func TestMergeKeywordTask_Run_NoPendingWrites(t *testing.T) {
 
 	// pendingWrites is reset to empty in setupTestEnv
 	task := &mergeKeywordTask{
+		idx: env.idx,
 		merging: Merging{
 			NextIter: string(KeyTypeRow),
 		},
@@ -804,9 +810,10 @@ func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
 	defer env.teardown()
 
 	// Add a pending write to trigger the waiting path
-	pendingWrites[1] = &PendingTableWrites{}
+	env.idx.pendingWrites[1] = &PendingTableWrites{}
 
 	task := &mergeKeywordTask{
+		idx: env.idx,
 		merging: Merging{
 			NextIter: string(KeyTypeRow),
 		},
@@ -821,7 +828,7 @@ func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
 	}
 
 	// Clean up
-	pendingWrites = map[int]*PendingTableWrites{}
+	env.idx.pendingWrites = map[int]*PendingTableWrites{}
 }
 
 // ---------------------------------------------------------------------------
@@ -832,7 +839,7 @@ func TestKeywordsMerger_GetWait(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	km := &KeywordsMerger{}
+	km := &KeywordsMerger{idx: env.idx}
 	km.Start()
 
 	ch := km.GetWait()
@@ -861,7 +868,7 @@ func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	km := &KeywordsMerger{}
+	km := &KeywordsMerger{idx: env.idx}
 	km.Start()
 
 	// Verify mergerDone is not closed yet
@@ -903,8 +910,7 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 
 	// Provide mergeable data: two rows for "keyword1" that will be merged.
 	scanCalled := false
-	origDB := db
-	db = &mockDB{
+	mockStore := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			if scanCalled {
 				return // second call returns nothing (end of DB)
@@ -925,9 +931,17 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 			}
 		},
 	}
-	defer func() { db = origDB }()
 
-	km := &KeywordsMerger{InitialDelay: 10 * time.Millisecond}
+	// Create a new index using the mock store; use env.idx.q so RunTask works.
+	testIdx := &Index{
+		db:             mockStore,
+		q:              env.idx.q,
+		pendingWrites:  map[int]*PendingTableWrites{},
+		pendingDeletes: map[int]*PendingTableWrites{},
+		opts:           Options{},
+	}
+
+	km := &KeywordsMerger{idx: testIdx, InitialDelay: 10 * time.Millisecond}
 	km.Start()
 
 	// Wait for the merge loop to run at least once.
@@ -970,15 +984,22 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 	// With CompletedDelay=10ms, the second timer tick fires quickly and
 	// enters the NextIter=="" branch (lines 88-94), resetting for a new scan.
 	scanCount := 0
-	origDB := db
-	db = &mockDB{
+	mockStore := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			scanCount++
 		},
 	}
-	defer func() { db = origDB }()
+
+	testIdx := &Index{
+		db:             mockStore,
+		q:              env.idx.q,
+		pendingWrites:  map[int]*PendingTableWrites{},
+		pendingDeletes: map[int]*PendingTableWrites{},
+		opts:           Options{},
+	}
 
 	km := &KeywordsMerger{
+		idx:            testIdx,
 		InitialDelay:   10 * time.Millisecond,
 		CompletedDelay: 10 * time.Millisecond,
 	}
@@ -1000,11 +1021,9 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 // when a keyword row has doccount > maxKeywordIndexSize/2, it is
 // considered "well batched" and skipped without merging.
 func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
-	origDB := db
 	origWrite := writeInvertedIndex
 	origBatch := NewBatch
 	defer func() {
-		db = origDB
 		writeInvertedIndex = origWrite
 		NewBatch = origBatch
 	}()
@@ -1021,7 +1040,7 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 	maxSize := 10 // maxKeywordIndexSize = 10, so threshold = 10/2 = 5
 
 	// Create a row with doccount=6 (> maxSize/2=5) → well batched, should be skipped.
-	db = &mockDB{
+	mdb := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			key := encodeInvertedKey(testTable1, "keyword1", 6) // doccount=6 > 5
 			value := MakeDocsForKeyword("d1", "d2", "d3", "d4", "d5", "d6")
@@ -1029,11 +1048,13 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 		},
 	}
 
+	idx := newTestIndexWithDB(mdb)
+
 	input := Merging{
 		NextIter: string(KeyTypeRow),
 	}
 
-	result := mergeKeywordsIndex(input, maxSize)
+	result := idx.mergeKeywordsIndex(input, maxSize)
 
 	// The row should be counted but NOT merged (skipped as well-batched).
 	// TotalRowsBefore and TotalRowsAfter should be equal (no reduction).
@@ -1049,13 +1070,13 @@ func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
 	defer env.teardown()
 
 	// Insert pending writes so the merge task sees them and sets WaitingForFlushCache.
-	pw := getPendingWrite(1)
+	pw := env.idx.getPendingWrite(1)
 	pw.InvertedIndex["testword"] = RelatedDocs{
 		DocIds:    []string{"doc1"},
 		UpdatedAt: time.Now(),
 	}
 
-	km := &KeywordsMerger{InitialDelay: 10 * time.Millisecond}
+	km := &KeywordsMerger{idx: env.idx, InitialDelay: 10 * time.Millisecond}
 	km.Start()
 
 	// Let the timer fire. The merge task should see pending writes and
@@ -1066,7 +1087,7 @@ func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
 	km.Wait()
 
 	// Clean up
-	delete(pendingWrites, 1)
+	delete(env.idx.pendingWrites, 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1078,12 +1099,13 @@ func TestMergeKeywordTask_RunViaQueue(t *testing.T) {
 	defer env.teardown()
 
 	task := &mergeKeywordTask{
+		idx: env.idx,
 		merging: Merging{
 			NextIter: string(KeyTypeRow),
 		},
 	}
 
-	err := mpscQueue.RunTask(task)
+	err := env.idx.q.RunTask(task)
 	if err != nil {
 		t.Fatalf("unexpected error from RunTask: %v", err)
 	}

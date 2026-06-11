@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/searchcore/idtable"
@@ -131,8 +132,8 @@ func TestRun_RunError(t *testing.T) {
 	defer restore()
 
 	// Make invertedindexInit fail so run() returns an error.
-	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) error {
-		return errFake
+	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) {
+		return nil, errFake
 	}
 
 	setupRunEnv(t)

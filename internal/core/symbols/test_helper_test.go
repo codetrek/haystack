@@ -16,6 +16,7 @@ import (
 // be torn down cleanly in reverse order.
 type testEnv struct {
 	*testutil.Env
+	idx *invertedindex.Index
 }
 
 // setupTestEnv creates a temporary Pebble database, starts an MPSC queue,
@@ -30,19 +31,25 @@ func setupTestEnv(t *testing.T) *testEnv {
 	conf.Get().Symbols.EnableFeature = true
 
 	// Init inverted index first (symbols.Create depends on it).
-	if err := invertedindex.Init(env.DB, env.Mpsc); err != nil {
+	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{
+		FlushTicker:        invertedindex.FlushTicker,
+		FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
+		FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
+		FlushCooldown:      invertedindex.FlushCooldown,
+	})
+	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
 
 	// Init symbols package -- sets the package-level globals.
-	if err := Init(env.DB, env.Mpsc); err != nil {
-		invertedindex.CloseAndWait()
+	if err := Init(env.DB, env.Mpsc, idx); err != nil {
+		idx.CloseAndWait()
 		env.TeardownBase()
 		t.Fatalf("failed to init symbols: %v", err)
 	}
 
-	return &testEnv{Env: env}
+	return &testEnv{Env: env, idx: idx}
 }
 
 // teardown shuts down everything in reverse init order:
@@ -57,7 +64,7 @@ func (e *testEnv) teardown() {
 	}
 
 	// 2. inverted index
-	invertedindex.CloseAndWait()
+	e.idx.CloseAndWait()
 
 	// 3. base resources (queue → db → temp dir)
 	e.TeardownBase()

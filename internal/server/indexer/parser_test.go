@@ -35,10 +35,10 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	if err := invertedindex.Init(env.DB, env.Mpsc); err != nil {
 		t.Fatalf("invertedindex.Init: %v", err)
 	}
-	if err := documents.Init(env.DB, env.Mpsc); err != nil {
+	if err := documents.Init(env.DB, env.Mpsc, invertedindex.GetLegacy()); err != nil {
 		t.Fatalf("documents.Init: %v", err)
 	}
-	if err := symbols.Init(env.DB, env.Mpsc); err != nil {
+	if err := symbols.Init(env.DB, env.Mpsc, invertedindex.GetLegacy()); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
 	if err := workspace.Init(env.DB); err != nil {

@@ -11,30 +11,28 @@ type TableInfo struct {
 	Description string `json:"description"`
 }
 
-func CreateTable(description string) (int, error) {
-	tableId, err := db.GetIncrementalId(encodeNextTableIdKey())
+func (idx *Index) CreateTable(description string) (int, error) {
+	tableId, err := idx.db.GetIncrementalId(encodeNextTableIdKey())
 	if err != nil {
 		return -1, err
 	}
 
 	// Create a new table in the database
-	// This is a placeholder function and should be implemented
 	info := TableInfo{
-		Id:          tableId, // This should be replaced with the actual ID
+		Id:          tableId,
 		CreatedAt:   time.Now(),
 		Description: description,
 	}
 
-	return tableId, db.Put(encodeTableKey(tableId), encodeTableValue(info))
+	return tableId, idx.db.Put(encodeTableKey(tableId), encodeTableValue(info))
 }
 
-// DeleteTable deletes a table from the database
-// and all of its inverted index data
-// This function is not thread-safe and should be called in database mpsc queue
-func DeleteTable(tableId int) error {
-	clearPendingWrites(tableId)
+// DeleteTable deletes a table from the database and all of its inverted index data.
+// This function is not thread-safe and should be called in database mpsc queue.
+func (idx *Index) DeleteTable(tableId int) error {
+	idx.clearPendingWrites(tableId)
 
-	batch := db.NewBatch(0)
+	batch := idx.db.NewBatch(0)
 	batch.DeletePrefix(encodeInvertedSearchKey(tableId, ""))
 	batch.Delete(encodeTableKey(tableId))
 	return batch.Commit()

@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 )
 
 type SymbolUniversalTable struct {
@@ -23,7 +22,7 @@ func Create(workspaceId int, desc string) error {
 	}
 
 	for _, key := range tableMetaKeys {
-		inverted, err := invertedindex.CreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
+		inverted, err := idxInst.CreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
 		if err != nil {
 			return fmt.Errorf("failed to create inverted index table: %w", err)
 		}
@@ -60,7 +59,7 @@ func Delete(workspaceId int) error {
 				return err
 			}
 
-			invertedindex.DeleteTable(ft.InvertedId)
+			idxInst.DeleteTable(ft.InvertedId)
 
 			batch := db.NewBatch(0)
 			batch.DeletePrefix(EncodeDocFunctionsKey(workspaceId, ""))

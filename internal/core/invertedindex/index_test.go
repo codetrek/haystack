@@ -12,11 +12,11 @@ import (
 // does not skip the flush.
 // ---------------------------------------------------------------------------
 
-func forceFlush() {
-	lastFlushWriteTime = time.Time{} // epoch — always older than 1 s
-	lastFlushDeleteTime = time.Time{}
-	flushPendingWrites(true)
-	flushPendingDeletes(true, MaxInvertedIndexSize)
+func forceFlush(idx *Index) {
+	idx.lastFlushWriteTime = time.Time{} // epoch — always older than 1 s
+	idx.lastFlushDeleteTime = time.Time{}
+	idx.flushPendingWrites(true)
+	idx.flushPendingDeletes(true, MaxInvertedIndexSize)
 }
 
 // makeDocID pads or truncates s to exactly 8 bytes (the canonical docid size).
@@ -32,7 +32,7 @@ func TestCreateTable(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, err := CreateTable("test table 1")
+	tableId, err := env.idx.CreateTable("test table 1")
 	if err != nil {
 		t.Fatalf("CreateTable failed: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestCreateTable(t *testing.T) {
 	}
 
 	// Second table should get a different (incremented) ID
-	tableId2, err := CreateTable("test table 2")
+	tableId2, err := env.idx.CreateTable("test table 2")
 	if err != nil {
 		t.Fatalf("CreateTable failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestCreateTable_GetIncrementalIdError(t *testing.T) {
 	restore := simulateClosedDB()
 	defer restore()
 
-	tableId, err := CreateTable("should fail")
+	tableId, err := env.idx.CreateTable("should fail")
 	if err == nil {
 		t.Fatal("expected error from CreateTable when db is closed, got nil")
 	}
@@ -71,28 +71,28 @@ func TestDeleteTable(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, err := CreateTable("delete-me")
+	tableId, err := env.idx.CreateTable("delete-me")
 	if err != nil {
 		t.Fatalf("CreateTable failed: %v", err)
 	}
 
 	docid := makeDocID("doc1")
-	Update(tableId, docid, []string{"hello", "world"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"hello", "world"}, nil)
+	forceFlush(env.idx)
 
 	// Verify data exists
-	res := Search(tableId, "hello", 0, nil)
+	res := env.idx.Search(tableId, "hello", 0, nil)
 	if len(res.DocIds) == 0 {
 		t.Fatal("expected search results before delete")
 	}
 
 	// Delete the table
-	if err := DeleteTable(tableId); err != nil {
+	if err := env.idx.DeleteTable(tableId); err != nil {
 		t.Fatalf("DeleteTable failed: %v", err)
 	}
 
 	// Search should return no results now
-	res = Search(tableId, "hello", 0, nil)
+	res = env.idx.Search(tableId, "hello", 0, nil)
 	if len(res.DocIds) != 0 {
 		t.Errorf("expected 0 results after table delete, got %d", len(res.DocIds))
 	}
@@ -106,18 +106,18 @@ func TestUpdateAddKeywords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("update-test")
+	tableId, _ := env.idx.CreateTable("update-test")
 	docid := makeDocID("doc1")
 
-	Update(tableId, docid, []string{"alpha", "beta"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"alpha", "beta"}, nil)
+	forceFlush(env.idx)
 
-	res := Search(tableId, "alpha", 0, nil)
+	res := env.idx.Search(tableId, "alpha", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected doc1 in results for 'alpha'")
 	}
 
-	res = Search(tableId, "beta", 0, nil)
+	res = env.idx.Search(tableId, "beta", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected doc1 in results for 'beta'")
 	}
@@ -131,18 +131,18 @@ func TestUpdateRemoveAllKeywords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("remove-test")
+	tableId, _ := env.idx.CreateTable("remove-test")
 	docid := makeDocID("doc1")
 
 	// Add first
-	Update(tableId, docid, []string{"gamma"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"gamma"}, nil)
+	forceFlush(env.idx)
 
 	// Remove
-	Update(tableId, docid, nil, []string{"gamma"})
-	forceFlush()
+	env.idx.Update(tableId, docid, nil, []string{"gamma"})
+	forceFlush(env.idx)
 
-	res := Search(tableId, "gamma", 0, nil)
+	res := env.idx.Search(tableId, "gamma", 0, nil)
 	if _, ok := res.DocIds[docid]; ok {
 		t.Error("expected doc1 to be removed from 'gamma' results")
 	}
@@ -156,31 +156,31 @@ func TestUpdateDiffKeywords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("diff-test")
+	tableId, _ := env.idx.CreateTable("diff-test")
 	docid := makeDocID("doc1")
 
 	// Add initial keywords
-	Update(tableId, docid, []string{"keep", "remove"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"keep", "remove"}, nil)
+	forceFlush(env.idx)
 
 	// Update: keep stays, remove goes, addnew is added
-	Update(tableId, docid, []string{"keep", "addnew"}, []string{"keep", "remove"})
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"keep", "addnew"}, []string{"keep", "remove"})
+	forceFlush(env.idx)
 
 	// "keep" should still have the doc
-	res := Search(tableId, "keep", 0, nil)
+	res := env.idx.Search(tableId, "keep", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected doc1 in 'keep' results")
 	}
 
 	// "addnew" should now have the doc
-	res = Search(tableId, "addnew", 0, nil)
+	res = env.idx.Search(tableId, "addnew", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected doc1 in 'addnew' results")
 	}
 
 	// "remove" should no longer have the doc
-	res = Search(tableId, "remove", 0, nil)
+	res = env.idx.Search(tableId, "remove", 0, nil)
 	if _, ok := res.DocIds[docid]; ok {
 		t.Error("expected doc1 NOT in 'remove' results")
 	}
@@ -194,13 +194,13 @@ func TestUpdateIgnoresEmptyKeywords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("empty-kw-test")
+	tableId, _ := env.idx.CreateTable("empty-kw-test")
 	docid := makeDocID("doc1")
 
-	Update(tableId, docid, []string{"real", "", "word"}, []string{"", "old"})
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"real", "", "word"}, []string{"", "old"})
+	forceFlush(env.idx)
 
-	res := Search(tableId, "real", 0, nil)
+	res := env.idx.Search(tableId, "real", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected doc1 in 'real' results")
 	}
@@ -214,22 +214,22 @@ func TestSearchBasic(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("search-test")
+	tableId, _ := env.idx.CreateTable("search-test")
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	Update(tableId, doc1, []string{"common", "unique1"}, nil)
-	Update(tableId, doc2, []string{"common", "unique2"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, doc1, []string{"common", "unique1"}, nil)
+	env.idx.Update(tableId, doc2, []string{"common", "unique2"}, nil)
+	forceFlush(env.idx)
 
 	// "common" should return both
-	res := Search(tableId, "common", 0, nil)
+	res := env.idx.Search(tableId, "common", 0, nil)
 	if len(res.DocIds) != 2 {
 		t.Errorf("expected 2 docs for 'common', got %d", len(res.DocIds))
 	}
 
 	// "unique1" should return only doc1
-	res = Search(tableId, "unique1", 0, nil)
+	res = env.idx.Search(tableId, "unique1", 0, nil)
 	if len(res.DocIds) != 1 {
 		t.Errorf("expected 1 doc for 'unique1', got %d", len(res.DocIds))
 	}
@@ -242,7 +242,7 @@ func TestSearchWithLimit(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("limit-test")
+	tableId, _ := env.idx.CreateTable("limit-test")
 	// Add documents to separate keywords that share a prefix so they appear
 	// in separate rows during scanning. Each doc gets its own unique keyword
 	// starting with "shared" so Scan prefix picks them all up.
@@ -251,14 +251,14 @@ func TestSearchWithLimit(t *testing.T) {
 		// Each doc gets a unique keyword like "shared0", "shared1", etc.
 		// so they are stored in separate DB rows.
 		kw := "shared" + string(rune('0'+i))
-		Update(tableId, docid, []string{kw}, nil)
+		env.idx.Update(tableId, docid, []string{kw}, nil)
 	}
-	forceFlush()
+	forceFlush(env.idx)
 
 	// Search for "shared" prefix with limit of 2
 	// The limit is checked after adding docs from each row.
 	// With separate rows, the limit should stop scanning after reaching 2 docs.
-	res := Search(tableId, "shared", 2, nil)
+	res := env.idx.Search(tableId, "shared", 2, nil)
 	if len(res.DocIds) < 1 {
 		t.Error("expected at least 1 doc with limit=2")
 	}
@@ -273,13 +273,13 @@ func TestSearchCaseInsensitive(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("case-test")
+	tableId, _ := env.idx.CreateTable("case-test")
 	docid := makeDocID("doc1")
 	// Keywords are stored as-is; search lowercases the query
-	Update(tableId, docid, []string{"hello"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, docid, []string{"hello"}, nil)
+	forceFlush(env.idx)
 
-	res := Search(tableId, "HELLO", 0, nil)
+	res := env.idx.Search(tableId, "HELLO", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected case-insensitive search to find 'hello' via 'HELLO'")
 	}
@@ -289,24 +289,24 @@ func TestSearchWithFilter(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("filter-test")
+	tableId, _ := env.idx.CreateTable("filter-test")
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	Update(tableId, doc1, []string{"apple"}, nil)
-	Update(tableId, doc2, []string{"applesauce"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, doc1, []string{"apple"}, nil)
+	env.idx.Update(tableId, doc2, []string{"applesauce"}, nil)
+	forceFlush(env.idx)
 
 	// Filter that rejects all keys
 	rejectAll := func(key string) bool { return false }
-	res := Search(tableId, "apple", 0, rejectAll)
+	res := env.idx.Search(tableId, "apple", 0, rejectAll)
 	if len(res.DocIds) != 0 {
 		t.Errorf("expected 0 docs with reject-all filter, got %d", len(res.DocIds))
 	}
 
 	// Filter that accepts all keys
 	acceptAll := func(key string) bool { return true }
-	res = Search(tableId, "apple", 0, acceptAll)
+	res = env.idx.Search(tableId, "apple", 0, acceptAll)
 	if len(res.DocIds) == 0 {
 		t.Error("expected results with accept-all filter")
 	}
@@ -316,8 +316,8 @@ func TestSearchNoResults(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("noresult-test")
-	res := Search(tableId, "nonexistent", 0, nil)
+	tableId, _ := env.idx.CreateTable("noresult-test")
+	res := env.idx.Search(tableId, "nonexistent", 0, nil)
 	if len(res.DocIds) != 0 {
 		t.Errorf("expected 0 docs for nonexistent keyword, got %d", len(res.DocIds))
 	}
@@ -331,15 +331,15 @@ func TestGetDocs(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("getdocs-test")
+	tableId, _ := env.idx.CreateTable("getdocs-test")
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	Update(tableId, doc1, []string{"keyword"}, nil)
-	Update(tableId, doc2, []string{"keyword"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, doc1, []string{"keyword"}, nil)
+	env.idx.Update(tableId, doc2, []string{"keyword"}, nil)
+	forceFlush(env.idx)
 
-	res := GetDocs(tableId, "keyword")
+	res := env.idx.GetDocs(tableId, "keyword")
 	if len(res.DocIds) != 2 {
 		t.Errorf("expected 2 docs, got %d", len(res.DocIds))
 	}
@@ -355,8 +355,8 @@ func TestGetDocsEmpty(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("getdocs-empty-test")
-	res := GetDocs(tableId, "nothing")
+	tableId, _ := env.idx.CreateTable("getdocs-empty-test")
+	res := env.idx.GetDocs(tableId, "nothing")
 	if len(res.DocIds) != 0 {
 		t.Errorf("expected 0 docs, got %d", len(res.DocIds))
 	}
@@ -370,27 +370,27 @@ func TestRemoveDocumentsFromInvertedIndex(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("remove-doc-test")
+	tableId, _ := env.idx.CreateTable("remove-doc-test")
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 	doc3 := makeDocID("doc3")
 
 	// Add all three docs to same keyword
-	Update(tableId, doc1, []string{"target"}, nil)
-	Update(tableId, doc2, []string{"target"}, nil)
-	Update(tableId, doc3, []string{"target"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, doc1, []string{"target"}, nil)
+	env.idx.Update(tableId, doc2, []string{"target"}, nil)
+	env.idx.Update(tableId, doc3, []string{"target"}, nil)
+	forceFlush(env.idx)
 
 	// Remove doc2 via removeDocumentsFromInvertedIndex
-	batch := db.NewBatch(0)
-	err := removeDocumentsFromInvertedIndex(batch, tableId, "target", []string{doc2}, MaxInvertedIndexSize)
+	batch := env.DB.NewBatch(0)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, tableId, "target", []string{doc2}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("removeDocumentsFromInvertedIndex failed: %v", err)
 	}
 	batch.Commit()
 
 	// doc1 and doc3 should remain, doc2 should be gone
-	res := GetDocs(tableId, "target")
+	res := env.idx.GetDocs(tableId, "target")
 	if _, ok := res.DocIds[doc2]; ok {
 		t.Error("expected doc2 to be removed")
 	}
@@ -406,9 +406,9 @@ func TestRemoveDocumentsEmptyKeyword(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	batch := db.NewBatch(0)
+	batch := env.DB.NewBatch(0)
 	// Empty keyword should be a no-op (returns nil)
-	err := removeDocumentsFromInvertedIndex(batch, 1, "", []string{"doc"}, MaxInvertedIndexSize)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "", []string{"doc"}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("expected nil error for empty keyword, got: %v", err)
 	}
@@ -419,9 +419,9 @@ func TestRemoveDocumentsEmptyDocids(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	batch := db.NewBatch(0)
+	batch := env.DB.NewBatch(0)
 	// Empty docid list should be a no-op (returns nil)
-	err := removeDocumentsFromInvertedIndex(batch, 1, "kw", []string{}, MaxInvertedIndexSize)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "kw", []string{}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("expected nil error for empty docids, got: %v", err)
 	}
@@ -432,9 +432,9 @@ func TestRemoveDocumentsOnlyEmptyStringDocids(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	batch := db.NewBatch(0)
+	batch := env.DB.NewBatch(0)
 	// Only empty-string docids should be a no-op (returns nil)
-	err := removeDocumentsFromInvertedIndex(batch, 1, "kw", []string{"", ""}, MaxInvertedIndexSize)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "kw", []string{"", ""}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("expected nil error for empty-string docids, got: %v", err)
 	}
@@ -449,22 +449,22 @@ func TestMultipleTablesIsolated(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	t1, _ := CreateTable("table-a")
-	t2, _ := CreateTable("table-b")
+	t1, _ := env.idx.CreateTable("table-a")
+	t2, _ := env.idx.CreateTable("table-b")
 
 	doc := makeDocID("doc1")
 
-	Update(t1, doc, []string{"word"}, nil)
-	forceFlush()
+	env.idx.Update(t1, doc, []string{"word"}, nil)
+	forceFlush(env.idx)
 
 	// Table 1 should find the doc
-	res1 := Search(t1, "word", 0, nil)
+	res1 := env.idx.Search(t1, "word", 0, nil)
 	if len(res1.DocIds) != 1 {
 		t.Errorf("table 1: expected 1 doc, got %d", len(res1.DocIds))
 	}
 
 	// Table 2 should NOT find the doc
-	res2 := Search(t2, "word", 0, nil)
+	res2 := env.idx.Search(t2, "word", 0, nil)
 	if len(res2.DocIds) != 0 {
 		t.Errorf("table 2: expected 0 docs, got %d", len(res2.DocIds))
 	}
@@ -476,11 +476,14 @@ func TestMultipleTablesIsolated(t *testing.T) {
 
 func TestPendingWritesCacheCreatesAndReturns(t *testing.T) {
 	// Verify getPendingWrite creates new cache entries
-	origPW := pendingWrites
-	defer func() { pendingWrites = origPW }()
-	pendingWrites = map[int]*PendingTableWrites{}
+	env := setupTestEnv(t)
+	defer env.teardown()
 
-	pw := getPendingWrite(99)
+	origPW := env.idx.pendingWrites
+	defer func() { env.idx.pendingWrites = origPW }()
+	env.idx.pendingWrites = map[int]*PendingTableWrites{}
+
+	pw := env.idx.getPendingWrite(99)
 	if pw == nil {
 		t.Fatal("expected non-nil PendingTableWrites")
 	}
@@ -492,18 +495,21 @@ func TestPendingWritesCacheCreatesAndReturns(t *testing.T) {
 	}
 
 	// Second call should return the same object
-	pw2 := getPendingWrite(99)
+	pw2 := env.idx.getPendingWrite(99)
 	if pw2 != pw {
 		t.Error("expected same PendingTableWrites object on second call")
 	}
 }
 
 func TestPendingDeletesCacheCreatesAndReturns(t *testing.T) {
-	origPD := pendingDeletes
-	defer func() { pendingDeletes = origPD }()
-	pendingDeletes = map[int]*PendingTableWrites{}
+	env := setupTestEnv(t)
+	defer env.teardown()
 
-	pd := getPendingDelete(88)
+	origPD := env.idx.pendingDeletes
+	defer func() { env.idx.pendingDeletes = origPD }()
+	env.idx.pendingDeletes = map[int]*PendingTableWrites{}
+
+	pd := env.idx.getPendingDelete(88)
 	if pd == nil {
 		t.Fatal("expected non-nil PendingTableWrites for deletes")
 	}
@@ -511,36 +517,39 @@ func TestPendingDeletesCacheCreatesAndReturns(t *testing.T) {
 		t.Errorf("expected TableId 88, got %d", pd.TableId)
 	}
 
-	pd2 := getPendingDelete(88)
+	pd2 := env.idx.getPendingDelete(88)
 	if pd2 != pd {
 		t.Error("expected same PendingTableWrites object on second call")
 	}
 }
 
 func TestClearPendingWrites(t *testing.T) {
-	origPW := pendingWrites
-	origPD := pendingDeletes
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	origPW := env.idx.pendingWrites
+	origPD := env.idx.pendingDeletes
 	defer func() {
-		pendingWrites = origPW
-		pendingDeletes = origPD
+		env.idx.pendingWrites = origPW
+		env.idx.pendingDeletes = origPD
 	}()
 
-	pendingWrites = map[int]*PendingTableWrites{}
-	pendingDeletes = map[int]*PendingTableWrites{}
+	env.idx.pendingWrites = map[int]*PendingTableWrites{}
+	env.idx.pendingDeletes = map[int]*PendingTableWrites{}
 
-	getPendingWrite(77)
-	getPendingDelete(77)
+	env.idx.getPendingWrite(77)
+	env.idx.getPendingDelete(77)
 
-	if len(pendingWrites) != 1 || len(pendingDeletes) != 1 {
+	if len(env.idx.pendingWrites) != 1 || len(env.idx.pendingDeletes) != 1 {
 		t.Fatal("expected pending caches to exist before clear")
 	}
 
-	clearPendingWrites(77)
+	env.idx.clearPendingWrites(77)
 
-	if len(pendingWrites) != 0 {
+	if len(env.idx.pendingWrites) != 0 {
 		t.Error("expected pendingWrites to be empty after clear")
 	}
-	if len(pendingDeletes) != 0 {
+	if len(env.idx.pendingDeletes) != 0 {
 		t.Error("expected pendingDeletes to be empty after clear")
 	}
 }
@@ -553,15 +562,15 @@ func TestWriteInvertedIndexDeduplicates(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("dedup-test")
+	tableId, _ := env.idx.CreateTable("dedup-test")
 	doc := makeDocID("dup1")
 
 	// Directly call writeInvertedIndex with duplicates
-	batch := db.NewBatch(0)
+	batch := env.DB.NewBatch(0)
 	writeInvertedIndex(batch, tableId, "dupkw", []string{doc, doc, doc}, nil)
 	batch.Commit()
 
-	res := GetDocs(tableId, "dupkw")
+	res := env.idx.GetDocs(tableId, "dupkw")
 	if len(res.DocIds) != 1 {
 		t.Errorf("expected 1 unique doc after dedup, got %d", len(res.DocIds))
 	}
@@ -575,23 +584,23 @@ func TestUpdateAndRemoveIndex(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("internal-test")
+	tableId, _ := env.idx.CreateTable("internal-test")
 	doc := makeDocID("doc1")
 
 	// Add via updateIndex
-	updateIndex(tableId, doc, []string{"intkw"})
-	forceFlush()
+	env.idx.updateIndex(tableId, doc, []string{"intkw"})
+	forceFlush(env.idx)
 
-	res := Search(tableId, "intkw", 0, nil)
+	res := env.idx.Search(tableId, "intkw", 0, nil)
 	if _, ok := res.DocIds[doc]; !ok {
 		t.Error("expected doc1 in 'intkw' results after updateIndex")
 	}
 
 	// Remove via removeIndex
-	removeIndex(tableId, doc, []string{"intkw"})
-	forceFlush()
+	env.idx.removeIndex(tableId, doc, []string{"intkw"})
+	forceFlush(env.idx)
 
-	res = Search(tableId, "intkw", 0, nil)
+	res = env.idx.Search(tableId, "intkw", 0, nil)
 	if _, ok := res.DocIds[doc]; ok {
 		t.Error("expected doc1 removed from 'intkw' results after removeIndex")
 	}
@@ -605,7 +614,7 @@ func TestNewBatchDefault(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	batch := NewBatch(db)
+	batch := NewBatch(env.DB)
 	if batch == nil {
 		t.Fatal("expected non-nil batch")
 	}
@@ -620,20 +629,20 @@ func TestFlushPendingWritesTaskRun(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("flush-task-test")
+	tableId, _ := env.idx.CreateTable("flush-task-test")
 	docid := makeDocID("doc1")
 
-	Update(tableId, docid, []string{"taskword"}, nil)
+	env.idx.Update(tableId, docid, []string{"taskword"}, nil)
 
 	// Run the task directly
-	task := &flushPendingWritesTask{closing: true}
+	task := &flushPendingWritesTask{idx: env.idx, closing: true}
 	err := task.Run()
 	if err != nil {
 		t.Fatalf("flushPendingWritesTask.Run() failed: %v", err)
 	}
 
 	// Verify data was flushed
-	res := Search(tableId, "taskword", 0, nil)
+	res := env.idx.Search(tableId, "taskword", 0, nil)
 	if _, ok := res.DocIds[docid]; !ok {
 		t.Error("expected doc1 in 'taskword' results after flush task")
 	}
@@ -647,13 +656,13 @@ func TestUpdateBothEmpty(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("both-empty-test")
+	tableId, _ := env.idx.CreateTable("both-empty-test")
 	docid := makeDocID("doc1")
 
 	// Both empty — should not panic or error
-	Update(tableId, docid, nil, nil)
-	Update(tableId, docid, []string{}, []string{})
-	forceFlush()
+	env.idx.Update(tableId, docid, nil, nil)
+	env.idx.Update(tableId, docid, []string{}, []string{})
+	forceFlush(env.idx)
 }
 
 // ---------------------------------------------------------------------------
@@ -664,17 +673,17 @@ func TestSearchMultipleKeywordsPrefix(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("prefix-test")
+	tableId, _ := env.idx.CreateTable("prefix-test")
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	Update(tableId, doc1, []string{"test"}, nil)
-	Update(tableId, doc2, []string{"testing"}, nil)
-	forceFlush()
+	env.idx.Update(tableId, doc1, []string{"test"}, nil)
+	env.idx.Update(tableId, doc2, []string{"testing"}, nil)
+	forceFlush(env.idx)
 
 	// Search for "test" — since Scan uses prefix scanning, this might
 	// match both "test" and "testing" depending on the scan behaviour
-	res := Search(tableId, "test", 0, nil)
+	res := env.idx.Search(tableId, "test", 0, nil)
 	if len(res.DocIds) < 1 {
 		t.Error("expected at least 1 result for 'test' prefix search")
 	}
@@ -702,16 +711,16 @@ func TestUpdateManyDocuments(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("many-docs-test")
+	tableId, _ := env.idx.CreateTable("many-docs-test")
 
 	docids := make([]string, 20)
 	for i := 0; i < 20; i++ {
 		docids[i] = makeDocID("d" + string(rune('A'+i)))
-		Update(tableId, docids[i], []string{"popular"}, nil)
+		env.idx.Update(tableId, docids[i], []string{"popular"}, nil)
 	}
-	forceFlush()
+	forceFlush(env.idx)
 
-	res := Search(tableId, "popular", 0, nil)
+	res := env.idx.Search(tableId, "popular", 0, nil)
 	if len(res.DocIds) != 20 {
 		t.Errorf("expected 20 docs, got %d", len(res.DocIds))
 	}
@@ -753,25 +762,25 @@ func TestRemoveDocumentsPartial(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	tableId, _ := CreateTable("partial-remove-test")
+	tableId, _ := env.idx.CreateTable("partial-remove-test")
 
 	docs := make([]string, 5)
 	for i := 0; i < 5; i++ {
 		docs[i] = makeDocID("p" + string(rune('1'+i)))
-		Update(tableId, docs[i], []string{"partkey"}, nil)
+		env.idx.Update(tableId, docs[i], []string{"partkey"}, nil)
 	}
-	forceFlush()
+	forceFlush(env.idx)
 
 	// Remove first 2 documents
-	batch := db.NewBatch(0)
-	err := removeDocumentsFromInvertedIndex(batch, tableId, "partkey", docs[:2], MaxInvertedIndexSize)
+	batch := env.DB.NewBatch(0)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, tableId, "partkey", docs[:2], MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("removeDocumentsFromInvertedIndex failed: %v", err)
 	}
 	batch.Commit()
 
 	// Should have 3 remaining
-	res := GetDocs(tableId, "partkey")
+	res := env.idx.GetDocs(tableId, "partkey")
 	if len(res.DocIds) != 3 {
 		// Collect what we got for debugging
 		gotDocs := make([]string, 0, len(res.DocIds))

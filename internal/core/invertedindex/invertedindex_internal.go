@@ -7,13 +7,15 @@ import (
 	"github.com/codetrek/haystack/searchcore/kv"
 )
 
-// updateInvertedIndexCached updates the keyword index in write cached
-// It will add the document to the keyword index cache to merge with other documents and flush later
-func updateIndex(tableId int, docid string, keywords []string) {
-	cache := getPendingWrite(tableId)
+// updateIndex updates the keyword index in write cache.
+// It will add the document to the keyword index cache to merge with other
+// documents and flush later.
+func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
+	cache := idx.getPendingWrite(tableId)
 	for _, kw := range keywords {
-		// Add to write cache to merge with other documents and flush later, docid may be duplicated,
-		// however for performance, we don't check for duplicates here, all duplicates will be merged later in background.
+		// Add to write cache to merge with other documents and flush later. docid may be
+		// duplicated; however for performance we don't check for duplicates here — all
+		// duplicates will be merged later in the background.
 		cache.InvertedIndex[kw] = RelatedDocs{
 			DocIds:    append(cache.InvertedIndex[kw].DocIds, docid),
 			UpdatedAt: time.Now(),
@@ -21,10 +23,10 @@ func updateIndex(tableId int, docid string, keywords []string) {
 	}
 }
 
-func removeIndex(tableId int, docid string, keywords []string) {
-	w := getPendingDelete(tableId)
+func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
+	w := idx.getPendingDelete(tableId)
 	for _, kw := range keywords {
-		// Add to delete cache to merge with other documents and flush later
+		// Add to delete cache to merge with other documents and flush later.
 		w.InvertedIndex[kw] = RelatedDocs{
 			DocIds:    append(w.InvertedIndex[kw].DocIds, docid),
 			UpdatedAt: time.Now(),
@@ -32,7 +34,7 @@ func removeIndex(tableId int, docid string, keywords []string) {
 	}
 }
 
-// writeInvertedIndex writes a keyword to the database
+// writeInvertedIndex writes a keyword to the database.
 var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {
 	// Remove duplicates to ensure the data stored is clean
 	uniqueDocids := removeDuplicatesEfficiently(docids)
@@ -43,9 +45,9 @@ var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []s
 	batch.Put(key, content)
 }
 
-// removeDocumentsFromInvertedIndex removes a document from the keywords index
-// It will remove the document from the keywords index and rewrite the keyword with new docids
-func removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, removingDocids []string,
+// removeDocumentsFromInvertedIndex removes a document from the keywords index.
+// It will remove the document from the keywords index and rewrite the keyword with new docids.
+func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, removingDocids []string,
 	maxKeywordIndexSize int) error {
 	if len(kw) == 0 {
 		log.Println("[Inverted] Warning: Removing document from keywords index, but keyword is empty")
@@ -66,7 +68,7 @@ func removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, re
 
 	keys := []string{}
 	docids := map[string]struct{}{}
-	err := db.Scan(encodeInvertedKeyPrefix(tableId, kw), func(key, value []byte) bool {
+	err := idx.db.Scan(encodeInvertedKeyPrefix(tableId, kw), func(key, value []byte) bool {
 		changed := false
 		tmpids := []string{}
 
@@ -123,9 +125,8 @@ func removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, re
 	return nil
 }
 
-// removeDuplicatesEfficiently removes duplicates from the docids slice
-// It will return a new slice with duplicates removed
-// It is more efficient than the naive approach of using a map
+// removeDuplicatesEfficiently removes duplicates from the docids slice.
+// It returns a new slice with duplicates removed, preserving first-occurrence order.
 func removeDuplicatesEfficiently(docids []string) []string {
 	if len(docids) <= 1 {
 		return docids

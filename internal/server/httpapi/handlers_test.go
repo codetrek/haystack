@@ -60,8 +60,8 @@ func TestMain(m *testing.M) {
 	mpsc.Start()
 
 	invertedindex.Init(db, mpsc)
-	documents.Init(db, mpsc)
-	symbols.Init(db, mpsc)
+	documents.Init(db, mpsc, invertedindex.GetLegacy())
+	symbols.Init(db, mpsc, invertedindex.GetLegacy())
 
 	alloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {

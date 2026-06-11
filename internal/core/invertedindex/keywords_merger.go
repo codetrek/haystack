@@ -10,6 +10,7 @@ import (
 )
 
 type KeywordsMerger struct {
+	idx            *Index
 	shutdown       context.Context
 	shutdownFn     context.CancelFunc
 	mergerDone     chan struct{}
@@ -38,19 +39,20 @@ func (m *Merging) MergedRowCount() int {
 }
 
 type mergeKeywordTask struct {
+	idx     *Index
 	merging Merging
 }
 
 func (m *mergeKeywordTask) Run() error {
-	if len(pendingWrites) != 0 {
-		// There are pending writes, wo we need to wait
+	if len(m.idx.pendingWrites) != 0 {
+		// There are pending writes, so we need to wait
 		// for them to be flushed before merging
 		// the keywords index
 		m.merging.WaitingForFlushCache = true
 		return nil
 	}
 	m.merging.WaitingForFlushCache = false
-	m.merging = mergeKeywordsIndex(m.merging, MaxInvertedIndexSize)
+	m.merging = m.idx.mergeKeywordsIndex(m.merging, m.idx.opts.maxInvertedIndexSize())
 	return nil
 }
 
@@ -79,6 +81,11 @@ func (km *KeywordsMerger) Start() {
 func (km *KeywordsMerger) run() {
 	log.Printf("[Inverted] Keywords merger: started")
 
+	// Capture locals to avoid reading mutable struct fields after Shutdown.
+	shutdown := km.shutdown
+	idx := km.idx
+	mergerDone := km.mergerDone
+
 	nextDelay := km.InitialDelay
 	if nextDelay == 0 {
 		nextDelay = defaultInitialDelay
@@ -86,9 +93,9 @@ func (km *KeywordsMerger) run() {
 
 	for {
 		select {
-		case <-km.shutdown.Done():
+		case <-shutdown.Done():
 			log.Printf("[Inverted] Keywords merger: shutdown")
-			close(km.mergerDone)
+			close(mergerDone)
 			return
 		case <-time.After(nextDelay):
 			if km.merging.NextIter == "" {
@@ -101,11 +108,12 @@ func (km *KeywordsMerger) run() {
 		}
 
 		m := &mergeKeywordTask{
+			idx:     idx,
 			merging: km.merging,
 		}
 
 		before := km.merging
-		mpscQueue.RunTask(m)
+		idx.q.RunTask(m)
 		km.merging = m.merging
 
 		if !km.merging.WaitingForFlushCache && before.MergedRowCount() != km.merging.MergedRowCount() {
@@ -127,7 +135,7 @@ func (km *KeywordsMerger) run() {
 				// we've merged a lot of keywords, so we need to
 				// compact the database to free up space
 				log.Printf("[Inverted] Keywords merger: scheduling compact")
-				db.ScheduleCompact()
+				idx.db.ScheduleCompact()
 			}
 
 			log.Printf("[Inverted] Keywords merge done, total keywords: %s", humanize.Comma(int64(km.merging.TotalKeywords)))
@@ -192,20 +200,20 @@ var rewriteIndex = func(batch kv.Batch, index *InvertedIndex, maxKeywordIndexSiz
 	return mergedCount
 }
 
-func mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
+func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
 	now := time.Now()
 	var isTimeout = func() bool {
 		return time.Since(now) > 300*time.Millisecond
 	}
 
-	batch := NewBatch(db)
+	batch := NewBatch(idx.db)
 	lastTableId := -1
 	current := &InvertedIndex{Rows: []RecordRow{}}
 	nextIter := m.NextIter
 	pending := []*InvertedIndex{}
 	for {
 		var next *InvertedIndex
-		db.ScanRange([]byte(nextIter), append([]byte{KeyTypeRow}, 0xff), func(key []byte, value []byte) bool {
+		idx.db.ScanRange([]byte(nextIter), append([]byte{KeyTypeRow}, 0xff), func(key []byte, value []byte) bool {
 			tableId, keyword, doccount, _ := decodeInvertedKey(string(key))
 			if lastTableId == -1 {
 				lastTableId = tableId

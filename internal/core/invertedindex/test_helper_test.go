@@ -3,7 +3,6 @@ package invertedindex
 import (
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/searchcore/kv"
@@ -13,6 +12,7 @@ import (
 // be torn down cleanly in reverse order.
 type testEnv struct {
 	*testutil.Env
+	idx *Index
 }
 
 // setupTestEnv creates a temporary Pebble database, starts an MPSC queue,
@@ -23,23 +23,36 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 	env := testutil.SetupEnv(t, "TestInvertedQueue")
 
-	// Reset all package-level state to ensure test isolation.
-	// This prevents leakage from tests that mock these globals
-	// (e.g. keywords_merger_test mocking NewBatch, writeInvertedIndex).
-	pendingWrites = map[int]*PendingTableWrites{}
-	pendingDeletes = map[int]*PendingTableWrites{}
-	lastFlushWriteTime = time.Now()
-	lastFlushDeleteTime = time.Now()
+	// Reset the test-injection seams to their defaults.
 	NewBatch = func(database kv.Store) kv.Batch {
 		return database.NewBatch(MaxBatchSize)
 	}
+	writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {
+		uniqueDocids := removeDuplicatesEfficiently(docids)
+		content := encodeInvertedValue(uniqueDocids)
+		if len(key) == 0 {
+			key = encodeInvertedKey(tableId, kw, len(docids))
+		}
+		batch.Put(key, content)
+	}
 
-	if err := Init(env.DB, env.Mpsc); err != nil {
+	opts := Options{
+		FlushTicker:        FlushTicker,
+		FlushWaitTimeout:   FlushWaitTimeout,
+		FlushWaitBatchSize: FlushWaitBatchSize,
+		FlushCooldown:      FlushCooldown,
+	}
+	idx, err := New(env.DB, env.Mpsc, opts)
+	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
 
-	return &testEnv{Env: env}
+	// Also set the legacy singleton so any code that still calls the package-level
+	// helpers (e.g. tests that directly call flushPendingWrites via forceFlush) works.
+	_legacyIdx = idx
+
+	return &testEnv{Env: env, idx: idx}
 }
 
 // teardown shuts down everything in reverse init order.
@@ -47,7 +60,8 @@ func (e *testEnv) teardown() {
 	e.T.Helper()
 
 	// 1. inverted index
-	CloseAndWait()
+	e.idx.CloseAndWait()
+	_legacyIdx = nil
 
 	// 2. base resources (queue → db → temp dir)
 	e.TeardownBase()
@@ -71,10 +85,11 @@ func (closedDB) ScanRange([]byte, []byte, func([]byte, []byte) bool) error {
 	return fmt.Errorf("closed")
 }
 
-// simulateClosedDB replaces the package-level db with a closedDB stub and
+// simulateClosedDB replaces the index db with a closedDB stub and
 // returns a restore function that puts the original db back.
 func simulateClosedDB() (restore func()) {
-	orig := db
-	db = closedDB{}
-	return func() { db = orig }
+	// Operates on _legacyIdx.db (which is the same as env.idx.db in tests).
+	orig := _legacyIdx.db
+	_legacyIdx.db = closedDB{}
+	return func() { _legacyIdx.db = orig }
 }

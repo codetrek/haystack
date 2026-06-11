@@ -5,21 +5,6 @@ import (
 	"time"
 )
 
-var (
-	pendingWrites      = map[int]*PendingTableWrites{}
-	lastFlushWriteTime = time.Now()
-
-	pendingDeletes      = map[int]*PendingTableWrites{}
-	lastFlushDeleteTime = time.Now()
-)
-
-var (
-	FlushTicker        = 1 * time.Second
-	FlushWaitTimeout   = 3 * time.Second
-	FlushWaitBatchSize = 200
-	FlushCooldown      = 1 * time.Second
-)
-
 type BufferedWrites struct {
 }
 
@@ -36,37 +21,38 @@ type PendingTableWrites struct {
 }
 
 type flushPendingWritesTask struct {
+	idx     *Index
 	closing bool
 }
 
 func (t *flushPendingWritesTask) Run() error {
 	// Flush pending writes to the database
-	flushPendingWrites(t.closing)
-	flushPendingDeletes(t.closing, MaxInvertedIndexSize)
+	t.idx.flushPendingWrites(t.closing)
+	t.idx.flushPendingDeletes(t.closing, t.idx.opts.maxInvertedIndexSize())
 	return nil
 }
 
-// getPendingWrite returns the pending write cache for the table
-// It will create a new cache if it does not exist
-func getPendingWrite(tableId int) *PendingTableWrites {
-	wp := pendingWrites[tableId]
+// getPendingWrite returns the pending write cache for the table.
+// It will create a new cache if it does not exist.
+func (idx *Index) getPendingWrite(tableId int) *PendingTableWrites {
+	wp := idx.pendingWrites[tableId]
 	if wp == nil {
 		wp = &PendingTableWrites{
 			TableId:       tableId,
 			InvertedIndex: make(map[string]RelatedDocs),
 		}
-		pendingWrites[tableId] = wp
+		idx.pendingWrites[tableId] = wp
 	}
 
 	return wp
 }
 
-// flushPendingWrites flushes the pending writes to the database
-func flushPendingWrites(closing bool) {
-	if !closing && time.Since(lastFlushWriteTime) < FlushCooldown {
+// flushPendingWrites flushes the pending writes to the database.
+func (idx *Index) flushPendingWrites(closing bool) {
+	if !closing && time.Since(idx.lastFlushWriteTime) < idx.opts.flushCooldown() {
 		return
 	}
-	lastFlushWriteTime = time.Now()
+	idx.lastFlushWriteTime = time.Now()
 
 	if closing {
 		log.Println("[Inverted] Flushing pending writes...")
@@ -75,16 +61,19 @@ func flushPendingWrites(closing bool) {
 		}()
 	}
 
-	batch := NewBatch(db)
+	batch := NewBatch(idx.db)
+
+	flushWaitTimeout := idx.opts.flushWaitTimeout()
+	flushWaitBatchSize := idx.opts.flushWaitBatchSize()
 
 	wordsCount := 0
 	docsCount := 0
-	for _, wp := range pendingWrites {
+	for _, wp := range idx.pendingWrites {
 		for kw, relatedDocs := range wp.InvertedIndex {
 			// Skip the keyword if it has been updated in the last 2 seconds
 			// and has less than 50 documents
-			if !closing && len(relatedDocs.DocIds) < FlushWaitBatchSize &&
-				time.Since(relatedDocs.UpdatedAt) < FlushWaitTimeout {
+			if !closing && len(relatedDocs.DocIds) < flushWaitBatchSize &&
+				time.Since(relatedDocs.UpdatedAt) < flushWaitTimeout {
 				continue
 			}
 
@@ -96,7 +85,7 @@ func flushPendingWrites(closing bool) {
 
 			// delete empty table
 			if len(wp.InvertedIndex) == 0 {
-				delete(pendingWrites, wp.TableId)
+				delete(idx.pendingWrites, wp.TableId)
 			}
 		}
 	}
@@ -104,26 +93,26 @@ func flushPendingWrites(closing bool) {
 	batch.Commit()
 }
 
-// getPendingDelete returns the pending delete cache for the table
-// It will create a new cache if it does not exist
-func getPendingDelete(tableId int) *PendingTableWrites {
-	wp := pendingDeletes[tableId]
+// getPendingDelete returns the pending delete cache for the table.
+// It will create a new cache if it does not exist.
+func (idx *Index) getPendingDelete(tableId int) *PendingTableWrites {
+	wp := idx.pendingDeletes[tableId]
 	if wp == nil {
 		wp = &PendingTableWrites{
 			TableId:       tableId,
 			InvertedIndex: make(map[string]RelatedDocs),
 		}
-		pendingDeletes[tableId] = wp
+		idx.pendingDeletes[tableId] = wp
 	}
 
 	return wp
 }
 
-func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
-	if !closing && time.Since(lastFlushDeleteTime) < FlushCooldown {
+func (idx *Index) flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
+	if !closing && time.Since(idx.lastFlushDeleteTime) < idx.opts.flushCooldown() {
 		return
 	}
-	lastFlushDeleteTime = time.Now()
+	idx.lastFlushDeleteTime = time.Now()
 
 	if closing {
 		log.Println("[Inverted] Flushing pending deletes...")
@@ -132,9 +121,9 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 		}()
 	}
 
-	batch := NewBatch(db)
+	batch := NewBatch(idx.db)
 
-	for _, wp := range pendingDeletes {
+	for _, wp := range idx.pendingDeletes {
 		for kw, relatedDocs := range wp.InvertedIndex {
 			// Skip the keyword if it has been updated in the last 2 seconds
 			// and has less than 50 documents
@@ -142,7 +131,7 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 				continue
 			}
 
-			err := removeDocumentsFromInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, maxKeywordIndexSize)
+			err := idx.removeDocumentsFromInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, maxKeywordIndexSize)
 			if err != nil {
 				log.Printf("[Inverted] Error removing documents from inverted index: %v", err)
 			}
@@ -150,7 +139,7 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 
 			// delete empty table
 			if len(wp.InvertedIndex) == 0 {
-				delete(pendingDeletes, wp.TableId)
+				delete(idx.pendingDeletes, wp.TableId)
 			}
 		}
 	}
@@ -158,10 +147,10 @@ func flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 	batch.Commit()
 }
 
-// clearPendingWrites clears the pending writes for the table
-// This function is not thread-safe and should be called in database mpsc queue
-// It is used when the table is deleted
-func clearPendingWrites(tableId int) {
-	delete(pendingWrites, tableId)
-	delete(pendingDeletes, tableId)
+// clearPendingWrites clears the pending writes for the table.
+// This function is not thread-safe and should be called in database mpsc queue.
+// It is used when the table is deleted.
+func (idx *Index) clearPendingWrites(tableId int) {
+	delete(idx.pendingWrites, tableId)
+	delete(idx.pendingDeletes, tableId)
 }

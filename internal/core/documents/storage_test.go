@@ -30,7 +30,7 @@ func TestInit(t *testing.T) {
 	mpsc.Start()
 	defer mpsc.Stop()
 
-	err = Init(db, mpsc)
+	err = Init(db, mpsc, nil)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestCloseAndWait(t *testing.T) {
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()
 
-	err = Init(db, mpsc)
+	err = Init(db, mpsc, nil)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}

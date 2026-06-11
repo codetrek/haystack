@@ -104,13 +104,13 @@ This is a test project.`,
 		if !assert.NoError(t, invertedindex.Init(indexdb, mpsc)) {
 			return
 		}
-		if !assert.NoError(t, documents.Init(db, mpsc)) {
+		if !assert.NoError(t, documents.Init(db, mpsc, invertedindex.GetLegacy())) {
 			return
 		}
 		if !assert.NoError(t, workspace.Init(db)) {
 			return
 		}
-		if !assert.NoError(t, symbols.Init(db, mpsc)) {
+		if !assert.NoError(t, symbols.Init(db, mpsc, invertedindex.GetLegacy())) {
 			return
 		}
 

@@ -33,8 +33,8 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 	mpsc.Start()
 
 	invertedindex.Init(db, mpsc)
-	documents.Init(db, mpsc)
-	symbols.Init(db, mpsc)
+	documents.Init(db, mpsc, invertedindex.GetLegacy())
+	symbols.Init(db, mpsc, invertedindex.GetLegacy())
 
 	err = Init(db)
 	if err != nil {
@@ -75,7 +75,7 @@ func TestInit(t *testing.T) {
 	mpsc.Start()
 	defer mpsc.Stop()
 
-	err = documents.Init(db, mpsc)
+	err = documents.Init(db, mpsc, nil)
 	if err != nil {
 		t.Fatalf("Storage Init failed: %v", err)
 	}

@@ -210,16 +210,24 @@ func startTestServer(t *testing.T) func() {
 	assert.NoError(t, err)
 	indexer.SetIdAllocator(alloc)
 
-	err = invertedindex.Init(indexdb, mpsc)
+	idx, err := invertedindex.New(indexdb, mpsc, invertedindex.Options{
+		FlushTicker:        invertedindex.FlushTicker,
+		FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
+		FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
+		FlushCooldown:      invertedindex.FlushCooldown,
+	})
 	assert.NoError(t, err)
+	// Searcher still uses the package-level invertedindex.Search/GetDocs wrappers,
+	// so we must keep _legacyIdx in sync until the searcher is converted.
+	invertedindex.SetLegacy(idx)
 
-	err = documents.Init(db, mpsc)
+	err = documents.Init(db, mpsc, idx)
 	assert.NoError(t, err)
 
 	err = workspace.Init(db)
 	assert.NoError(t, err)
 
-	err = symbols.Init(db, mpsc)
+	err = symbols.Init(db, mpsc, idx)
 	assert.NoError(t, err)
 
 	indexer.Run(wg)
@@ -235,7 +243,8 @@ func startTestServer(t *testing.T) func() {
 		running.Shutdown()
 		wg.Wait()
 		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
+		idx.CloseAndWait()
+		invertedindex.SetLegacy(nil)
 		mpsc.Stop()
 		alloc.Close()
 		db.Close()

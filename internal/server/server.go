@@ -24,10 +24,21 @@ import (
 
 // Function variables for Init calls, enabling test overrides.
 var (
-	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) error { return invertedindex.Init(db, mpsc) }
-	documentsInit     = func(db kv.Store, mpsc *queue.Mpsc) error { return documents.Init(db, mpsc) }
-	workspaceInit     = func(db kv.Store) error { return workspace.Init(db) }
-	symbolsInit       = func(db kv.Store, mpsc *queue.Mpsc) error { return symbols.Init(db, mpsc) }
+	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (*invertedindex.Index, error) {
+		return invertedindex.New(db, mpsc, invertedindex.Options{
+			FlushTicker:        invertedindex.FlushTicker,
+			FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
+			FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
+			FlushCooldown:      invertedindex.FlushCooldown,
+		})
+	}
+	documentsInit = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
+		return documents.Init(db, mpsc, idx)
+	}
+	workspaceInit = func(db kv.Store) error { return workspace.Init(db) }
+	symbolsInit   = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
+		return symbols.Init(db, mpsc, idx)
+	}
 )
 
 func Run() {
@@ -74,12 +85,16 @@ func run() error {
 	}
 	indexer.SetIdAllocator(idAlloc)
 
-	if err := invertedindexInit(indexdb, mpsc); err != nil {
+	idx, err := invertedindexInit(indexdb, mpsc)
+	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing inverted index: %w", err)
 	}
+	// Keep the legacy package-level reference in sync so that packages not yet
+	// converted to the instance-based API (e.g. searcher) still work.
+	invertedindex.SetLegacy(idx)
 
-	if err := documentsInit(db, mpsc); err != nil {
+	if err := documentsInit(db, mpsc, idx); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing storage: %w", err)
 	}
@@ -92,7 +107,7 @@ func run() error {
 	// Wire up the documents count function for workspace to derive TotalFiles.
 	workspace.CountByWorkspaceFunc = documents.CountByWorkspace
 
-	if err := symbolsInit(db, mpsc); err != nil {
+	if err := symbolsInit(db, mpsc, idx); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing symbols: %w", err)
 	}
@@ -116,7 +131,7 @@ func run() error {
 
 	wg.Wait()
 	documents.CloseAndWait()
-	invertedindex.CloseAndWait()
+	idx.CloseAndWait()
 	symbols.CloseAndWait()
 	mpsc.Stop()
 

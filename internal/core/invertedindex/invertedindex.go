@@ -12,12 +12,12 @@ type SearchResult struct {
 	WildDocIds map[string]struct{} `json:"wildDocIds,omitempty"`
 }
 
-func Search(tableId int, query string, limit int, filterKeyword func(string) bool) SearchResult {
+func (idx *Index) Search(tableId int, query string, limit int, filterKeyword func(string) bool) SearchResult {
 	results := SearchResult{
 		DocIds: make(map[string]struct{}),
 	}
 
-	err := db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
+	err := idx.db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
 		if filterKeyword != nil && !filterKeyword(string(key)) {
 			return true
 		}
@@ -42,12 +42,12 @@ func Search(tableId int, query string, limit int, filterKeyword func(string) boo
 	return results
 }
 
-func GetDocs(tableId int, key string) SearchResult {
+func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 	results := SearchResult{
 		DocIds: make(map[string]struct{}),
 	}
 
-	err := db.Scan(encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
+	err := idx.db.Scan(encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
 		for _, docid := range decodeInvertedValue(value) {
 			results.DocIds[docid] = struct{}{}
 		}
@@ -60,22 +60,21 @@ func GetDocs(tableId int, key string) SearchResult {
 	return results
 }
 
-// Update updates the keywords index for a document
-// It will add the document to the keywords index and remove the document from the keywords index
-// if len(newKeywords) == 0, it will remove the document from the keywords index
-// This function MUST be called in dbMPSCQueue
-func Update(tableId int, docid string, newKeywords, oldKeywords []string) {
+// Update updates the keywords index for a document.
+// If len(newKeywords) == 0, it will remove the document from the keywords index.
+// This function MUST be called in dbMPSCQueue.
+func (idx *Index) Update(tableId int, docid string, newKeywords, oldKeywords []string) {
 	// Handle the case of complete deletion
 	if len(newKeywords) == 0 {
 		if len(oldKeywords) > 0 {
-			removeIndex(tableId, docid, oldKeywords)
+			idx.removeIndex(tableId, docid, oldKeywords)
 		}
 		return
 	}
 
 	// Handle the case of complete addition
 	if len(oldKeywords) == 0 {
-		updateIndex(tableId, docid, newKeywords)
+		idx.updateIndex(tableId, docid, newKeywords)
 		return
 	}
 
@@ -112,10 +111,10 @@ func Update(tableId int, docid string, newKeywords, oldKeywords []string) {
 		}
 	}
 
-	removeIndex(tableId, docid, removedWords)
+	idx.removeIndex(tableId, docid, removedWords)
 
 	// Add new words to the keywords index
 	if len(newWords) > 0 {
-		updateIndex(tableId, docid, newWords)
+		idx.updateIndex(tableId, docid, newWords)
 	}
 }

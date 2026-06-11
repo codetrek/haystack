@@ -24,14 +24,20 @@ func setupTestEnv(t *testing.T) *testEnv {
 	env := testutil.SetupEnv(t, "TestDocQueue")
 
 	// Init inverted index first (documents.Create depends on it).
-	if err := invertedindex.Init(env.DB, env.Mpsc); err != nil {
+	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{
+		FlushTicker:        invertedindex.FlushTicker,
+		FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
+		FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
+		FlushCooldown:      invertedindex.FlushCooldown,
+	})
+	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
 
 	// Init documents package – sets the package-level globals.
-	if err := Init(env.DB, env.Mpsc); err != nil {
-		invertedindex.CloseAndWait()
+	if err := Init(env.DB, env.Mpsc, idx); err != nil {
+		idx.CloseAndWait()
 		env.TeardownBase()
 		t.Fatalf("failed to init documents: %v", err)
 	}
@@ -46,10 +52,13 @@ func (e *testEnv) teardown() {
 	e.T.Helper()
 
 	// 1. documents package
+	idx := idxInst
 	CloseAndWait()
 
 	// 2. inverted index
-	invertedindex.CloseAndWait()
+	if idx != nil {
+		idx.CloseAndWait()
+	}
 
 	// 3. base resources (queue → db → temp dir)
 	e.TeardownBase()

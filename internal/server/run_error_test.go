@@ -7,14 +7,18 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 var errFake = errors.New("fake init error")
 
-// noopInitDB is a no-op Init replacement for kv.Store + *queue.Mpsc.
-func noopInitDB(_ kv.Store, _ *queue.Mpsc) error { return nil }
+// noopInitII is a no-op invertedindexInit replacement: returns a nil Index with no error.
+func noopInitII(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) { return nil, nil }
+
+// noopInitDoc is a no-op documentsInit / symbolsInit replacement.
+func noopInitDoc(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error { return nil }
 
 // noopInitDBOnly is a no-op Init replacement for kv.Store only.
 func noopInitDBOnly(_ kv.Store) error { return nil }
@@ -27,10 +31,10 @@ func saveAndMockInits() func() {
 	origWS := workspaceInit
 	origSym := symbolsInit
 
-	invertedindexInit = noopInitDB
-	documentsInit = noopInitDB
+	invertedindexInit = noopInitII
+	documentsInit = noopInitDoc
 	workspaceInit = noopInitDBOnly
-	symbolsInit = noopInitDB
+	symbolsInit = noopInitDoc
 
 	return func() {
 		invertedindexInit = origII
@@ -52,8 +56,8 @@ func TestRun_InvertedIndexInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) error {
-		return errFake
+	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) {
+		return nil, errFake
 	}
 
 	setupRunEnv(t)
@@ -67,7 +71,7 @@ func TestRun_DocumentsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	documentsInit = func(_ kv.Store, _ *queue.Mpsc) error {
+	documentsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error {
 		return errFake
 	}
 
@@ -97,7 +101,7 @@ func TestRun_SymbolsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	symbolsInit = func(_ kv.Store, _ *queue.Mpsc) error {
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error {
 		return errFake
 	}
 

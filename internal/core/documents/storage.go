@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	db   kv.Store
-	mpsc *queue.Mpsc
+	db      kv.Store
+	mpsc    *queue.Mpsc
+	idxInst *invertedindex.Index
 
 	mutex             sync.Mutex
 	Workspaces        map[int]*Workspace
@@ -45,9 +46,10 @@ func markWorkspaceDeleted(workspaceId int) {
 	deletedWorkspaces[workspaceId] = struct{}{}
 }
 
-func Init(database kv.Store, q *queue.Mpsc) error {
+func Init(database kv.Store, q *queue.Mpsc, idx *invertedindex.Index) error {
 	db = database
 	mpsc = q
+	idxInst = idx
 	Workspaces = make(map[int]*Workspace)
 	deletedWorkspaces = make(map[int]struct{})
 	docCount = make(map[int]int)
@@ -61,6 +63,7 @@ func CloseAndWait() {
 
 	db = nil
 	mpsc = nil
+	idxInst = nil
 	Workspaces = nil
 	deletedWorkspaces = nil
 
@@ -72,7 +75,7 @@ func CloseAndWait() {
 }
 
 func Create(workspaceId int, desc string) error {
-	inverted, err := invertedindex.CreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
+	inverted, err := idxInst.CreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
 	if err != nil {
 		return fmt.Errorf("failed to create inverted index table: %w", err)
 	}
@@ -114,7 +117,7 @@ func Delete(workspaceId int) error {
 		}
 		markWorkspaceDeleted(workspaceId)
 
-		invertedindex.DeleteTable(ft.InvertedId)
+		idxInst.DeleteTable(ft.InvertedId)
 
 		batch := db.NewBatch(0)
 		batch.DeletePrefix(EncodeDocumentMetaKey(workspaceId, ""))

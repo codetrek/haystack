@@ -3,8 +3,6 @@ package documents
 import (
 	"fmt"
 	"log"
-
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 )
 
 type Document struct {
@@ -98,7 +96,7 @@ func SaveNewDocuments(workspaceid int, docs []*Document) error {
 
 		batch := NewBatch(db)
 		for _, doc := range docs {
-			invertedindex.Update(ft.InvertedId, doc.ID, doc.Words, nil)
+			idxInst.Update(ft.InvertedId, doc.ID, doc.Words, nil)
 			saveDocument(batch, workspaceid, doc)
 		}
 		err = batch.Commit()
@@ -143,7 +141,7 @@ func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 				continue
 			}
 
-			invertedindex.Update(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
+			idxInst.Update(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
 
 			// Save the updated document
 			saveDocument(batch, workspaceid, updatedDoc)
@@ -184,7 +182,7 @@ func DeleteDocument(workspaceId int, docId string) error {
 
 		defer log.Printf("[Documents] Document `%s` deleted from workspace `%d`", doc.RelPath, workspaceId)
 
-		invertedindex.Update(ft.InvertedId, docId, []string{}, doc.Words)
+		idxInst.Update(ft.InvertedId, docId, []string{}, doc.Words)
 
 		// delete the document meta and words
 		batch := NewBatch(db)
