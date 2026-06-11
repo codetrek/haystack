@@ -8,8 +8,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/searchcore/tokenizer"
 	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/tokenizer"
 )
 
 type Function struct {

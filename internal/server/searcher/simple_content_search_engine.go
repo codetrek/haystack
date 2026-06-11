@@ -9,8 +9,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/searchcore/tokenizer"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/searchcore/tokenizer"
 )
 
 // SimpleContentSearchEngine is a simple search engine that uses regex to find documents
