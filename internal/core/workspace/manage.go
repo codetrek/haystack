@@ -116,16 +116,18 @@ func Create(workspacePath string) (*Workspace, error) {
 	workspace := &Workspace{
 		Id:               meta.ID,
 		Path:             workspacePath,
+		Desc:             meta.Desc,
 		UseGlobalFilters: true,
 		CreatedAt:        meta.CreatedAt,
 		LastAccessed:     meta.LastAccessed,
 	}
 
-	// Persist UseGlobalFilters=true into the record's Extra field.
-	workspace.mutex.Lock()
+	// Persist UseGlobalFilters=true into the record's Extra field. The workspace
+	// is not yet published into the maps, so no other goroutine can observe it;
+	// the per-workspace mutex is unnecessary here.
 	rec := meta
+	rec.Desc = workspace.Desc
 	rec.Extra = encodeExtra(workspace.UseGlobalFilters, workspace.Filters)
-	workspace.mutex.Unlock()
 	if err := catalog.Save(rec); err != nil {
 		log.Printf("[Workspace] Warning: failed to save extra for new workspace %d: %v", workspace.Id, err)
 	}
@@ -148,15 +150,18 @@ func Delete(workspaceId int) error {
 		return fmt.Errorf("workspace not found")
 	}
 
-	workspace.SetDeleted()
-	delete(workspaces, workspaceId)
-	delete(workspacePaths, workspace.Path)
-
-	// catalog.Delete removes the record AND calls docs.Delete — no separate
-	// docStoreInst.Delete call needed.
+	// Delete the catalog record (and its document data) FIRST. If this fails the
+	// in-memory overlay is left untouched so it stays consistent with disk; a
+	// later retry can succeed. catalog.Delete removes the record AND calls
+	// docs.Delete — no separate docStoreInst.Delete call needed.
 	if err := catalog.Delete(workspaceId); err != nil {
 		return fmt.Errorf("failed to delete workspace from catalog: %w", err)
 	}
+
+	// Catalog delete succeeded — now drop the workspace from the overlay.
+	workspace.SetDeleted()
+	delete(workspaces, workspaceId)
+	delete(workspacePaths, workspace.Path)
 
 	symbols.Delete(workspace.Id)
 
@@ -194,11 +199,18 @@ func Move(id int, newPath string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace path must be a directory")
 	}
 
-	log.Printf("[Workspace] Moving workspace %v from %v to %v", id, workspaces[id].Path, newPath)
-
 	oldPath := workspace.Path
+	log.Printf("[Workspace] Moving workspace %v from %v to %v", id, oldPath, newPath)
+
+	// Mutate Path/LastAccessed under the per-workspace mutex: Save() and
+	// Serialize() read these fields under the same lock, so writing them without
+	// it would be a data race. Save() takes the mutex itself, so release it
+	// first.
+	workspace.mutex.Lock()
 	workspace.Path = newPath
 	workspace.LastAccessed = time.Now()
+	workspace.mutex.Unlock()
+
 	workspace.Save() //nolint:errcheck — best-effort; catalog.Save guards the rename
 
 	workspacePaths[newPath] = workspace

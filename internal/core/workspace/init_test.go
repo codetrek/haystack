@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
+	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/searchcore/collection"
 	"github.com/codetrek/haystack/searchcore/documents"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
@@ -233,18 +235,26 @@ func TestInitWithMalformedData(t *testing.T) {
 
 // encodeOldWorkspace produces the legacy on-disk JSON that old haystack wrote.
 func encodeOldWorkspace(id int, path string, useGlobal bool, createdAt, lastAccessed, lastFullSync time.Time) []byte {
+	return encodeOldWorkspaceWithFilters(id, path, useGlobal, nil, createdAt, lastAccessed, lastFullSync)
+}
+
+// encodeOldWorkspaceWithFilters is encodeOldWorkspace plus a custom *types.Filters
+// payload, matching the legacy on-disk shape that carried filters inline.
+func encodeOldWorkspaceWithFilters(id int, path string, useGlobal bool, filters *types.Filters, createdAt, lastAccessed, lastFullSync time.Time) []byte {
 	type oldWS struct {
-		ID               int       `json:"id"`
-		Path             string    `json:"path"`
-		UseGlobalFilters bool      `json:"use_global_filters"`
-		CreatedAt        time.Time `json:"created_time"`
-		LastAccessed     time.Time `json:"last_accessed_time"`
-		LastFullSync     time.Time `json:"last_full_sync_time"`
+		ID               int            `json:"id"`
+		Path             string         `json:"path"`
+		UseGlobalFilters bool           `json:"use_global_filters"`
+		Filters          *types.Filters `json:"filters,omitempty"`
+		CreatedAt        time.Time      `json:"created_time"`
+		LastAccessed     time.Time      `json:"last_accessed_time"`
+		LastFullSync     time.Time      `json:"last_full_sync_time"`
 	}
 	b, _ := json.Marshal(oldWS{
 		ID:               id,
 		Path:             path,
 		UseGlobalFilters: useGlobal,
+		Filters:          filters,
 		CreatedAt:        createdAt,
 		LastAccessed:     lastAccessed,
 		LastFullSync:     lastFullSync,
@@ -260,15 +270,17 @@ func oldRecordKey(id int) []byte {
 // TestMigrateLegacyRecords is the required migration proof test.
 //
 // Scenario:
-//   - id=1: OLD format  → must be migrated to new format.
-//   - id=2: OLD format  → must be migrated to new format.
-//   - id=3: NEW format  → must be left untouched.
+//   - id=1: OLD format                       → must be migrated to new format.
+//   - id=2: OLD format                       → must be migrated to new format.
+//   - id=3: NEW format                       → must be left untouched.
+//   - id=4: OLD format with non-nil Filters  → filters must round-trip.
 //
 // Assertions after migration:
-//   - collection.New succeeds and sees all three records.
-//   - workspace.Init builds correct *Workspace for each (path, times, UseGlobalFilters).
+//   - collection.New succeeds and sees all four records.
+//   - workspace.Init builds correct *Workspace for each (path, times, UseGlobalFilters, Filters).
+//   - The incr-id counter (key-type 1) is left byte-for-byte unchanged.
 //   - Running migration again is idempotent (on-disk bytes unchanged for id=3,
-//     and count stays at 3).
+//     and count stays at 4).
 func TestMigrateLegacyRecords(t *testing.T) {
 	tempDir := t.TempDir()
 	conf.Get().Global.DataPath = tempDir
@@ -285,6 +297,14 @@ func TestMigrateLegacyRecords(t *testing.T) {
 	db.Put(oldRecordKey(1), encodeOldWorkspace(1, "/ws/one", true, now, now, now))
 	db.Put(oldRecordKey(2), encodeOldWorkspace(2, "/ws/two", false, now, now, now))
 
+	// id=4: old format carrying a non-nil custom filter set that must survive
+	// migration into the new Extra payload.
+	customFilters := &types.Filters{
+		Include: []string{"*.go", "*.rs"},
+		Exclude: types.Exclude{UseGitIgnore: true, Customized: []string{"target/", "vendor/"}},
+	}
+	db.Put(oldRecordKey(4), encodeOldWorkspaceWithFilters(4, "/ws/four", false, customFilters, now, now, now))
+
 	// Seed a new-format record.
 	newRec3 := collection.Record{
 		ID:           3,
@@ -296,15 +316,22 @@ func TestMigrateLegacyRecords(t *testing.T) {
 	newRec3JSON, _ := json.Marshal(newRec3)
 	db.Put(oldRecordKey(3), newRec3JSON)
 
-	// Set the incr-id counter to 3 so future allocations are safe.
-	db.Put([]byte{collection.DefaultKeyTypeIncrId}, []byte("3"))
+	// Set the incr-id counter to 4 so future allocations are safe.
+	db.Put([]byte{collection.DefaultKeyTypeIncrId}, []byte("4"))
 
-	// --- Read back key=3 before any migration to compare for idempotency ---
+	// --- Capture incr-id counter + key=3 bytes before any migration ---
+	incrBefore, _ := db.Get([]byte{collection.DefaultKeyTypeIncrId})
 	val3Before, _ := db.Get(oldRecordKey(3))
 
 	// --- Run migration (first time) ---
 	if err := MigrateLegacyRecords(db, collection.Options{}); err != nil {
 		t.Fatalf("MigrateLegacyRecords: %v", err)
+	}
+
+	// --- Verify the incr-id counter (key-type 1) was NOT touched ---
+	incrAfter, _ := db.Get([]byte{collection.DefaultKeyTypeIncrId})
+	if string(incrBefore) != string(incrAfter) {
+		t.Errorf("incr-id counter changed by migration\nbefore: %s\nafter:  %s", incrBefore, incrAfter)
 	}
 
 	// --- Verify key=3 was NOT rewritten by migration ---
@@ -369,6 +396,24 @@ func TestMigrateLegacyRecords(t *testing.T) {
 		t.Errorf("ws3.Id = %d, want 3", ws3.Id)
 	}
 
+	// --- Assert workspace 4: custom filters round-trip through migration ---
+	ws4, err := GetByPath("/ws/four")
+	if err != nil {
+		t.Fatalf("GetByPath /ws/four: %v", err)
+	}
+	if ws4.Id != 4 {
+		t.Errorf("ws4.Id = %d, want 4", ws4.Id)
+	}
+	if ws4.UseGlobalFilters {
+		t.Error("ws4.UseGlobalFilters should be false")
+	}
+	if ws4.Filters == nil {
+		t.Fatal("ws4.Filters should not be nil after migration")
+	}
+	if !reflect.DeepEqual(ws4.Filters, customFilters) {
+		t.Errorf("ws4.Filters did not round-trip\n got: %+v\nwant: %+v", ws4.Filters, customFilters)
+	}
+
 	// --- Idempotency: running migration again must not change id=3 ---
 	if err := MigrateLegacyRecords(db, collection.Options{}); err != nil {
 		t.Fatalf("second MigrateLegacyRecords: %v", err)
@@ -381,8 +426,8 @@ func TestMigrateLegacyRecords(t *testing.T) {
 
 	// --- Total count unchanged ---
 	recs := cat.List()
-	if len(recs) != 3 {
-		t.Errorf("catalog.List() = %d records after second migration, want 3", len(recs))
+	if len(recs) != 4 {
+		t.Errorf("catalog.List() = %d records after second migration, want 4", len(recs))
 	}
 }
 

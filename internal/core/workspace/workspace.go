@@ -1,7 +1,6 @@
 package workspace
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -39,6 +38,7 @@ type IndexingProgress struct {
 type Workspace struct {
 	Id               int            `json:"id"`
 	Path             string         `json:"path"`
+	Desc             string         `json:"desc,omitempty"`
 	UseGlobalFilters bool           `json:"use_global_filters"`
 	Filters          *types.Filters `json:"filters,omitempty" optional:"true"`
 
@@ -117,6 +117,7 @@ func (w *Workspace) Save() error {
 	rec := collection.Record{
 		ID:           w.Id,
 		Name:         w.Path,
+		Desc:         w.Desc,
 		CreatedAt:    w.CreatedAt,
 		LastAccessed: w.LastAccessed,
 		LastFullSync: w.LastFullSync,
@@ -204,36 +205,4 @@ func (w *Workspace) IsDeleted() bool {
 	defer w.mutex.Unlock()
 
 	return w.deleted
-}
-
-// wsOnDisk is the legacy JSON shape emitted by Serialize. Kept for API
-// compatibility with any callers that consume the output (e.g. tests that
-// unmarshal the blob).
-type wsOnDisk struct {
-	Id               int            `json:"id"`
-	Path             string         `json:"path"`
-	UseGlobalFilters bool           `json:"use_global_filters"`
-	Filters          *types.Filters `json:"filters,omitempty"`
-	CreatedAt        time.Time      `json:"created_time"`
-	LastAccessed     time.Time      `json:"last_accessed_time"`
-	LastFullSync     time.Time      `json:"last_full_sync_time"`
-}
-
-func (w *Workspace) Serialize() ([]byte, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if w.deleted {
-		return nil, fmt.Errorf("workspace is deleted")
-	}
-
-	return json.Marshal(wsOnDisk{
-		Id:               w.Id,
-		Path:             w.Path,
-		UseGlobalFilters: w.UseGlobalFilters,
-		Filters:          w.Filters,
-		CreatedAt:        w.CreatedAt,
-		LastAccessed:     w.LastAccessed,
-		LastFullSync:     w.LastFullSync,
-	})
 }

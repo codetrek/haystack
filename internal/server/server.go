@@ -101,9 +101,12 @@ func run() error {
 	workspace.SetDocStore(st)
 
 	// Migrate any legacy workspace records BEFORE constructing the Catalog so
-	// that collection.New sees only the new-format JSON.
+	// that collection.New sees only the new-format JSON. A migration failure may
+	// leave the store partially migrated, so abort startup rather than run
+	// collection.New against inconsistent data.
 	if err := workspace.MigrateLegacyRecords(db, collection.Options{}); err != nil {
-		log.Printf("[Server] Warning: workspace migration error (non-fatal): %v", err)
+		running.Shutdown()
+		return fmt.Errorf("error migrating legacy workspace records: %w", err)
 	}
 
 	cat, err := collection.New(db, st, collection.Options{})

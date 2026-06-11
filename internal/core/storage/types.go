@@ -1,9 +1,9 @@
 package storage
 
 const (
-	// Workspace key types
-	KeyTypeWorkspaceIncrId = byte(1)
-	KeyTypeWorkspace       = byte(2)
+	// Workspace registry key types (1 = incr-id counter, 2 = record) are now
+	// owned by searchcore/collection (collection.DefaultKeyTypeIncrId /
+	// DefaultKeyTypeRecord); they are intentionally not redeclared here.
 
 	// Document key types
 	KeyTypeDocWorkspace = byte(10)

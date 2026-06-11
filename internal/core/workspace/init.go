@@ -36,6 +36,7 @@ func Init(cat *collection.Catalog) error {
 		ws := &Workspace{
 			Id:               r.ID,
 			Path:             utils.NormalizePath(r.Name),
+			Desc:             r.Desc,
 			UseGlobalFilters: useGlobal,
 			Filters:          filters,
 			CreatedAt:        r.CreatedAt,

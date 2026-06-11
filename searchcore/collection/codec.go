@@ -7,8 +7,9 @@ import (
 
 // Default on-disk key-type prefix bytes for the collection Catalog.
 //
-// These values match the existing haystack workspace registry (storage.KeyTypeWorkspaceIncrId
-// and storage.KeyTypeWorkspace) to ensure on-disk compatibility.
+// Values 1 (incr-id counter) and 2 (record) match the legacy haystack
+// workspace registry on-disk layout, so existing data is readable without
+// remapping key prefixes.
 //
 // Byte 0 (NUL) is reserved as the zero-value sentinel meaning "use default";
 // it cannot be selected as a custom prefix.

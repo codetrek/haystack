@@ -131,15 +131,14 @@ func TestStorageVersion(t *testing.T) {
 }
 
 func TestIsKeyType(t *testing.T) {
-	assert.True(t, IsKeyType(string([]byte{KeyTypeWorkspace, 'a'}), KeyTypeWorkspace))
-	assert.False(t, IsKeyType(string([]byte{KeyTypeDocMeta, 'a'}), KeyTypeWorkspace))
-	assert.False(t, IsKeyType("", KeyTypeWorkspace))
+	assert.True(t, IsKeyType(string([]byte{KeyTypeDocMeta, 'a'}), KeyTypeDocMeta))
+	assert.False(t, IsKeyType(string([]byte{KeyTypeDocMeta, 'a'}), KeyTypeDocWords))
+	assert.False(t, IsKeyType("", KeyTypeDocMeta))
 }
 
 func TestKeyTypeConstants(t *testing.T) {
 	// Verify no collisions between key types
 	types := []byte{
-		KeyTypeWorkspaceIncrId, KeyTypeWorkspace,
 		KeyTypeDocWorkspace, KeyTypeDocWords, KeyTypeDocMeta, KeyTypeDocPath,
 		KeyTypeInvertedRow, KeyTypeInvertedTable, KeyTypeInvertedNextTableId,
 		KeyTypeIdTableNextId, KeyTypeIdTableKey,

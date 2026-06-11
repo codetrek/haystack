@@ -1,6 +1,8 @@
 package collection_test
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -775,4 +777,64 @@ func TestNew_EqualKeyTypesErrors(t *testing.T) {
 	// IncrId zero → 1; Record set to 1 → collision.
 	_, err = collection.New(db, docs, collection.Options{KeyTypeRecord: collection.DefaultKeyTypeIncrId})
 	assert.Error(t, err, "explicit byte equal to the other default must be rejected")
+}
+
+// TestNew_SkipsEmptyNameRecords verifies the defensive guard in loadFromStore:
+// a persisted record whose Name is empty (corrupt or un-migrated legacy data)
+// must NOT be indexed, so it cannot poison byName[""] and collide with an
+// unrelated GetByName("") lookup. A well-formed record alongside it must still
+// load normally.
+func TestNew_SkipsEmptyNameRecords(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "collection-emptyname-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
+	require.NoError(t, err)
+	q := queue.NewMpsc("emptyname-q")
+	q.Start()
+	defer q.Stop()
+	idx, err := invertedindex.New(db, q, invertedindex.Options{})
+	require.NoError(t, err)
+	defer func() {
+		idx.CloseAndWait()
+		db.Close()
+	}()
+	docs, err := documents.New(db, q, idx, documents.Options{})
+	require.NoError(t, err)
+	defer docs.CloseAndWait()
+
+	recordKey := func(id int) []byte {
+		return []byte(fmt.Sprintf("%c%d", collection.DefaultKeyTypeRecord, id))
+	}
+
+	// id=1: empty-name record (must be skipped).
+	emptyRec := collection.Record{ID: 1, Name: ""}
+	emptyJSON, _ := json.Marshal(emptyRec)
+	require.NoError(t, db.Put(recordKey(1), emptyJSON))
+
+	// id=2: well-formed record (must load).
+	goodRec := collection.Record{ID: 2, Name: "/ws/good"}
+	goodJSON, _ := json.Marshal(goodRec)
+	require.NoError(t, db.Put(recordKey(2), goodJSON))
+
+	cat, err := collection.New(db, docs, collection.Options{})
+	require.NoError(t, err)
+
+	// The empty-name record must not be indexed by id...
+	_, err = cat.Get(1)
+	assert.Error(t, err, "empty-name record must not be loaded by id")
+
+	// ...nor by the empty name.
+	_, err = cat.GetByName("")
+	assert.Error(t, err, "GetByName(\"\") must not resolve to a poisoned record")
+
+	// The well-formed record must still be available.
+	got, err := cat.Get(2)
+	require.NoError(t, err)
+	assert.Equal(t, "/ws/good", got.Meta().Name)
+
+	// Only the good record appears in List().
+	list := cat.List()
+	assert.Len(t, list, 1)
 }

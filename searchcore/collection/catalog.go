@@ -126,6 +126,13 @@ func (c *Catalog) loadFromStore() error {
 			log.Printf("[Collection] Skipping corrupted record key %q: %v", string(key), err)
 			return true
 		}
+		if r.Name == "" {
+			// Defensive: a record with an empty name is either corrupt or an
+			// un-migrated legacy record. Indexing it would poison byName[""]
+			// and let an unrelated GetByName("") collide. Skip it.
+			log.Printf("[Collection] Skipping record key %q with empty name (id=%d)", string(key), r.ID)
+			return true
+		}
 		c.byID[r.ID] = r
 		c.byName[r.Name] = r.ID
 		return true

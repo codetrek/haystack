@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -66,6 +67,9 @@ type migrationProbe struct {
 // It does NOT modify the incr-id counter (key-type 1).
 //
 // Call this BEFORE collection.New so that the Catalog sees only new-format data.
+// If any record fails to migrate (unmarshal, marshal, or db.Put), it returns a
+// non-nil error so the caller can abort startup rather than run collection.New
+// against a partially-migrated store.
 func MigrateLegacyRecords(db kv.Store, opts collection.Options) error {
 	keyTypeRecord := opts.KeyTypeRecord
 	if keyTypeRecord == 0 {
@@ -114,8 +118,7 @@ func MigrateLegacyRecords(db kv.Store, opts collection.Options) error {
 	for _, item := range toMigrate {
 		var old legacyWorkspaceJSON
 		if err := json.Unmarshal(item.val, &old); err != nil {
-			log.Printf("[Workspace/Migrate] Failed to unmarshal old record key %q: %v — skipping", string(item.key), err)
-			continue
+			return fmt.Errorf("workspace migrate: unmarshal old record key %q: %w", string(item.key), err)
 		}
 
 		newRecord := collection.Record{
@@ -129,13 +132,11 @@ func MigrateLegacyRecords(db kv.Store, opts collection.Options) error {
 
 		newVal, err := json.Marshal(newRecord)
 		if err != nil {
-			log.Printf("[Workspace/Migrate] Failed to marshal new record for key %q: %v — skipping", string(item.key), err)
-			continue
+			return fmt.Errorf("workspace migrate: marshal new record for key %q: %w", string(item.key), err)
 		}
 
 		if err := db.Put(item.key, newVal); err != nil {
-			log.Printf("[Workspace/Migrate] Failed to write migrated record key %q: %v — skipping", string(item.key), err)
-			continue
+			return fmt.Errorf("workspace migrate: write migrated record key %q: %w", string(item.key), err)
 		}
 
 		log.Printf("[Workspace/Migrate] Migrated workspace id=%d path=%q to new format", old.ID, old.Path)
