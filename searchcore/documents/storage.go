@@ -53,10 +53,9 @@ type Options struct {
 // keywords, and path information in a kv.Store, and optionally maintains a
 // linked invertedindex.Index for full-text search.
 type Store struct {
-	db   kv.Store
-	q    queue.Queue
-	idx  *invertedindex.Index
-	opts Options
+	db  kv.Store
+	q   queue.Queue
+	idx *invertedindex.Index
 
 	// resolved on-disk key-type bytes (set in New from opts with defaults applied)
 	keyTypeDocWorkspace byte
@@ -95,7 +94,6 @@ func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) 
 		db:                  store,
 		q:                   q,
 		idx:                 idx,
-		opts:                opts,
 		keyTypeDocWorkspace: opts.KeyTypeDocWorkspace,
 		keyTypeDocWords:     opts.KeyTypeDocWords,
 		keyTypeDocMeta:      opts.KeyTypeDocMeta,

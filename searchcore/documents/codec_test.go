@@ -17,17 +17,17 @@ func newTestStore() *Store {
 }
 
 // ---------------------------------------------------------------------------
-// ParseWorkspaceId
+// parseWorkspaceId
 // ---------------------------------------------------------------------------
 
 func TestParseWorkspaceId_Valid(t *testing.T) {
-	assert.Equal(t, 42, ParseWorkspaceId("42"))
-	assert.Equal(t, 0, ParseWorkspaceId("0"))
+	assert.Equal(t, 42, parseWorkspaceId("42"))
+	assert.Equal(t, 0, parseWorkspaceId("0"))
 }
 
 func TestParseWorkspaceId_Invalid(t *testing.T) {
-	assert.Equal(t, InvalidWorkspaceId, ParseWorkspaceId("abc"))
-	assert.Equal(t, InvalidWorkspaceId, ParseWorkspaceId(""))
+	assert.Equal(t, invalidWorkspaceId, parseWorkspaceId("abc"))
+	assert.Equal(t, invalidWorkspaceId, parseWorkspaceId(""))
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ func TestDecodeDocumentPathKey_WrongType(t *testing.T) {
 	s := newTestStore()
 	// key with wrong type byte
 	wsid, docid := s.decodeDocumentPathKey("X5|docABC")
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.Equal(t, invalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -55,7 +55,7 @@ func TestDecodeDocumentPathKey_NoPipe(t *testing.T) {
 	key := []byte{DefaultKeyTypeDocPath}
 	key = append(key, []byte("nopipe")...)
 	wsid, docid := s.decodeDocumentPathKey(string(key))
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.Equal(t, invalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -74,7 +74,7 @@ func TestDocumentMetaKey_RoundTrip(t *testing.T) {
 func TestDecodeDocumentMetaKey_WrongType(t *testing.T) {
 	s := newTestStore()
 	wsid, docid := s.decodeDocumentMetaKey("Z10|meta123")
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.Equal(t, invalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -83,7 +83,7 @@ func TestDecodeDocumentMetaKey_NoPipe(t *testing.T) {
 	key := []byte{DefaultKeyTypeDocMeta}
 	key = append(key, []byte("nopipe")...)
 	wsid, docid := s.decodeDocumentMetaKey(string(key))
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.Equal(t, invalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -135,7 +135,7 @@ func TestDocumentWordsKey_RoundTrip(t *testing.T) {
 func TestDecodeDocumentWordsKey_WrongType(t *testing.T) {
 	s := newTestStore()
 	wsid, docid := s.decodeDocumentWordsKey("Q7|wdoc")
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.Equal(t, invalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -144,7 +144,7 @@ func TestDecodeDocumentWordsKey_NoPipe(t *testing.T) {
 	key := []byte{DefaultKeyTypeDocWords}
 	key = append(key, []byte("nopipe")...)
 	wsid, docid := s.decodeDocumentWordsKey(string(key))
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.Equal(t, invalidWorkspaceId, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -172,34 +172,13 @@ func TestDocumentWordsValue_SingleWord(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// encodeMetaKey / decodeFTMetaKey
+// encodeMetaKey
 // ---------------------------------------------------------------------------
 
-func TestFTMetaKey_RoundTrip(t *testing.T) {
+func TestMetaKey_TypeByte(t *testing.T) {
 	s := newTestStore()
 	key := s.encodeMetaKey(3)
-	wsid := s.decodeFTMetaKey(string(key))
-	assert.Equal(t, 3, wsid)
-}
-
-func TestDecodeFTMetaKey_WrongType(t *testing.T) {
-	s := newTestStore()
-	wsid := s.decodeFTMetaKey("Z3")
-	assert.Equal(t, InvalidWorkspaceId, wsid)
-}
-
-func TestDecodeFTMetaKey_InvalidNumber(t *testing.T) {
-	s := newTestStore()
-	key := []byte{DefaultKeyTypeDocWorkspace}
-	key = append(key, []byte("abc")...)
-	wsid := s.decodeFTMetaKey(string(key))
-	assert.Equal(t, InvalidWorkspaceId, wsid)
-}
-
-func TestDecodeFTMetaKey_EmptyKey(t *testing.T) {
-	s := newTestStore()
-	wsid := s.decodeFTMetaKey("")
-	assert.Equal(t, InvalidWorkspaceId, wsid)
+	assert.True(t, isKeyType(string(key), DefaultKeyTypeDocWorkspace))
 }
 
 // ---------------------------------------------------------------------------

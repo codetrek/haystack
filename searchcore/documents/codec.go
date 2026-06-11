@@ -18,8 +18,8 @@ const (
 	DefaultKeyTypeDocMeta      = byte(12)
 	DefaultKeyTypeDocPath      = byte(13)
 
-	// InvalidWorkspaceId is returned by parse/decode functions when parsing fails.
-	InvalidWorkspaceId = -1
+	// invalidWorkspaceId is returned by parse/decode functions when parsing fails.
+	invalidWorkspaceId = -1
 )
 
 // isKeyType reports whether key starts with the given keyType byte.
@@ -30,12 +30,12 @@ func isKeyType(key string, keyType byte) bool {
 	return key[0] == keyType
 }
 
-// ParseWorkspaceId parses a decimal workspace ID string.
-// Returns InvalidWorkspaceId if the string is not a valid integer.
-func ParseWorkspaceId(key string) int {
+// parseWorkspaceId parses a decimal workspace ID string.
+// Returns invalidWorkspaceId if the string is not a valid integer.
+func parseWorkspaceId(key string) int {
 	v, err := strconv.Atoi(key)
 	if err != nil {
-		return InvalidWorkspaceId
+		return invalidWorkspaceId
 	}
 	return v
 }
@@ -46,17 +46,17 @@ func (s *Store) encodeDocumentPathKey(workspaceid int, docid string) []byte {
 }
 
 // decodeDocumentPathKey decodes a document path key, returning (workspaceId, docid).
-// Returns (InvalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
+// Returns (invalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
 func (s *Store) decodeDocumentPathKey(key string) (int, string) {
 	if !isKeyType(key, s.keyTypeDocPath) {
-		return InvalidWorkspaceId, ""
+		return invalidWorkspaceId, ""
 	}
 	key = key[1:]
 	parts := strings.SplitN(key, "|", 2)
 	if len(parts) != 2 {
-		return InvalidWorkspaceId, ""
+		return invalidWorkspaceId, ""
 	}
-	return ParseWorkspaceId(parts[0]), parts[1]
+	return parseWorkspaceId(parts[0]), parts[1]
 }
 
 // encodeDocumentMetaKey encodes the key for a document metadata entry.
@@ -65,17 +65,17 @@ func (s *Store) encodeDocumentMetaKey(workspaceid int, docid string) []byte {
 }
 
 // decodeDocumentMetaKey decodes a document metadata key, returning (workspaceId, docid).
-// Returns (InvalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
+// Returns (invalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
 func (s *Store) decodeDocumentMetaKey(key string) (int, string) {
 	if !isKeyType(key, s.keyTypeDocMeta) {
-		return InvalidWorkspaceId, ""
+		return invalidWorkspaceId, ""
 	}
 	key = key[1:]
 	parts := strings.SplitN(key, "|", 2)
 	if len(parts) != 2 {
-		return InvalidWorkspaceId, ""
+		return invalidWorkspaceId, ""
 	}
-	return ParseWorkspaceId(parts[0]), parts[1]
+	return parseWorkspaceId(parts[0]), parts[1]
 }
 
 // encodeDocumentMetaValue serialises a Document as JSON.
@@ -98,17 +98,17 @@ func (s *Store) encodeDocumentWordsKey(workspaceid int, docid string) []byte {
 }
 
 // decodeDocumentWordsKey decodes a document words key, returning (workspaceId, docid).
-// Returns (InvalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
+// Returns (invalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
 func (s *Store) decodeDocumentWordsKey(key string) (int, string) {
 	if !isKeyType(key, s.keyTypeDocWords) {
-		return InvalidWorkspaceId, ""
+		return invalidWorkspaceId, ""
 	}
 	key = key[1:]
 	parts := strings.SplitN(key, "|", 2)
 	if len(parts) != 2 {
-		return InvalidWorkspaceId, ""
+		return invalidWorkspaceId, ""
 	}
-	return ParseWorkspaceId(parts[0]), parts[1]
+	return parseWorkspaceId(parts[0]), parts[1]
 }
 
 // encodeDocumentWordsValue encodes a slice of keywords as a pipe-separated byte slice.
@@ -129,21 +129,8 @@ func (s *Store) encodeMetaKey(workspaceid int) []byte {
 	return []byte(fmt.Sprintf("%c%d", s.keyTypeDocWorkspace, workspaceid))
 }
 
-// decodeFTMetaKey decodes a workspace metadata key, returning the workspace ID.
-// Returns InvalidWorkspaceId if the key is malformed or has the wrong type byte.
-func (s *Store) decodeFTMetaKey(key string) int {
-	if !isKeyType(key, s.keyTypeDocWorkspace) {
-		return InvalidWorkspaceId
-	}
-	key = key[1:]
-	workspaceid, err := strconv.Atoi(key)
-	if err != nil {
-		return InvalidWorkspaceId
-	}
-	return workspaceid
-}
-
 // encodeFTMetaValue serialises a workspace record as JSON.
+// Workspace has only JSON-safe fields, so Marshal cannot fail.
 func encodeFTMetaValue(info Workspace) []byte {
 	content, _ := json.Marshal(info)
 	return content

@@ -6,8 +6,9 @@ import (
 )
 
 // Document represents an indexed source file with its metadata and keywords.
-// ID is the document identifier (an MD5 hash of the file path); it is not
-// persisted — it is populated by GetDocument from the key after a lookup.
+// ID is the caller-supplied document identifier (the key suffix used to store
+// the document). It is not persisted in the value; GetDocument populates it
+// from the lookup key after a successful read.
 type Document struct {
 	ID           string `json:"-"`
 	RelPath      string `json:"rel_path"`
