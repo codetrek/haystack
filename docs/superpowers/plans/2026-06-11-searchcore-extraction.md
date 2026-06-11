@@ -543,15 +543,31 @@ workspace JSON 记录转成 `collection.Record`(path→Name、times→times、`{
 
 # P5 — engine 解耦进库 〔依赖 P4〕
 
-**任务级路线:**
-- **5.1** 新建 `searchcore/engine`:把 `simple_content_search_engine.go` 的 `SimpleContentSearchEngine`
-  迁入;`*workspace.Workspace` 字段 → `*collection.Collection`(或 collectionID + documents 视图);
-  `MaxWildcardLength/MaxKeywordDistance` 由构造参数注入(替代 conf)。
-- **5.2** `Compile/CollectDocuments/IsLineMatch` 改用 collection/documents 的查询能力。
-- **5.3** 迁移引擎相关测试(searcher 中纯引擎部分)。
-- **5.4** haystack `searcher` 服务层(`SearchContent`/`SearchFiles`,文件 I/O、workspace 集成)**留 haystack**,
-  改用库 `engine`;`storage` 此时应只剩 symbols 30-33 + Open(确认瘦身到位)。
-- **验证:** 全绿;搜索结果与迁移前一致。
+**执行期核实**:引擎(`simple_content_search_engine.go`)对 workspace 的唯一耦合是 `q.Workspace.Id`(一个 int);
+访问索引/文档靠 searcher 包级 `idxInst`/`stInst`;**引擎本身不 import shared/types**(干净)。symbols_searcher
+(符号搜索)+ searcher.go 的文件 I/O / `SearchContent`/`SearchFiles` 留 haystack。
+
+### P5.1 — 移 engine 进库 + 解耦 + 接线(green,单原子任务)
+- 新建 `searchcore/engine`(零 haystack 依赖,依赖 searchcore/invertedindex + documents + tokenizer)。
+  把 `SimpleContentSearchEngine` + AndClause/Term + 这些函数迁入:`Compile`、`CollectDocuments`(三层)、
+  `collectWithKeywords`、`IsLineMatch`、`processToken`/`finalizeOrClause`、`TokenizeWithQuotes`/`IsQuotedPhrase`/
+  `UnwrapQuotes`、`String()`。
+- **解耦**:`Workspace *workspace.Workspace` 字段 → `collectionID int`(`CollectDocuments` 用它);
+  `stInst.GetWorkspace(id)` → 注入的 `docs.GetWorkspace(id)`;`idxInst.Search(...)` → 注入的 `idx.Search(...)`。
+- **构造器**:`engine.New(idx *invertedindex.Index, docs *documents.Store, collectionID int, opts Options) *Engine`,
+  `Options{MaxWildcardLength, MaxKeywordDistance, WholeWord}`。重命名 `SimpleContentSearchEngine`→`Engine`(idiomatic);
+  clause/term/helpers 若无外部引用则 unexport(先 grep)。公开面:`Engine`/`New`/`Compile`/`CollectDocuments`/`IsLineMatch`。
+- **接线 searcher.go(留 haystack)**:`NewSimpleContentSearchEngine(ws, ...)` → `engine.New(idxInst, stInst, ws.Id,
+  engine.Options{...})`;`searchInContent` 的 `engine *SimpleContentSearchEngine` 参数 → `*engine.Engine`;
+  `engine.Compile/CollectDocuments/IsLineMatch` 调用照旧。symbols_searcher 不动。
+- 迁移引擎相关测试(searcher_*_test 里纯引擎部分:cjk/boost/additional 等中针对 Compile/IsLineMatch/Tokenize 的)。
+- 移库即收口公开 API(go mod tidy + unexport 实现细节 + doc + 删死码)。
+- 验证:两 module build + 全测试绿(含 -race);`GOWORK=off` 独立;**搜索结果与迁移前一致**(searcher 测试覆盖)。
+
+### P5 收尾(整个剥离完成后)
+- `internal/core/storage` 此时应只剩 symbols(30-33)+ 版本迁移 `Open`(确认瘦身到位)。
+- searchcore 写最小 README + 独立消费者用法示例(pebblekv.Open → idtable/invertedindex/documents/collection/engine)。
+- 更新 `docs/tasks/BOARD.md`;清理重复旧分支 `feat/searchcore-extraction`。
 
 ---
 
