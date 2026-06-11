@@ -47,7 +47,7 @@ type Allocator struct {
 	// lru has its own internal locking, but every Allocator access to it
 	// (GetId, Close) already happens while holding a.mu, so its lock is
 	// effectively redundant here and never contended by this package.
-	lru            *LRUCache
+	lru            *lruCache
 	nextId         int64
 	keyTypeNextId  byte
 	keyTypeKey     byte
@@ -99,7 +99,7 @@ func New(store kv.Store, opts Options) (*Allocator, error) {
 		return nil, fmt.Errorf("invalid nextId value: %d, database malformed", a.nextId)
 	}
 
-	a.lru = NewLRUCache(opts.LRUCacheSize)
+	a.lru = newLRUCache(opts.LRUCacheSize)
 	a.batch = store.NewBatch(opts.BatchSize)
 
 	// Capture the channels locally so the goroutine never reads a.closing/a.done,

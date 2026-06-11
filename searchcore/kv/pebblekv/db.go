@@ -89,13 +89,15 @@ func Open(path string, cacheSize int64) (kv.Store, error) {
 		db:     db,
 		closed: atomic.Bool{},
 	}
-	pdb.closed.Store(false)
 
 	return pdb, nil
 }
 
 func (d *PebbleDB) ScheduleCompact() {
 	go func() {
+		if d.IsClosed() {
+			return
+		}
 		start := time.Now()
 		log.Println("[Pebble] Compacting database...")
 		d.db.Compact([]byte{0}, []byte{0xff}, false)
@@ -113,10 +115,10 @@ func (d *PebbleDB) ScheduleCompact() {
 //
 // On error it returns -1 together with a non-nil error: either the underlying
 // Get failed, or the stored value could not be parsed as an integer. If the
-// database is closed it returns 0 and a non-nil error.
+// database is closed it returns -1 and a non-nil error.
 func (d *PebbleDB) GetIncrementalId(key []byte) (int, error) {
 	if d.IsClosed() {
-		return 0, fmt.Errorf("database is closed")
+		return -1, fmt.Errorf("database is closed")
 	}
 
 	str, err := d.Get(key)

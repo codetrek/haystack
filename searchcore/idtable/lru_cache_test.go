@@ -7,7 +7,7 @@ import (
 )
 
 func TestLRUCache_NewWithZeroCapacity(t *testing.T) {
-	cache := NewLRUCache(0)
+	cache := newLRUCache(0)
 	assert.NotNil(t, cache)
 	assert.Equal(t, 0, cache.capacity)
 
@@ -19,7 +19,7 @@ func TestLRUCache_NewWithZeroCapacity(t *testing.T) {
 }
 
 func TestLRUCache_NewWithNegativeCapacity(t *testing.T) {
-	cache := NewLRUCache(-5)
+	cache := newLRUCache(-5)
 	assert.NotNil(t, cache)
 	assert.Equal(t, 0, cache.capacity)
 
@@ -31,7 +31,7 @@ func TestLRUCache_NewWithNegativeCapacity(t *testing.T) {
 }
 
 func TestLRUCache_PutAndGet(t *testing.T) {
-	cache := NewLRUCache(3)
+	cache := newLRUCache(3)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -51,7 +51,7 @@ func TestLRUCache_PutAndGet(t *testing.T) {
 }
 
 func TestLRUCache_PutUpdateExisting(t *testing.T) {
-	cache := NewLRUCache(3)
+	cache := newLRUCache(3)
 
 	cache.Put("a", 1)
 	cache.Put("a", 99)
@@ -65,7 +65,7 @@ func TestLRUCache_PutUpdateExisting(t *testing.T) {
 }
 
 func TestLRUCache_Eviction(t *testing.T) {
-	cache := NewLRUCache(2)
+	cache := newLRUCache(2)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -86,7 +86,7 @@ func TestLRUCache_Eviction(t *testing.T) {
 }
 
 func TestLRUCache_EvictionWithAccess(t *testing.T) {
-	cache := NewLRUCache(2)
+	cache := newLRUCache(2)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -109,7 +109,7 @@ func TestLRUCache_EvictionWithAccess(t *testing.T) {
 }
 
 func TestLRUCache_GetMiss(t *testing.T) {
-	cache := NewLRUCache(5)
+	cache := newLRUCache(5)
 
 	v, ok := cache.Get("nonexistent")
 	assert.False(t, ok)
@@ -117,7 +117,7 @@ func TestLRUCache_GetMiss(t *testing.T) {
 }
 
 func TestLRUCache_Delete(t *testing.T) {
-	cache := NewLRUCache(5)
+	cache := newLRUCache(5)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -141,7 +141,7 @@ func TestLRUCache_Delete(t *testing.T) {
 }
 
 func TestLRUCache_DeleteNonexistent(t *testing.T) {
-	cache := NewLRUCache(5)
+	cache := newLRUCache(5)
 
 	cache.Put("a", 1)
 	// Should not panic.
@@ -153,7 +153,7 @@ func TestLRUCache_DeleteNonexistent(t *testing.T) {
 }
 
 func TestLRUCache_Clear(t *testing.T) {
-	cache := NewLRUCache(5)
+	cache := newLRUCache(5)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -170,7 +170,7 @@ func TestLRUCache_Clear(t *testing.T) {
 }
 
 func TestLRUCache_SingleCapacity(t *testing.T) {
-	cache := NewLRUCache(1)
+	cache := newLRUCache(1)
 
 	cache.Put("a", 1)
 	v, ok := cache.Get("a")
@@ -189,7 +189,7 @@ func TestLRUCache_SingleCapacity(t *testing.T) {
 
 func TestLRUCache_EvictionOrder(t *testing.T) {
 	// Verify correct eviction order when multiple items are added.
-	cache := NewLRUCache(3)
+	cache := newLRUCache(3)
 
 	cache.Put("a", 1) // oldest
 	cache.Put("b", 2)
@@ -214,7 +214,7 @@ func TestLRUCache_EvictionOrder(t *testing.T) {
 	// We need to add two more items to evict "b" (which was accessed, making it not LRU).
 	// Let's verify by adding "e" - "d" might be LRU now since it was first in the Get sequence.
 	// This is complex, let's test a cleaner scenario:
-	cache2 := NewLRUCache(2)
+	cache2 := newLRUCache(2)
 	cache2.Put("x", 10)
 	cache2.Put("y", 20)
 	// "x" is LRU. Update "x" to make "y" the LRU.
@@ -234,7 +234,7 @@ func TestLRUCache_EvictionOrder(t *testing.T) {
 }
 
 func TestLRUCache_DeleteThenPut(t *testing.T) {
-	cache := NewLRUCache(2)
+	cache := newLRUCache(2)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -261,7 +261,7 @@ func TestLRUCache_DeleteThenPut(t *testing.T) {
 }
 
 func TestLRUCache_ClearThenReuse(t *testing.T) {
-	cache := NewLRUCache(3)
+	cache := newLRUCache(3)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -279,7 +279,7 @@ func TestLRUCache_ClearThenReuse(t *testing.T) {
 }
 
 func TestLRUCache_DeleteAllEntries(t *testing.T) {
-	cache := NewLRUCache(3)
+	cache := newLRUCache(3)
 
 	cache.Put("a", 1)
 	cache.Put("b", 2)
@@ -300,7 +300,7 @@ func TestLRUCache_DeleteAllEntries(t *testing.T) {
 }
 
 func TestLRUCache_PutZeroCapacityIsNoop(t *testing.T) {
-	cache := NewLRUCache(0)
+	cache := newLRUCache(0)
 
 	// Multiple puts should all be no-ops.
 	cache.Put("a", 1)
@@ -312,7 +312,7 @@ func TestLRUCache_PutZeroCapacityIsNoop(t *testing.T) {
 }
 
 func TestLRUCache_RepeatedEvictions(t *testing.T) {
-	cache := NewLRUCache(1)
+	cache := newLRUCache(1)
 
 	// Each put should evict the previous entry.
 	for i := int64(0); i < 10; i++ {

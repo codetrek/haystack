@@ -121,46 +121,6 @@ func TestMpsc_Add_NotStarted(t *testing.T) {
 	m.Add(&NopeTask{}) // should not panic
 }
 
-func TestMpsc_AddFuncWithArgs(t *testing.T) {
-	m := NewMpsc("test")
-	m.Start()
-
-	var result atomic.Value
-	m.AddFuncWithArgs(func(args ...interface{}) error {
-		result.Store(args[0].(string))
-		return nil
-	}, "hello")
-
-	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, "hello", result.Load())
-	m.Stop()
-}
-
-func TestMpsc_AddFuncWithArgs_NotStarted(t *testing.T) {
-	m := NewMpsc("test")
-	m.AddFuncWithArgs(func(args ...interface{}) error { return nil }, "test")
-}
-
-func TestMpsc_RunFuncWithArgs(t *testing.T) {
-	m := NewMpsc("test")
-	m.Start()
-
-	err := m.RunFuncWithArgs(func(args ...interface{}) error {
-		if args[0].(int) != 42 {
-			return errors.New("wrong arg")
-		}
-		return nil
-	}, 42)
-	assert.NoError(t, err)
-	m.Stop()
-}
-
-func TestMpsc_RunFuncWithArgs_NotStarted(t *testing.T) {
-	m := NewMpsc("test")
-	err := m.RunFuncWithArgs(func(args ...interface{}) error { return nil }, "test")
-	assert.Nil(t, err)
-}
-
 func TestMpsc_RunTask(t *testing.T) {
 	m := NewMpsc("test")
 	m.Start()
@@ -205,19 +165,6 @@ func TestFuncTask(t *testing.T) {
 	}}
 	assert.NoError(t, task.Run())
 	assert.True(t, called)
-}
-
-func TestFuncTaskWithArgs(t *testing.T) {
-	var got interface{}
-	task := &funcTaskWithArgs{
-		fn: func(args ...interface{}) error {
-			got = args[0]
-			return nil
-		},
-		args: []interface{}{"test"},
-	}
-	assert.NoError(t, task.Run())
-	assert.Equal(t, "test", got)
 }
 
 func TestWaitTask(t *testing.T) {

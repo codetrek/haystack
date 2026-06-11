@@ -5,8 +5,10 @@ import (
 	"sync"
 )
 
-// LRUCache implements a thread-safe LRU cache for nodeData
-type LRUCache struct {
+// lruCache implements a thread-safe, fixed-capacity LRU cache that maps
+// string keys to int64 ids. It is used internally by Allocator to avoid
+// redundant store look-ups for recently allocated ids.
+type lruCache struct {
 	capacity int
 	cache    map[string]*list.Element
 	list     *list.List
@@ -19,12 +21,12 @@ type cacheEntry struct {
 	value int64
 }
 
-// NewLRUCache creates a new LRU cache with the specified capacity
-func NewLRUCache(capacity int) *LRUCache {
+// newLRUCache creates a new LRU cache with the specified capacity
+func newLRUCache(capacity int) *lruCache {
 	if capacity <= 0 {
 		capacity = 0
 	}
-	return &LRUCache{
+	return &lruCache{
 		capacity: capacity,
 		cache:    make(map[string]*list.Element),
 		list:     list.New(),
@@ -32,7 +34,7 @@ func NewLRUCache(capacity int) *LRUCache {
 }
 
 // Get retrieves a value from the cache
-func (c *LRUCache) Get(key string) (int64, bool) {
+func (c *lruCache) Get(key string) (int64, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -48,7 +50,7 @@ func (c *LRUCache) Get(key string) (int64, bool) {
 }
 
 // Put adds or updates a value in the cache
-func (c *LRUCache) Put(key string, value int64) {
+func (c *lruCache) Put(key string, value int64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -77,7 +79,7 @@ func (c *LRUCache) Put(key string, value int64) {
 }
 
 // Delete removes a value from the cache
-func (c *LRUCache) Delete(key string) {
+func (c *lruCache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -88,7 +90,7 @@ func (c *LRUCache) Delete(key string) {
 }
 
 // Clear removes all values from the cache
-func (c *LRUCache) Clear() {
+func (c *lruCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

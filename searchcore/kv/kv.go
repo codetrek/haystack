@@ -41,6 +41,10 @@ type Batch interface {
 	DeletePrefix(prefix []byte) error
 	Commit() error
 	Reset()
+	// Close releases the resources held by the batch. It must be called if a
+	// batch is discarded without calling Commit; Commit handles its own cleanup,
+	// so Close after a successful Commit is a no-op but still safe to call.
+	// Failing to Close an uncommitted batch may leak underlying resources.
 	Close() error
 	Count() int32
 }
