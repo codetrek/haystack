@@ -3,6 +3,7 @@ package idtable
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 	"strconv"
 	"sync"
 	"time"
@@ -14,15 +15,24 @@ import (
 const (
 	DefaultKeyTypeNextId  = byte(28)
 	DefaultKeyTypeKey     = byte(29)
-	DefaultLRUCacheSize   = 20_0000
+	DefaultLRUCacheSize   = 200_000
 	DefaultBatchSize      = int32(100)
 	DefaultCommitInterval = 5 * time.Second
 )
 
 // Options configures an Allocator. Zero-value fields fall back to defaults.
 type Options struct {
-	KeyTypeNextId  byte          // default DefaultKeyTypeNextId (28)
-	KeyTypeKey     byte          // default DefaultKeyTypeKey (29)
+	// KeyTypeNextId is the single-byte KV key PREFIX under which the allocator
+	// persists its nextId counter. It namespaces the allocator's keys within a
+	// shared store. Changing it after data has been written is a breaking
+	// on-disk change: previously allocated ids become unreachable.
+	// A zero value selects DefaultKeyTypeNextId (28); byte 0 cannot be used as
+	// an explicit prefix because it is reserved to mean "use the default".
+	KeyTypeNextId byte
+	// KeyTypeKey is the single-byte KV key PREFIX under which the allocator
+	// persists each key→id mapping. The same breaking-change and zero-value
+	// ("use default", DefaultKeyTypeKey 29) constraints as KeyTypeNextId apply.
+	KeyTypeKey     byte
 	LRUCacheSize   int           // default DefaultLRUCacheSize (200000)
 	BatchSize      int32         // default DefaultBatchSize (100)
 	CommitInterval time.Duration // default DefaultCommitInterval (5s)
@@ -31,9 +41,12 @@ type Options struct {
 // Allocator maps arbitrary keys to stable, compact int64 ids (returned as 8-byte strings),
 // LRU-cached and persisted to the kv.Store, with a background commit loop.
 type Allocator struct {
-	mu             sync.Mutex
-	store          kv.Store
-	batch          kv.Batch
+	mu    sync.Mutex
+	store kv.Store
+	batch kv.Batch
+	// lru has its own internal locking, but every Allocator access to it
+	// (GetId, Close) already happens while holding a.mu, so its lock is
+	// effectively redundant here and never contended by this package.
 	lru            *LRUCache
 	nextId         int64
 	keyTypeNextId  byte
@@ -89,15 +102,21 @@ func New(store kv.Store, opts Options) (*Allocator, error) {
 	a.lru = NewLRUCache(opts.LRUCacheSize)
 	a.batch = store.NewBatch(opts.BatchSize)
 
+	// Capture the channels locally so the goroutine never reads a.closing/a.done,
+	// which Close() nils out under a.mu (reading them in the goroutine would race).
+	closing, done := a.closing, a.done
+	interval := a.commitInterval
 	go func() {
 		for {
 			select {
-			case <-time.After(a.commitInterval):
+			case <-time.After(interval):
 				a.mu.Lock()
-				a.tryCommit()
+				if err := a.tryCommit(); err != nil {
+					log.Printf("[idtable] periodic commit failed: %v", err)
+				}
 				a.mu.Unlock()
-			case <-a.closing:
-				close(a.done)
+			case <-closing:
+				close(done)
 				return
 			}
 		}
@@ -143,22 +162,29 @@ func (a *Allocator) GetId(key []byte) (string, error) {
 
 // Close flushes any pending batch writes, stops the background commit goroutine,
 // and clears the LRU cache.
+//
+// The mutex is released while waiting for the background goroutine to exit:
+// that goroutine's periodic-commit branch acquires a.mu, so holding the lock
+// across the <-done wait would deadlock if the timer fired concurrently.
 func (a *Allocator) Close() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
 	if a.closing == nil {
+		a.mu.Unlock()
 		return
 	}
+	closing, done := a.closing, a.done
+	a.closing, a.done = nil, nil
+	a.mu.Unlock()
 
-	close(a.closing)
-	<-a.done
-	a.closing = nil
-	a.done = nil
+	close(closing)
+	<-done
 
-	a.tryCommit()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if err := a.tryCommit(); err != nil {
+		log.Printf("[idtable] final commit on close failed: %v", err)
+	}
 	a.lru.Clear()
-
 	a.store = nil
 }
 
@@ -175,11 +201,16 @@ func (a *Allocator) encodeIdKey(key []byte) []byte {
 	return result
 }
 
-func (a *Allocator) tryCommit() {
+// tryCommit flushes the pending batch if it is non-empty, returning any
+// Commit error. Callers must hold a.mu.
+func (a *Allocator) tryCommit() error {
 	if a.batch.Count() > 0 {
-		a.batch.Commit()
+		if err := a.batch.Commit(); err != nil {
+			return err
+		}
 		a.batch.Reset()
 	}
+	return nil
 }
 
 func parseId(id string) int64 {

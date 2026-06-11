@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -86,7 +87,56 @@ func TestPeriodicCommit(t *testing.T) {
 	alloc.Close()
 }
 
-// TestGetIdMultipleCallsSameKey verifies idempotent ID assignment with cache.
+// TestCloseDuringPeriodicCommits exercises the Close() path while the background
+// goroutine is actively firing its commit timer at a very small interval. This
+// reproduces the deadlock that occurs if Close holds a.mu while waiting for the
+// goroutine to exit (the goroutine's commit branch also acquires a.mu). It must
+// finish well within the test timeout and is most meaningful under -race.
+func TestCloseDuringPeriodicCommits(t *testing.T) {
+	for iter := 0; iter < 20; iter++ {
+		tempDir, err := os.MkdirTemp("", "haystack-idtable-closerace-*")
+		assert.NoError(t, err)
+
+		store, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
+		assert.NoError(t, err)
+
+		// Tiny interval so the timer fires repeatedly while we hammer GetId.
+		alloc, err := New(store, Options{CommitInterval: time.Microsecond})
+		assert.NoError(t, err)
+
+		// Concurrently allocate ids so the batch keeps having data to commit
+		// right up to (and during) Close.
+		var wg sync.WaitGroup
+		stop := make(chan struct{})
+		for w := 0; w < 4; w++ {
+			wg.Add(1)
+			go func(w int) {
+				defer wg.Done()
+				i := 0
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+						_, _ = alloc.GetId([]byte("k-" + strconv.Itoa(w) + "-" + strconv.Itoa(i)))
+						i++
+					}
+				}
+			}(w)
+		}
+
+		// Let the timer fire many times.
+		time.Sleep(2 * time.Millisecond)
+
+		// Close must not deadlock even though the commit goroutine is active.
+		close(stop)
+		wg.Wait()
+		alloc.Close()
+
+		store.Close()
+		os.RemoveAll(tempDir)
+	}
+}
 func TestGetIdMultipleCallsSameKey(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "haystack-idtable-same-*")
 	assert.NoError(t, err)
