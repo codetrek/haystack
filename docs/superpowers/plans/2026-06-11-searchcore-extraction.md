@@ -428,6 +428,27 @@ git log --oneline 46a0e0b..HEAD
 
 ---
 
+## P1 完成记录 + P2–P5 模式指引(来自 P1 阶段评审)
+
+**P1 已完成(commit b968357..186a656)。** searchcore module 立起:`kv`(+`pebblekv`)、`queue`、
+`tokenizer`、`idtable`(实例式)。已验证:零 `haystack/internal` 依赖、两 module 全测试绿、
+`GOWORK=off` 独立构建+测试绿、gofmt 干净、无残留旧路径。期间修掉 3 个潜伏 bug:pebblekv
+`DeletePrefix` 计数 +2、queue `Start` 忽略 `queueSize`、idtable `Close()` 死锁 + 数据竞争。
+
+**P2–P5 必须遵循的模式(立此为准,避免重蹈 P1 踩过的坑):**
+1. **构造器约定**:`func New(store kv.Store, q queue.Queue, opts XxxOptions) (*Xxx, error)`。
+   用 `queue.Queue` 接口(已补全 Add/RunTask/AddFunc/RunFunc),**不要用具体 `*queue.Mpsc`**。
+2. **后台 goroutine + Close 模板(来自 idtable)**:goroutine 在 New 时**捕获 channel 本地副本**
+   (不读可变 struct 字段);`Close()` 先在锁内快照并 nil 字段、**释放锁、再 `close(closing)`+`<-done`、
+   再重取锁做收尾**。invertedindex 的 flush ticker(P2)务必照此改,别照搬旧的持锁等待写法。
+3. **key-type 字节**:做成 Options 默认常量,**默认值 = 当前 storage/types.go 的值**(倒排 20-22、
+   文档 10-13、collection 1-2),保证 on-disk 兼容;库内不 import haystack storage。
+4. **共享依赖版本**:searchcore 任何与 haystack 共享的依赖 pin 到 haystack 的版本。
+5. **每个 implementer 自带**:`gofmt -w` + `gofmt -l` 验空;commit 错误不得静默(log 或上抛)。
+6. **每任务结束即绿**:移动包必同任务内改完所有 importer + 删旧;两 module build+test 全绿。
+
+---
+
 # P2 — invertedindex 实例式进库 〔依赖 P1〕
 
 **任务级路线(开工前展开为细化步骤):**
