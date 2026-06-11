@@ -5,9 +5,9 @@ import (
 	"log"
 	"sync"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/utils"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 var (
@@ -17,7 +17,7 @@ var (
 	mutex sync.RWMutex
 )
 
-func Init(database pebble.DB) error {
+func Init(database kv.Store) error {
 	mutex.Lock()
 	defer mutex.Unlock()
 

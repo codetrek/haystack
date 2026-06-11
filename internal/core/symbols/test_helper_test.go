@@ -7,9 +7,9 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
 )
 
 // testEnv holds all resources created during test setup so they can
@@ -87,7 +87,7 @@ func setupClosedDbEnv(t *testing.T) func() {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
 
-	closedDB, err := pebble.OpenDB(filepath.Join(tmpDir, "closed"), 0)
+	closedDB, err := pebblekv.OpenDB(filepath.Join(tmpDir, "closed"), 0)
 	if err != nil {
 		os.RemoveAll(tmpDir)
 		t.Fatalf("failed to open pebble for closed-db test: %v", err)

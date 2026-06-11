@@ -5,7 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
 )
 
 const StorageVersion = "1.4"
@@ -30,7 +31,7 @@ func cleanup(storagePath string) {
 	}
 }
 
-func Open(storagePath string, cacheSize int64) (pebble.DB, error) {
+func Open(storagePath string, cacheSize int64) (kv.Store, error) {
 	log.Printf("[Storage] Init data storage path: %s", storagePath)
 
 	dbPath := filepath.Join(storagePath, StorageVersion)
@@ -43,7 +44,7 @@ func Open(storagePath string, cacheSize int64) (pebble.DB, error) {
 		cacheSize = 8 * 1024 * 1024 // Default cache size
 	}
 
-	db, err := pebble.OpenDB(dbPath, cacheSize)
+	db, err := pebblekv.Open(dbPath, cacheSize)
 	if err != nil {
 		return nil, err
 	}

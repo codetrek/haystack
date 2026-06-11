@@ -4,18 +4,18 @@ import (
 	"context"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 var (
-	db             pebble.DB
+	db             kv.Store
 	mpscQueue      *queue.Mpsc
 	cancelFlush    context.CancelFunc
 	keywordsMerger *KeywordsMerger
 )
 
-func Init(database pebble.DB, mpsc *queue.Mpsc) error {
+func Init(database kv.Store, mpsc *queue.Mpsc) error {
 	var flushDB context.Context
 	flushDB, cancelFlush = context.WithCancel(context.Background())
 	db = database

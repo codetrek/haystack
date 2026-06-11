@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 var (
-	db   pebble.DB
+	db   kv.Store
 	mpsc *queue.Mpsc
 
 	mutex             sync.Mutex
@@ -45,7 +45,7 @@ func markWorkspaceDeleted(workspaceId int) {
 	deletedWorkspaces[workspaceId] = struct{}{}
 }
 
-func Init(database pebble.DB, q *queue.Mpsc) error {
+func Init(database kv.Store, q *queue.Mpsc) error {
 	db = database
 	mpsc = q
 	Workspaces = make(map[int]*Workspace)

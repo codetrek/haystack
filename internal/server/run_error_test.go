@@ -8,17 +8,17 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 var errFake = errors.New("fake init error")
 
-// noopInitDB is a no-op Init replacement for pebble.DB + *queue.Mpsc.
-func noopInitDB(_ pebble.DB, _ *queue.Mpsc) error { return nil }
+// noopInitDB is a no-op Init replacement for kv.Store + *queue.Mpsc.
+func noopInitDB(_ kv.Store, _ *queue.Mpsc) error { return nil }
 
-// noopInitDBOnly is a no-op Init replacement for pebble.DB only.
-func noopInitDBOnly(_ pebble.DB) error { return nil }
+// noopInitDBOnly is a no-op Init replacement for kv.Store only.
+func noopInitDBOnly(_ kv.Store) error { return nil }
 
 // saveAndMockInits saves the four Init function variables, replaces them all
 // with no-ops, and returns a restore function.
@@ -54,7 +54,7 @@ func TestRun_InvertedIndexInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	invertedindexInit = func(_ pebble.DB, _ *queue.Mpsc) error {
+	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) error {
 		return errFake
 	}
 
@@ -70,7 +70,7 @@ func TestRun_DocumentsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	documentsInit = func(_ pebble.DB, _ *queue.Mpsc) error {
+	documentsInit = func(_ kv.Store, _ *queue.Mpsc) error {
 		return errFake
 	}
 
@@ -86,7 +86,7 @@ func TestRun_WorkspaceInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	workspaceInit = func(_ pebble.DB) error {
+	workspaceInit = func(_ kv.Store) error {
 		return errFake
 	}
 
@@ -102,7 +102,7 @@ func TestRun_SymbolsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	symbolsInit = func(_ pebble.DB, _ *queue.Mpsc) error {
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc) error {
 		return errFake
 	}
 

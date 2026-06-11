@@ -8,7 +8,7 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/tokenizer"
 )
 
@@ -25,7 +25,7 @@ type DocFunction struct {
 
 const MaxBatchSize = 512
 
-var NewBatch = func(db pebble.DB) pebble.Batch {
+var NewBatch = func(db kv.Store) kv.Batch {
 	return db.NewBatch(MaxBatchSize)
 }
 
@@ -93,7 +93,7 @@ func getUniqueFunctionNames(functions []Function) []string {
 	return result
 }
 
-func saveDocFunctions(batch pebble.Batch, workspaceid int, doc *DocFunction) {
+func saveDocFunctions(batch kv.Batch, workspaceid int, doc *DocFunction) {
 	if len(doc.Functions) == 0 {
 		batch.Delete(EncodeDocFunctionsKey(workspaceid, doc.ID))
 	} else {

@@ -11,7 +11,6 @@ import (
 	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
@@ -20,14 +19,15 @@ import (
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // Function variables for Init calls, enabling test overrides.
 var (
-	invertedindexInit = func(db pebble.DB, mpsc *queue.Mpsc) error { return invertedindex.Init(db, mpsc) }
-	documentsInit     = func(db pebble.DB, mpsc *queue.Mpsc) error { return documents.Init(db, mpsc) }
-	workspaceInit     = func(db pebble.DB) error { return workspace.Init(db) }
-	symbolsInit       = func(db pebble.DB, mpsc *queue.Mpsc) error { return symbols.Init(db, mpsc) }
+	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) error { return invertedindex.Init(db, mpsc) }
+	documentsInit     = func(db kv.Store, mpsc *queue.Mpsc) error { return documents.Init(db, mpsc) }
+	workspaceInit     = func(db kv.Store) error { return workspace.Init(db) }
+	symbolsInit       = func(db kv.Store, mpsc *queue.Mpsc) error { return symbols.Init(db, mpsc) }
 )
 
 func Run() {

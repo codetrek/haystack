@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // testEnv holds all resources created during test setup so they can
@@ -63,7 +63,7 @@ func mustCreateWorkspace(t *testing.T, workspaceId int) {
 	}
 }
 
-// closedDB implements pebble.DB but always reports itself as closed.
+// closedDB implements kv.Store but always reports itself as closed.
 // This lets tests exercise the db.IsClosed() early-return paths without
 // actually closing the underlying Pebble database (which would crash
 // background goroutines like the inverted-index flusher).
@@ -76,7 +76,7 @@ func (closedDB) IsClosed() bool                               { return true }
 func (closedDB) Put(key, value []byte) error                  { return fmt.Errorf("closed") }
 func (closedDB) Get(key []byte) ([]byte, error)               { return nil, fmt.Errorf("closed") }
 func (closedDB) Delete(key []byte) error                      { return fmt.Errorf("closed") }
-func (closedDB) NewBatch(maxBatchSize int32) pebble.Batch     { return nil }
+func (closedDB) NewBatch(maxBatchSize int32) kv.Batch         { return nil }
 func (closedDB) Scan([]byte, func([]byte, []byte) bool) error { return fmt.Errorf("closed") }
 func (closedDB) ScanRange([]byte, []byte, func([]byte, []byte) bool) error {
 	return fmt.Errorf("closed")

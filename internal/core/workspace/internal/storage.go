@@ -1,14 +1,14 @@
 package internal
 
 import (
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 var (
-	db pebble.DB
+	db kv.Store
 )
 
-func Init(database pebble.DB) error {
+func Init(database kv.Store) error {
 	db = database
 	return nil
 }

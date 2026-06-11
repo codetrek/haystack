@@ -11,10 +11,10 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // TestInitLog_Stdout verifies initLog configures stdout logging.
@@ -139,7 +139,7 @@ func TestRun_RunError(t *testing.T) {
 	defer restore()
 
 	// Make invertedindexInit fail so run() returns an error.
-	invertedindexInit = func(_ pebble.DB, _ *queue.Mpsc) error {
+	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) error {
 		return errFake
 	}
 

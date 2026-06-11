@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/dustin/go-humanize"
 )
 
@@ -154,7 +154,7 @@ type InvertedIndex struct {
 	DocCount int
 }
 
-var rewriteIndex = func(batch pebble.Batch, index *InvertedIndex, maxKeywordIndexSize int) int {
+var rewriteIndex = func(batch kv.Batch, index *InvertedIndex, maxKeywordIndexSize int) int {
 	if len(index.Rows) < 2 ||
 		index.DocCount/len(index.Rows) > maxKeywordIndexSize {
 		// We've already have a well batched keyword

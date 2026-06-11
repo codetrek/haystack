@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // testEnv holds all resources created during test setup so they can
@@ -30,7 +30,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	pendingDeletes = map[int]*PendingTableWrites{}
 	lastFlushWriteTime = time.Now()
 	lastFlushDeleteTime = time.Now()
-	NewBatch = func(database pebble.DB) pebble.Batch {
+	NewBatch = func(database kv.Store) kv.Batch {
 		return database.NewBatch(MaxBatchSize)
 	}
 
@@ -53,7 +53,7 @@ func (e *testEnv) teardown() {
 	e.TeardownBase()
 }
 
-// closedDB implements pebble.DB but always returns errors.
+// closedDB implements kv.Store but always returns errors.
 // This lets tests exercise error paths (e.g. db.GetIncrementalId failure)
 // without actually closing the underlying database.
 type closedDB struct{}
@@ -65,7 +65,7 @@ func (closedDB) IsClosed() bool                               { return true }
 func (closedDB) Put(key, value []byte) error                  { return fmt.Errorf("closed") }
 func (closedDB) Get(key []byte) ([]byte, error)               { return nil, fmt.Errorf("closed") }
 func (closedDB) Delete(key []byte) error                      { return fmt.Errorf("closed") }
-func (closedDB) NewBatch(maxBatchSize int32) pebble.Batch     { return nil }
+func (closedDB) NewBatch(maxBatchSize int32) kv.Batch         { return nil }
 func (closedDB) Scan([]byte, func([]byte, []byte) bool) error { return fmt.Errorf("closed") }
 func (closedDB) ScanRange([]byte, []byte, func([]byte, []byte) bool) error {
 	return fmt.Errorf("closed")

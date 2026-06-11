@@ -1,4 +1,4 @@
-package pebble
+package pebblekv
 
 import (
 	"fmt"
@@ -6,18 +6,6 @@ import (
 
 	"github.com/cockroachdb/pebble"
 )
-
-// Batch represents a batch of operations
-type Batch interface {
-	Put(key, value []byte) error
-	Delete(key []byte) error
-	DeleteRange(start, end []byte) error
-	DeletePrefix(prefix []byte) error
-	Commit() error
-	Reset()
-	Close() error
-	Count() int32
-}
 
 // pebbleBatchWriter is an internal interface satisfied by *pebble.Batch,
 // enabling substitution in tests.

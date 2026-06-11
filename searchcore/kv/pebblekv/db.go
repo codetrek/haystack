@@ -1,4 +1,4 @@
-package pebble
+package pebblekv
 
 import (
 	"fmt"
@@ -12,21 +12,8 @@ import (
 
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
-
-// DB represents a Pebble database instance
-type DB interface {
-	GetIncrementalId(key []byte) (int, error)
-	ScheduleCompact()
-	Close() error
-	IsClosed() bool
-	Put(key, value []byte) error
-	Get(key []byte) ([]byte, error)
-	Delete(key []byte) error
-	NewBatch(maxBatchSize int32) Batch
-	Scan(prefix []byte, cb func(key, value []byte) bool) error
-	ScanRange(begin []byte, end []byte, cb func(key, value []byte) bool) error
-}
 
 // pebbleStore is an internal interface satisfied by *pebble.DB, enabling
 // substitution in tests to exercise error paths.
@@ -46,8 +33,17 @@ type PebbleDB struct {
 	closed atomic.Bool
 }
 
-// OpenDB opens a Pebble database at the specified path
-func OpenDB(path string, cacheSize int64) (DB, error) {
+// Open opens a Pebble database at the specified path and returns a kv.Store.
+func Open(path string, cacheSize int64) (kv.Store, error) {
+	return openDB(path, cacheSize)
+}
+
+// OpenDB is an alias for Open kept for backward compatibility with tests.
+func OpenDB(path string, cacheSize int64) (kv.Store, error) {
+	return openDB(path, cacheSize)
+}
+
+func openDB(path string, cacheSize int64) (kv.Store, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %v", err)
@@ -211,7 +207,7 @@ func (d *PebbleDB) Delete(key []byte) error {
 
 // Batch performs multiple operations in a single atomic batch
 // maxBatchSize is the maximum number of operations in a single batch, set 0 to disable the limit
-func (d *PebbleDB) NewBatch(maxBatchSize int32) Batch {
+func (d *PebbleDB) NewBatch(maxBatchSize int32) kv.Batch {
 	return &PebbleBatch{
 		db:           d,
 		batch:        d.db.NewBatch(),

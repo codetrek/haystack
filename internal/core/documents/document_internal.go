@@ -3,11 +3,11 @@ package documents
 import (
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // saveDocument saves a document to the database
-func saveDocument(batch pebble.Batch, workspaceid int, doc *Document) {
+func saveDocument(batch kv.Batch, workspaceid int, doc *Document) {
 	doc.LastSyncTime = time.Now().UnixNano()
 	meta, err := EncodeDocumentMetaValue(doc)
 	if err != nil {

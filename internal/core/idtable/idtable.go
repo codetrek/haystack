@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/core/storage"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // LRUCacheSize defines the maximum number of entries in the LRU cache.
@@ -22,8 +22,8 @@ var CommitInterval = 5 * time.Second
 
 var (
 	mu    sync.Mutex
-	db    pebble.DB
-	batch pebble.Batch
+	db    kv.Store
+	batch kv.Batch
 
 	lru    *LRUCache
 	nextId int64
@@ -56,7 +56,7 @@ func tryCommit() {
 	}
 }
 
-func Init(database pebble.DB) error {
+func Init(database kv.Store) error {
 	if db != nil {
 		return fmt.Errorf("already initialized")
 	}

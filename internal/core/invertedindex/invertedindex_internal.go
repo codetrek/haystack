@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 // updateInvertedIndexCached updates the keyword index in write cached
@@ -33,7 +33,7 @@ func removeIndex(tableId int, docid string, keywords []string) {
 }
 
 // writeInvertedIndex writes a keyword to the database
-var writeInvertedIndex = func(batch pebble.Batch, tableId int, kw string, docids []string, key []byte) {
+var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {
 	// Remove duplicates to ensure the data stored is clean
 	uniqueDocids := removeDuplicatesEfficiently(docids)
 	content := encodeInvertedValue(uniqueDocids)
@@ -45,7 +45,7 @@ var writeInvertedIndex = func(batch pebble.Batch, tableId int, kw string, docids
 
 // removeDocumentsFromInvertedIndex removes a document from the keywords index
 // It will remove the document from the keywords index and rewrite the keyword with new docids
-func removeDocumentsFromInvertedIndex(batch pebble.Batch, tableId int, kw string, removingDocids []string,
+func removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, removingDocids []string,
 	maxKeywordIndexSize int) error {
 	if len(kw) == 0 {
 		log.Println("[Inverted] Warning: Removing document from keywords index, but keyword is empty")

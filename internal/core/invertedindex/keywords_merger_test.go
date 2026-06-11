@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -49,7 +49,7 @@ func (m *mockBatchWrite) DeletePrefix(prefix []byte) error {
 func setupTestMocks() func() {
 	// Override the writeKeywordIndex function for testing
 	originalWriteKeywordIndex := writeInvertedIndex
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		mockBatch := batch.(*mockBatchWrite)
 		mockBatch.tableIds = append(mockBatch.tableIds, tableId)
 		mockBatch.keywords = append(mockBatch.keywords, keyword)
@@ -63,7 +63,7 @@ func setupTestMocks() func() {
 }
 
 // Helper function to create a new mock batch
-func newMockBatch(db pebble.DB) *mockBatchWrite {
+func newMockBatch(db kv.Store) *mockBatchWrite {
 	return &mockBatchWrite{
 		deleted:     []string{},
 		writtenKeys: []string{},
@@ -272,7 +272,7 @@ func TestRewriteIndexMultipleBatches(t *testing.T) {
 // mockDB implements a mock database for testing
 type mockDB struct {
 	scanRangeFunc func(start, end []byte, fn func(k, v []byte) bool)
-	batch         func() pebble.Batch
+	batch         func() kv.Batch
 	batchCommits  int
 }
 
@@ -297,7 +297,7 @@ func (m *mockDB) Close() error {
 	return nil
 }
 
-func (d *mockDB) NewBatch(int32) pebble.Batch {
+func (d *mockDB) NewBatch(int32) kv.Batch {
 	if d.batch != nil {
 		return d.batch()
 	}
@@ -384,7 +384,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 	batch := newMockBatch(nil)
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		writtenTables = append(writtenTables, tableId)
 		writtenKeywords = append(writtenKeywords, keyword)
 		writtenDocIDs = append(writtenDocIDs, docIDs)
@@ -409,7 +409,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 				}
 			}
 		},
-		batch: func() pebble.Batch {
+		batch: func() kv.Batch {
 			return batch
 		},
 	}
@@ -496,7 +496,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 
 	// Create mock batch
 	mockBatch := &struct {
-		pebble.Batch
+		kv.Batch
 	}{
 		Batch: &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error {
@@ -513,14 +513,14 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		if _, ok := writtenData[tableId]; !ok {
 			writtenData[tableId] = make(map[string][]string)
 		}
 		writtenData[tableId][keyword] = docIDs
 	}
 
-	NewBatch = func(db pebble.DB) pebble.Batch {
+	NewBatch = func(db kv.Store) kv.Batch {
 		return mockBatch
 	}
 
@@ -735,11 +735,11 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		// No-op for this test
 	}
 
-	NewBatch = func(db pebble.DB) pebble.Batch {
+	NewBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },
@@ -890,10 +890,10 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 		NewBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		// no-op: we don't need to persist data
 	}
-	NewBatch = func(db pebble.DB) pebble.Batch {
+	NewBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },
@@ -957,8 +957,8 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 		NewBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
-	NewBatch = func(db pebble.DB) pebble.Batch {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
+	NewBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },
@@ -1009,8 +1009,8 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 		NewBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch pebble.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
-	NewBatch = func(db pebble.DB) pebble.Batch {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
+	NewBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },

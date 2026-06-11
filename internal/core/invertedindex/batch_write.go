@@ -1,11 +1,11 @@
 package invertedindex
 
 import (
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
 )
 
 const MaxBatchSize = 512
 
-var NewBatch = func(db pebble.DB) pebble.Batch {
+var NewBatch = func(db kv.Store) kv.Batch {
 	return db.NewBatch(MaxBatchSize)
 }
