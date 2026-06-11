@@ -57,7 +57,6 @@ func New(idx *invertedindex.Index, docs *documents.Store, collectionID int, opts
 // more AND terms that must all appear in a document (index phase) and a regex
 // that must match a line (line-match phase).
 type andClause struct {
-	engine   *Engine
 	regex    *regexp.Regexp
 	andTerms []*term
 }
@@ -66,10 +65,10 @@ type andClause struct {
 // pattern, its regex rendering, the index keywords, and any wildcard keywords.
 type term struct {
 	engine     *Engine
-	Pattern    string
-	RegPattern string
-	Keywords   []string // First element serves as main prefix
-	Wildcards  []string // Wildcard patterns, if any
+	pattern    string
+	regPattern string
+	keywords   []string // First element serves as main prefix
+	wildcards  []string // Wildcard patterns, if any
 }
 
 // CollectDocuments uses the inverted index to collect the set of document IDs
@@ -109,7 +108,7 @@ func (e *Engine) CollectDocuments() (*invertedindex.SearchResult, error) {
 func (c *andClause) collectDocuments(collectionID int) (*invertedindex.SearchResult, error) {
 	rs := []*invertedindex.SearchResult{}
 	for _, t := range c.andTerms {
-		if len(t.Keywords) > 0 {
+		if len(t.keywords) > 0 {
 			r := t.collectDocuments(collectionID)
 			rs = append(rs, &r)
 		}
@@ -148,19 +147,19 @@ func (t *term) collectDocuments(collectionID int) invertedindex.SearchResult {
 		return invertedindex.SearchResult{}
 	}
 
-	ws, err := t.engine.docs.GetWorkspace(collectionID)
+	col, err := t.engine.docs.GetWorkspace(collectionID)
 	if err != nil {
-		log.Printf("[Engine] collectDocuments: failed to get workspace: %v", err)
+		log.Printf("[Engine] collectDocuments: failed to get collection: %v", err)
 		return invertedindex.SearchResult{}
 	}
 
-	if len(t.Keywords) == 0 {
+	if len(t.keywords) == 0 {
 		return invertedindex.SearchResult{}
 	}
 
 	result := invertedindex.SearchResult{
-		DocIds:     t.collectWithKeywords(ws.InvertedId, t.Keywords),
-		WildDocIds: t.collectWithKeywords(ws.InvertedId, t.Wildcards),
+		DocIds:     t.collectWithKeywords(col.InvertedId, t.keywords),
+		WildDocIds: t.collectWithKeywords(col.InvertedId, t.wildcards),
 	}
 
 	for docID := range result.WildDocIds {
@@ -284,7 +283,7 @@ func (e *Engine) Compile(query string, caseSensitive bool) error {
 		t := e.processToken(token, maxWildcardLength)
 		if t != nil {
 			currentTerms = append(currentTerms, t)
-			currentRegPatterns = append(currentRegPatterns, t.RegPattern)
+			currentRegPatterns = append(currentRegPatterns, t.regPattern)
 		}
 	}
 
@@ -321,10 +320,10 @@ func (e *Engine) processToken(token string, maxWildcardLength string) *term {
 		escapedPhrase := regexp.QuoteMeta(unwrapped)
 		return &term{
 			engine:     e,
-			Pattern:    token,
-			RegPattern: escapedPhrase,
-			Keywords:   keywords,
-			Wildcards:  wildcards,
+			pattern:    token,
+			regPattern: escapedPhrase,
+			keywords:   keywords,
+			wildcards:  wildcards,
 		}
 	}
 
@@ -347,10 +346,10 @@ func (e *Engine) processToken(token string, maxWildcardLength string) *term {
 	keywords, wildcards := tokenizer.TokenizeForSearch(token, false)
 	return &term{
 		engine:     e,
-		Pattern:    token,
-		RegPattern: regPattern,
-		Keywords:   keywords,
-		Wildcards:  wildcards,
+		pattern:    token,
+		regPattern: regPattern,
+		keywords:   keywords,
+		wildcards:  wildcards,
 	}
 }
 
@@ -384,7 +383,6 @@ func (e *Engine) finalizeOrClause(
 	}
 
 	return &andClause{
-		engine:   e,
 		regex:    reg,
 		andTerms: andTerms,
 	}, nil
@@ -408,7 +406,7 @@ func (c *andClause) String() string {
 }
 
 func (t *term) String() string {
-	return t.Pattern
+	return t.pattern
 }
 
 // TokenizeWithQuotes splits a string into tokens while preserving quoted

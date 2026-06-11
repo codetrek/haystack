@@ -69,9 +69,9 @@ func TestParseQuerySimple(t *testing.T) {
 			}
 			for j, gotTerm := range gotClause.andTerms {
 				wantT := wantC.Terms[j]
-				assert.Equal(t, wantT.Pattern, gotTerm.Pattern, "Pattern %d in clause %d mismatch for query: %s", j, i, tt.query)
-				assert.Equal(t, wantT.RegPattern, gotTerm.RegPattern, "RegPattern %d in clause %d mismatch for query: %s", j, i, tt.query)
-				assert.Equal(t, wantT.Keywords, gotTerm.Keywords, "Keywords %d in clause %d mismatch for query: %s", j, i, tt.query)
+				assert.Equal(t, wantT.Pattern, gotTerm.pattern, "Pattern %d in clause %d mismatch for query: %s", j, i, tt.query)
+				assert.Equal(t, wantT.RegPattern, gotTerm.regPattern, "RegPattern %d in clause %d mismatch for query: %s", j, i, tt.query)
+				assert.Equal(t, wantT.Keywords, gotTerm.keywords, "Keywords %d in clause %d mismatch for query: %s", j, i, tt.query)
 			}
 		}
 	}
@@ -450,7 +450,7 @@ func TestAndClauseIsLineMatch_Empty(t *testing.T) {
 // TestAndClauseIsLineMatch_NilRegex tests that a nil regex returns no matches.
 func TestAndClauseIsLineMatch_NilRegex(t *testing.T) {
 	c := &andClause{
-		andTerms: []*term{{Pattern: "test"}},
+		andTerms: []*term{{pattern: "test"}},
 		regex:    nil,
 	}
 	assert.Equal(t, [][]int{}, c.isLineMatch("hello world"))
@@ -460,8 +460,7 @@ func TestAndClauseIsLineMatch_NilRegex(t *testing.T) {
 func TestAndClauseCollectDocuments_NoKeywordTerms(t *testing.T) {
 	eng := New(nil, nil, 0, Options{})
 	c := &andClause{
-		engine:   eng,
-		andTerms: []*term{{engine: eng, Pattern: "test", Keywords: []string{}}},
+		andTerms: []*term{{engine: eng, pattern: "test", keywords: []string{}}},
 	}
 	result, err := c.collectDocuments(0)
 	assert.NoError(t, err)
