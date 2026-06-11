@@ -207,7 +207,7 @@ func TestDecodeFTMetaKey_EmptyKey(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFTMetaValue_RoundTrip(t *testing.T) {
-	ws := workspace{
+	ws := Workspace{
 		WorkspaceId: 5,
 		InvertedId:  10,
 		Desc:        "my workspace",

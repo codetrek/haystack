@@ -11,9 +11,10 @@ import (
 	"github.com/codetrek/haystack/searchcore/queue"
 )
 
-// workspace holds per-collection metadata persisted in the key-value store.
-// It is an implementation detail of Store and is not part of the public API.
-type workspace struct {
+// Workspace holds per-collection metadata persisted in the key-value store.
+// It is returned by GetWorkspace and exposes the workspace's identifiers and
+// description as JSON-tagged fields.
+type Workspace struct {
 	WorkspaceId int        `json:"workspace_id"`
 	InvertedId  int        `json:"inverted_id"`
 	Desc        string     `json:"desc"`
@@ -64,7 +65,7 @@ type Store struct {
 	keyTypeDocPath      byte
 
 	workspacesMu      sync.Mutex
-	workspaces        map[int]*workspace
+	workspaces        map[int]*Workspace
 	deletedWorkspaces map[int]struct{}
 
 	docCountMu sync.RWMutex
@@ -99,7 +100,7 @@ func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) 
 		keyTypeDocWords:     opts.KeyTypeDocWords,
 		keyTypeDocMeta:      opts.KeyTypeDocMeta,
 		keyTypeDocPath:      opts.KeyTypeDocPath,
-		workspaces:          make(map[int]*workspace),
+		workspaces:          make(map[int]*Workspace),
 		deletedWorkspaces:   make(map[int]struct{}),
 		docCount:            make(map[int]int),
 	}
@@ -148,7 +149,7 @@ func (s *Store) Create(workspaceId int, desc string) error {
 		return fmt.Errorf("failed to create inverted index table: %w", err)
 	}
 
-	ft := workspace{
+	ft := Workspace{
 		WorkspaceId: workspaceId,
 		InvertedId:  inverted,
 		Desc:        desc,
@@ -213,7 +214,7 @@ func (s *Store) CountByWorkspace(workspaceId int) int {
 
 // GetWorkspace retrieves the workspace information for a given workspace ID.
 // Results are cached in memory after the first lookup.
-func (s *Store) GetWorkspace(workspaceid int) (*workspace, error) {
+func (s *Store) GetWorkspace(workspaceid int) (*Workspace, error) {
 	s.workspacesMu.Lock()
 	defer s.workspacesMu.Unlock()
 	if f, ok := s.workspaces[workspaceid]; ok {

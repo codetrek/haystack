@@ -144,16 +144,16 @@ func (s *Store) decodeFTMetaKey(key string) int {
 }
 
 // encodeFTMetaValue serialises a workspace record as JSON.
-func encodeFTMetaValue(info workspace) []byte {
+func encodeFTMetaValue(info Workspace) []byte {
 	content, _ := json.Marshal(info)
 	return content
 }
 
 // decodeFTMetaValue deserialises a workspace record from JSON.
-func decodeFTMetaValue(data []byte) (*workspace, error) {
-	ft := workspace{}
+func decodeFTMetaValue(data []byte) (*Workspace, error) {
+	ft := Workspace{}
 	if err := json.Unmarshal(data, &ft); err != nil {
-		return &workspace{}, err
+		return &Workspace{}, err
 	}
 	return &ft, nil
 }

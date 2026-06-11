@@ -107,7 +107,7 @@ func TestDecodeFTMetaKey_Invalid(t *testing.T) {
 }
 
 func TestEncodeDecodeFTMetaValue(t *testing.T) {
-	ws := workspace{
+	ws := Workspace{
 		WorkspaceId: 42,
 		InvertedId:  99,
 	}
