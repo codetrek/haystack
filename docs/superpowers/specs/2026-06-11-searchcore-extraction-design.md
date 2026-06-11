@@ -37,15 +37,16 @@ haystack 的核心搜索能力(倒排索引 + 文档存储 + 内容查询引擎)
 - `searcher` 服务层(`SearchContent`/`SearchFiles`,文件 I/O、工作区集成)
 - `indexer`(扫描/解析/写入流水线;docid 改用 searchcore 的 idtable 实例)
 - `conf`/`running`/`httpapi`/`client`/`mcptools` 等 app 层
-- `internal/core/pebble`、`internal/core/storage`、`internal/utils/queue`(承载适配器 +
-  symbols 共享 keyspace 常量;最终收敛见 §9)
+- `internal/core/storage` **瘦身留存**:仅保留 symbols 的 key-type 常量(30-33)+ 版本目录迁移
+  `Open`(内部改调 `pebblekv.Open`)。`internal/core/pebble`、`internal/utils/queue` **本期删除**,
+  haystack 全量改用 `searchcore/kv` + `searchcore/queue`(D12,见 §7/§8)
 
 ## 3. 关键决策记录
 
 | # | 决策 | 选择 | 依据 |
 |---|------|------|------|
 | D1 | 目标形态 | **仓库内嵌套 module**(自带 go.mod)+ 根 `go.work` | 单仓库管理、改动可控;别的项目可 `go get .../searchcore/...` |
-| D2 | 存储耦合 | **库自定义 `kv` 接口 + 自带 `pebblekv` 实现**;haystack 用薄适配器注入现有 DB | `pebble.DB`/`Batch` 本就是接口,抽象近乎零成本;复用最干净 |
+| D2 | 存储耦合 | **库自定义 `kv` 接口 + 自带 `pebblekv` 实现**;haystack 全量改用之(无适配器,见 D12) | `pebble.DB`/`Batch` 本就是接口,`kv.Store` 方法集与之一字不差 |
 | D3 | API 形态 | **实例式**(`New(...)`),废弃包级单例 | 真正可复用(多实例、无全局态、易测) |
 | D4 | 搜索边界 | **搜索内核**(索引 + 存储 + 纯引擎),不含完整搜索服务 | `searcher` 服务层深度耦合 workspace/indexer/conf/fs,剥离=大重构,不在本期 |
 | D5 | idtable | **进库**(实例式 docid 分配器) | 与倒排配套的稳定 docid 生成器,干净且小;让库开箱可生成 docid |
@@ -55,6 +56,7 @@ haystack 的核心搜索能力(倒排索引 + 文档存储 + 内容查询引擎)
 | D9 | 组织形式 | **三层组合 `collection → documents → invertedindex`**,每层可单用、组合下一层 | 单一职责、可分层复用;由 B 决策自然上长一层 |
 | D10 | index 抽象 | **现在只做 invertedindex**;留前向兼容缝,vectorindex 作为未来兄弟包(见 §12) | 向量索引真实需求未定(HAY-007 进行中),现在定接口大概率错;设计出缝、不建实现 |
 | D11 | index 实例 | **全进程共用同一个 `invertedindex.Index` 实例**,在装配根创建并注入 | tableId 由全局计数器(key-22)分配,多实例会冲突;documents 与 symbols 必须共享同一个 |
+| D12 | 基础设施收敛 | **本期直接做**:`pebble`/`queue` 移进库并删 haystack 副本,haystack 全量改用 `searchcore/kv`+`queue`,**无适配器**;`storage` 瘦身留存 | `kv.Store` = 现 `pebble.DB` 接口 ⇒ 收敛纯机械改名;消除两份封装与 shim |
 
 ## 4. 依赖分析(剥离前现状)
 
@@ -137,7 +139,7 @@ haystack 主 module `require github.com/codetrek/haystack/searchcore v0.0.0`,本
 > 仅示意形态,以实现期细化为准。所有构造器接收注入的 `kv.Store` 与 `queue.Queue`。
 
 ```go
-// kv —— 存储抽象（形状照搬现有 pebble.DB / Batch，便于薄适配）
+// kv —— 存储抽象（= 现 pebble.DB / pebble.Batch 接口，一字不差）
 package kv
 type Store interface {
     Get(key []byte) ([]byte, error)
@@ -146,6 +148,9 @@ type Store interface {
     NewBatch(maxBatchSize int32) Batch
     Scan(prefix []byte, cb func(key, value []byte) bool) error
     ScanRange(begin, end []byte, cb func(key, value []byte) bool) error
+    GetIncrementalId(key []byte) (int, error)  // invertedindex(tableId) / collection(id) 用
+    ScheduleCompact()                          // invertedindex keyword merger 用
+    Close() error                              // 由持有者（haystack server）调用
     IsClosed() bool
 }
 type Batch interface { Put(k, v []byte) error; Delete(k []byte) error
@@ -186,7 +191,7 @@ func (s *Store) Search(collectionID int, query string, limit int) SearchResult
 // collection —— 注册表 + 生命周期（组合 documents），库的完整入口
 package collection
 func New(store kv.Store, q queue.Queue, docs *documents.Store, opts Options) *Catalog
-func (c *Catalog) Create(name string) (*Collection, error)   // 自分配 id（key-1 计数器）+ 建表
+func (c *Catalog) Create(name string) (*Collection, error)   // store.GetIncrementalId(key-1) 分配 id + 建表
 func (c *Catalog) Get(id int) (*Collection, error)
 func (c *Catalog) GetByName(name string) (*Collection, error)
 func (c *Catalog) List() []*Collection
@@ -209,45 +214,52 @@ func (e *Engine) CollectDocuments() (*invertedindex.SearchResult, error)
 func (e *Engine) IsLineMatch(line string) [][]int
 ```
 
-## 7. 存储缝设计
+## 7. 存储缝设计(收敛版,D12)
 
-1. **接口形状照搬**：`kv.Store`/`kv.Batch` 采用现有 `pebble.DB`/`pebble.Batch` 方法集,
-   令 haystack 现有实现可被薄适配。
-2. **自带实现**：`kv/pebblekv` 把现 `internal/core/pebble` 搬入库,提供
-   `Open(path, cacheSize) (kv.Store, error)`,作为独立消费者默认后端。
-3. **key-type 可配**：各包(idtable/invertedindex/documents/collection)的 key-type 字节
-   由 `Options` 注入,**默认值=当前值**(collection 1-2 / 文档 10-13 / 倒排 20-22 /
-   idtable 28-29)。`IsKeyType` 助手内化进库。
-4. **id 自分配**：collection 的 id 不依赖 KV 的 `GetIncrementalId`(避免污染 `kv.Store`),
-   而像 idtable 一样自持计数器(读 key-1 当前值→自增→持久化),**从现有计数器续号**。
-5. **haystack 适配器**(写在 haystack 侧,不进库):
-   - `pebbleStoreAdapter`:`internal/core/pebble.DB` → `kv.Store`(主要适配 `NewBatch`
-     返回类型 `pebble.Batch` → `kv.Batch`)。
-   - `queueAdapter`:`internal/utils/queue.Mpsc` → `queue.Queue`。
-6. **共享单库 + 共享写队列 + 共享 Index**:haystack 仍打开一个 Pebble DB、一个共享
-   `DBQueue`,创建一个 `invertedindex.Index`,通过适配器/注入构建 idtable/documents/
-   collection 实例,并把同一个 Index 注入 symbols。key-type 用默认值 ⇒ 与现状一致。
+1. **接口即现状**：`kv.Store`/`kv.Batch` 的方法集 = 现有 `pebble.DB`/`pebble.Batch` 接口
+   一字不差(含 `GetIncrementalId`/`ScheduleCompact`/`Close`)。
+2. **实现进库**：`internal/core/pebble` 的实现搬入 `searchcore/kv/pebblekv`,提供
+   `pebblekv.Open(path, cacheSize) (kv.Store, error)`。`internal/utils/queue` 搬入
+   `searchcore/queue`。**haystack 侧两包删除**。
+3. **全量改用(无适配器)**：haystack 所有原 `pebble.DB`→`kv.Store`、`pebble.Batch`→`kv.Batch`、
+   `internal/utils/queue`→`searchcore/queue` 的 import/类型引用机械改名(约 50 处,含
+   symbols/server/indexer/workspace 及测试)。因接口一字不差,**不需要任何适配器 shim**。
+4. **id 分配**：`invertedindex`(tableId,key-22)与 `collection`(id,key-1)经
+   `store.GetIncrementalId(...)` 分配,**从现有计数器续号**;`idtable` 仍自持计数器(其内部实现)。
+5. **key-type 可配**:各库包(idtable/invertedindex/documents/collection)的 key-type 字节由
+   `Options` 注入,**默认值=当前值**(collection 1-2 / 文档 10-13 / 倒排 20-22 / idtable 28-29)。
+   `IsKeyType` 助手移入 `searchcore/kv`(symbols 从此处 import);symbols 的 key-type(30-33)
+   在 haystack 侧本地定义。
+6. **`storage` 瘦身留存**:`internal/core/storage` 仅保留 ① symbols key-type 常量(30-33)、
+   ② 版本目录迁移 `Open(path, cacheSize)`(haystack app 逻辑:清理旧版本目录,内部改调
+   `pebblekv.Open`)。文档/倒排等 key-type 常量随各包进库。
+7. **共享单库 + 共享写队列 + 共享 Index**:haystack `server.go` 用 `storage.Open`(→`pebblekv`)
+   打开一个 DB(`kv.Store`)、建一个 `searchcore/queue` 共享队列、建一个 `invertedindex.Index`,
+   注入构建 idtable/documents/collection,并把同一个 Index 注入 symbols。key-type 用默认值
+   ⇒ 单库共享 keyspace 行为与现状一致。
 
 ## 8. haystack 改造
 
-- **`server.go` 装配**:替换包级 `Init`,显式 `New` 出
-  `idtable.Allocator` → `invertedindex.Index` → `documents.Store` → `collection.Catalog`,
-  注入适配器 + 共享队列;把 Index 也注入 symbols,把 Catalog/Store 传给 indexer/searcher/
-  workspace。
+- **基础设施收敛(D12,先行)**:全量把 `internal/core/pebble`→`searchcore/kv`(+`pebblekv`)、
+  `internal/utils/queue`→`searchcore/queue` 改名(约 50 处),删除两个 haystack 副本;
+  `internal/core/storage` 瘦身(symbols key-type + 版本迁移 `Open`)。**无适配器**。
+- **`server.go` 装配**:`storage.Open`(→`pebblekv`)开 DB → 建共享 `queue` → 显式 `New` 出
+  `idtable.Allocator` → `invertedindex.Index` → `documents.Store` → `collection.Catalog`;
+  把 Index 注入 symbols,把 Catalog/Store 传给 indexer/searcher/workspace。替换原包级 `Init`。
 - **`workspace` 退化为薄包装器**:内部持一个 `collection.Collection`;
-  - `Path` → collection name;`CreatedAt/LastAccessed/LastFullSync` → collection 元数据;
+  - `Path` → collection name;`CreatedAt/LastAccessed/LastFullSync` → collection 核心元数据;
   - `Filters`/`UseGlobalFilters` → 序列化进 collection 记录的 `Extra`;`GetFilters()` 仍读
     `conf` 做合并(留 haystack);
   - 运行期索引状态(Scanning/Done/进度,非持久化)留在 workspace;
   - **移除 `CountByWorkspaceFunc` 回调 hack**(原为绕循环依赖),改为直接调
     `collection`/`documents` 的 Count。
-- **`symbols`**:改用注入的同一个 `invertedindex.Index`(经 server.go 注入),其余不变。
+- **`symbols`**:改用注入的同一个 `invertedindex.Index`;key-type(30-33)本地定义,
+  `IsKeyType` 改 import `searchcore/kv`。
 - **`searcher`/`engine`**:引擎改用 `collection.Collection`(替代 `*workspace.Workspace`)。
 - **`indexer`**:`GetDocumentId` 改用库 `idtable.Allocator` 实例。
 - **删除**:`internal/core/invertedindex`、`internal/core/documents`、`internal/core/idtable`、
-  `internal/core/workspace/internal`(注册表已迁库;其余 workspace 保留为薄包装)。
-- **保留**:`internal/core/pebble`、`internal/core/storage`、`internal/utils/queue`
-  (承载适配器 + workspace/symbols 共享 keyspace 常量);最终收敛见 §9。
+  `internal/core/workspace/internal`、`internal/core/pebble`、`internal/utils/queue`。
+- **保留(瘦身)**:`internal/core/storage`(symbols key-type 30-33 + 版本迁移 `Open`)。
 
 ## 9. 向后兼容
 
@@ -257,9 +269,9 @@ func (e *Engine) IsLineMatch(line string) [][]int
   JSON 不同(过滤器从内联改到 `Extra`)。在 `collection` 里加**读时 shim**:遇到旧格式记录,
   把内联的 path/times/filters 映射到新 `Record`(filters→Extra),首次写回新格式。id 计数器
   (key-1)续号读取现有值。⇒ **用户无感,无需重建索引**。
-- **共享 keyspace 常量同步**:`storage/types.go` 的全局字节分配(workspace 1-2、doc 10-13、
-  倒排 20-22、idtable 28-29、symbols 30-33)需保持全局一致。库内各包用默认值复刻其字段;
-  haystack `storage` 包继续持有 symbols 的常量。两处加注释互指防漂移。
+- **共享 keyspace 常量同步**:全局字节分配(workspace 1-2、doc 10-13、倒排 20-22、idtable
+  28-29、symbols 30-33)需保持全局一致。库内各包用默认值复刻其字段;haystack 侧 symbols
+  本地持有其 key-type(30-33)。两处加注释互指防漂移。
 - **存储版本**:`StorageVersion = "1.4"` 不变(纯结构性重构,不改盘上格式;注册表 shim 在
   应用层平滑处理)。
 
@@ -267,9 +279,11 @@ func (e *Engine) IsLineMatch(line string) [][]int
 
 每期独立可编译、可测、可单独 PR;每期结束用旧索引数据回归一次搜索确认兼容。
 
-- **P1 — 骨架**:建 module + `go.work`;搬迁 `kv`(+`pebblekv`)、`queue`、`tokenizer`、
-  `types`、`idtable`(实例式)。haystack `indexer.GetDocumentId` 改用库 idtable 实例 + 适配器。
-- **P2 — invertedindex**:实例式化进库;haystack 适配回接;symbols 改用注入的 Index 实例。
+- **P1 — 骨架 + 基础设施收敛(D12)**:建 module + `go.work`;`pebble`→`kv`(+`pebblekv`)、
+  `queue`→`searchcore/queue` 搬入库;**haystack 全量改名改用、删除两副本、`storage` 瘦身**
+  (约 50 处机械改名,无行为变化);搬迁 `tokenizer`、`types`、`idtable`(实例式);
+  haystack `indexer.GetDocumentId` 改用库 idtable 实例。全测试绿。
+- **P2 — invertedindex**:实例式化进库;symbols 改用注入的同一个 Index 实例。全测试绿。
 - **P3 — documents**:实例式化进库,组合注入的 idx(D6);`server.go` 装配 `documents.Store`。
 - **P4 — collection**:注册表进库(D7/D9),含读时 shim;haystack `workspace` 改薄包装、移除
   `CountByWorkspaceFunc`;删除 `workspace/internal`。
@@ -299,7 +313,9 @@ func (e *Engine) IsLineMatch(line string) [][]int
 
 ## 13. 待定 / Open
 
-- **`internal/core/pebble`/`storage`/`queue` 最终收敛**:初期保留;待 symbols 等也全面改用
-  库设施后,可评估彻底删除 haystack 侧副本、全量改用 `searchcore/kv`+`queue`。本期不强制。
-- **collection 记录核心字段范围**:`LastFullSync` 等偏"索引同步"语义的字段是放 collection
-  核心元数据还是 `Extra`,实现期定;倾向核心(对任何索引消费者通用)。
+(无)
+
+已决项:
+- **基础设施收敛** → 本期直接做(D12),见 §7/§8/§10-P1。
+- **collection 记录核心字段** → `CreatedAt/LastAccessed/LastFullSync` 等放 collection **核心
+  元数据**(对任何索引消费者通用);`Extra` 仅放消费者私有数据(haystack 过滤器)。
