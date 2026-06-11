@@ -11,19 +11,6 @@ import (
 	"github.com/codetrek/haystack/searchcore/queue"
 )
 
-var (
-	db      kv.Store
-	mpsc    *queue.Mpsc
-	idxInst *invertedindex.Index
-
-	mutex             sync.Mutex
-	Workspaces        map[int]*Workspace
-	deletedWorkspaces map[int]struct{}
-
-	docCountMu sync.RWMutex
-	docCount   map[int]int // workspaceId -> document count
-)
-
 type Workspace struct {
 	WorkspaceId int        `json:"workspace_id"`
 	InvertedId  int        `json:"inverted_id"`
@@ -31,51 +18,72 @@ type Workspace struct {
 	CreateAt    *time.Time `json:"create_at"`
 }
 
-func isWorkspaceDeleted(workspaceId int) bool {
-	mutex.Lock()
-	defer mutex.Unlock()
+// Options holds tunables for Store. Zero value selects production defaults.
+type Options struct{}
 
-	_, ok := deletedWorkspaces[workspaceId]
+// Store is the instance-based documents store.
+type Store struct {
+	db   kv.Store
+	q    queue.Queue
+	idx  *invertedindex.Index
+	opts Options
+
+	workspacesMu      sync.Mutex
+	workspaces        map[int]*Workspace
+	deletedWorkspaces map[int]struct{}
+
+	docCountMu sync.RWMutex
+	docCount   map[int]int // workspaceId -> document count
+}
+
+// New creates a new Store. idx may be nil in tests that do not exercise
+// index-linked paths.
+func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) (*Store, error) {
+	s := &Store{
+		db:                store,
+		q:                 q,
+		idx:               idx,
+		opts:              opts,
+		workspaces:        make(map[int]*Workspace),
+		deletedWorkspaces: make(map[int]struct{}),
+		docCount:          make(map[int]int),
+	}
+	log.Println("[Documents] Initialized")
+	return s, nil
+}
+
+func (s *Store) isWorkspaceDeleted(workspaceId int) bool {
+	s.workspacesMu.Lock()
+	defer s.workspacesMu.Unlock()
+
+	_, ok := s.deletedWorkspaces[workspaceId]
 	return ok
 }
 
-func markWorkspaceDeleted(workspaceId int) {
-	mutex.Lock()
-	defer mutex.Unlock()
+func (s *Store) markWorkspaceDeleted(workspaceId int) {
+	s.workspacesMu.Lock()
+	defer s.workspacesMu.Unlock()
 
-	deletedWorkspaces[workspaceId] = struct{}{}
+	s.deletedWorkspaces[workspaceId] = struct{}{}
 }
 
-func Init(database kv.Store, q *queue.Mpsc, idx *invertedindex.Index) error {
-	db = database
-	mpsc = q
-	idxInst = idx
-	Workspaces = make(map[int]*Workspace)
-	deletedWorkspaces = make(map[int]struct{})
-	docCount = make(map[int]int)
+func (s *Store) CloseAndWait() {
+	s.q.RunTask(&queue.NopeTask{})
 
-	log.Println("[Documents] Initialized")
-	return nil
-}
+	s.workspacesMu.Lock()
+	s.workspaces = nil
+	s.deletedWorkspaces = nil
+	s.workspacesMu.Unlock()
 
-func CloseAndWait() {
-	mpsc.RunTask(&queue.NopeTask{})
-
-	db = nil
-	mpsc = nil
-	idxInst = nil
-	Workspaces = nil
-	deletedWorkspaces = nil
-
-	docCountMu.Lock()
-	docCount = nil
-	docCountMu.Unlock()
+	s.docCountMu.Lock()
+	s.docCount = nil
+	s.docCountMu.Unlock()
 
 	log.Println("[Documents] Closed")
 }
 
-func Create(workspaceId int, desc string) error {
-	inverted, err := idxInst.CreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
+func (s *Store) Create(workspaceId int, desc string) error {
+	inverted, err := s.indexCreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
 	if err != nil {
 		return fmt.Errorf("failed to create inverted index table: %w", err)
 	}
@@ -86,9 +94,7 @@ func Create(workspaceId int, desc string) error {
 		Desc:        desc,
 	}
 
-	// Create a new collection in the database
-	// This is a placeholder function and should be implemented
-	err = db.Put(EncodeMetaKey(workspaceId), EncodeFTMetaValue(ft))
+	err = s.db.Put(EncodeMetaKey(workspaceId), EncodeFTMetaValue(ft))
 	if err != nil {
 		return err
 	}
@@ -96,30 +102,30 @@ func Create(workspaceId int, desc string) error {
 	// Initialize the in-memory document count by scanning the DB once
 	prefix := EncodeDocumentMetaKey(workspaceId, "")
 	count := 0
-	db.Scan(prefix, func(key, value []byte) bool {
+	s.db.Scan(prefix, func(key, value []byte) bool {
 		count++
 		return true
 	})
 
-	docCountMu.Lock()
-	docCount[workspaceId] = count
-	docCountMu.Unlock()
+	s.docCountMu.Lock()
+	s.docCount[workspaceId] = count
+	s.docCountMu.Unlock()
 
 	return nil
 }
 
 // Delete deletes a workspace and all of its documents and keywords
-func Delete(workspaceId int) error {
-	return mpsc.RunFunc(func() error {
-		ft, err := GetWorkspace(workspaceId)
+func (s *Store) Delete(workspaceId int) error {
+	return s.q.RunFunc(func() error {
+		ft, err := s.GetWorkspace(workspaceId)
 		if err != nil {
 			return fmt.Errorf("failed to get workspace: %w", err)
 		}
-		markWorkspaceDeleted(workspaceId)
+		s.markWorkspaceDeleted(workspaceId)
 
-		idxInst.DeleteTable(ft.InvertedId)
+		s.indexDeleteTable(ft.InvertedId)
 
-		batch := db.NewBatch(0)
+		batch := s.db.NewBatch(0)
 		batch.DeletePrefix(EncodeDocumentMetaKey(workspaceId, ""))
 		batch.DeletePrefix(EncodeDocumentWordsKey(workspaceId, ""))
 
@@ -129,9 +135,9 @@ func Delete(workspaceId int) error {
 		}
 
 		// Clean up in-memory document count for this workspace
-		docCountMu.Lock()
-		delete(docCount, workspaceId)
-		docCountMu.Unlock()
+		s.docCountMu.Lock()
+		delete(s.docCount, workspaceId)
+		s.docCountMu.Unlock()
 
 		return nil
 	})
@@ -139,21 +145,21 @@ func Delete(workspaceId int) error {
 
 // CountByWorkspace returns the number of documents for a given workspace ID
 // using an in-memory counter maintained by document mutations. O(1).
-func CountByWorkspace(workspaceId int) int {
-	docCountMu.RLock()
-	defer docCountMu.RUnlock()
-	return docCount[workspaceId]
+func (s *Store) CountByWorkspace(workspaceId int) int {
+	s.docCountMu.RLock()
+	defer s.docCountMu.RUnlock()
+	return s.docCount[workspaceId]
 }
 
 // GetWorkspace retrieves the workspace information for a given workspace ID
-func GetWorkspace(workspaceid int) (*Workspace, error) {
-	mutex.Lock()
-	defer mutex.Unlock()
-	if f, ok := Workspaces[workspaceid]; ok {
+func (s *Store) GetWorkspace(workspaceid int) (*Workspace, error) {
+	s.workspacesMu.Lock()
+	defer s.workspacesMu.Unlock()
+	if f, ok := s.workspaces[workspaceid]; ok {
 		return f, nil
 	}
 
-	meta, err := db.Get(EncodeMetaKey(workspaceid))
+	meta, err := s.db.Get(EncodeMetaKey(workspaceid))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get workspace meta, workspace: %d, error: %w", workspaceid, err)
 	}
@@ -163,7 +169,32 @@ func GetWorkspace(workspaceid int) (*Workspace, error) {
 		return nil, fmt.Errorf("failed to decode workspace meta, workspace: %d, error: %w", workspaceid, err)
 	}
 
-	Workspaces[workspaceid] = f
+	s.workspaces[workspaceid] = f
 
 	return f, nil
+}
+
+// indexCreateTable is the seam that isolates the inverted-index notification
+// for workspace creation. A future second index type is an additive change here.
+func (s *Store) indexCreateTable(name string) (int, error) {
+	if s.idx == nil {
+		return 0, nil
+	}
+	return s.idx.CreateTable(name)
+}
+
+// indexDeleteTable is the seam for workspace deletion notification.
+func (s *Store) indexDeleteTable(tableId int) {
+	if s.idx == nil {
+		return
+	}
+	s.idx.DeleteTable(tableId)
+}
+
+// indexDocument is the seam for per-document index update (add/update words).
+func (s *Store) indexDocument(tableId int, docId string, newWords, oldWords []string) {
+	if s.idx == nil {
+		return
+	}
+	s.idx.Update(tableId, docId, newWords, oldWords)
 }

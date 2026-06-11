@@ -29,10 +29,14 @@ import (
 // content and symbol search lookups.
 var idxInst *invertedindex.Index
 
-func Run(wg *sync.WaitGroup, idx *invertedindex.Index) {
+// stInst is the documents.Store instance injected via Run.
+var stInst *documents.Store
+
+func Run(wg *sync.WaitGroup, idx *invertedindex.Index, st *documents.Store) {
 	log.Println("[Searcher] Starting...")
 
 	idxInst = idx
+	stInst = st
 
 	wg.Add(1)
 	go func() {
@@ -54,7 +58,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, sr *invertedindex.Sear
 
 	docs := map[string]string{}
 	if len(sr.DocIds) > 10000 {
-		documents.ScanFiles(workspaceId, func(docid, relPath string) bool {
+		stInst.ScanFiles(workspaceId, func(docid, relPath string) bool {
 			if _, ok := sr.DocIds[docid]; ok {
 				docs[relPath] = docid
 			}
@@ -62,7 +66,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, sr *invertedindex.Sear
 		})
 	} else {
 		for docid := range sr.DocIds {
-			relPath := documents.GetDocumentPath(workspaceId, docid)
+			relPath := stInst.GetDocumentPath(workspaceId, docid)
 			if relPath != "" {
 				docs[relPath] = docid
 			}
@@ -306,7 +310,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			break
 		}
 
-		doc, err := documents.GetDocument(workspace.Id, docid, false)
+		doc, err := stInst.GetDocument(workspace.Id, docid, false)
 		if err != nil || doc == nil {
 			continue
 		}
@@ -559,7 +563,7 @@ func SearchFiles(workspace *workspace.Workspace, req *types.SearchFilesRequest) 
 
 	pattern := strings.ReplaceAll(req.Query, " ", "")
 	matches := []MatchResult{}
-	documents.ScanFiles(workspace.Id, func(_, relPath string) bool {
+	stInst.ScanFiles(workspace.Id, func(_, relPath string) bool {
 		if isTimeout() {
 			return false
 		}

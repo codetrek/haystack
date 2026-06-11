@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
 )
@@ -20,10 +21,14 @@ const (
 	IndexingFailed
 )
 
-// CountByWorkspaceFunc is a callback to count documents for a workspace.
-// It is set by the documents package during server initialization to avoid
-// circular imports.
-var CountByWorkspaceFunc func(wsId int) int
+// docStoreInst is injected via SetDocStore to avoid having workspace call
+// package-level documents functions. Set once during server initialisation.
+var docStoreInst *documents.Store
+
+// SetDocStore injects the documents.Store instance used for file counting.
+func SetDocStore(st *documents.Store) {
+	docStoreInst = st
+}
 
 type IndexingProgress struct {
 	StartedAt         *time.Time
@@ -69,8 +74,8 @@ func (w *Workspace) GetTotalFiles() int {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if CountByWorkspaceFunc != nil {
-		return CountByWorkspaceFunc(w.Id)
+	if docStoreInst != nil {
+		return docStoreInst.CountByWorkspace(w.Id)
 	}
 	return 0
 }

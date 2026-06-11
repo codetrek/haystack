@@ -13,10 +13,12 @@ import (
 // be torn down cleanly in reverse order.
 type testEnv struct {
 	*testutil.Env
+	St  *Store
+	idx *invertedindex.Index
 }
 
 // setupTestEnv creates a temporary Pebble database, starts an MPSC queue,
-// and initialises both invertedindex and documents packages.
+// and creates both invertedindex and documents instances.
 // Call the returned cleanup function (or env.teardown) in a defer.
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -30,14 +32,15 @@ func setupTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
 
-	// Init documents package – sets the package-level globals.
-	if err := Init(env.DB, env.Mpsc, idx); err != nil {
+	// Create documents Store instance.
+	st, err := New(env.DB, env.Mpsc, idx, Options{})
+	if err != nil {
 		idx.CloseAndWait()
 		env.TeardownBase()
-		t.Fatalf("failed to init documents: %v", err)
+		t.Fatalf("failed to create documents store: %v", err)
 	}
 
-	return &testEnv{Env: env}
+	return &testEnv{Env: env, St: st, idx: idx}
 }
 
 // teardown shuts down everything in reverse init order:
@@ -46,23 +49,22 @@ func setupTestEnv(t *testing.T) *testEnv {
 func (e *testEnv) teardown() {
 	e.T.Helper()
 
-	// 1. documents package
-	idx := idxInst
-	CloseAndWait()
+	// 1. documents store
+	e.St.CloseAndWait()
 
 	// 2. inverted index
-	if idx != nil {
-		idx.CloseAndWait()
+	if e.idx != nil {
+		e.idx.CloseAndWait()
 	}
 
 	// 3. base resources (queue → db → temp dir)
 	e.TeardownBase()
 }
 
-// mustCreateWorkspace creates a workspace via Create() and fails the test on error.
-func mustCreateWorkspace(t *testing.T, workspaceId int) {
+// mustCreateWorkspace creates a workspace via st.Create() and fails the test on error.
+func mustCreateWorkspace(t *testing.T, st *Store, workspaceId int) {
 	t.Helper()
-	if err := Create(workspaceId, "test-workspace"); err != nil {
+	if err := st.Create(workspaceId, "test-workspace"); err != nil {
 		t.Fatalf("failed to create workspace %d: %v", workspaceId, err)
 	}
 }
@@ -86,11 +88,11 @@ func (closedDB) ScanRange([]byte, []byte, func([]byte, []byte) bool) error {
 	return fmt.Errorf("closed")
 }
 
-// simulateClosedDB replaces the package-level db with a closedDB stub and
-// returns a restore function that puts the original db back.  Call the
-// restore function in a defer (before teardown) so cleanup works normally.
-func simulateClosedDB() (restore func()) {
-	orig := db
-	db = closedDB{}
-	return func() { db = orig }
+// simulateClosedDB replaces the Store's db with a closedDB stub and returns
+// a restore function that puts the original db back. Call the restore function
+// in a defer (before teardown) so cleanup works normally.
+func simulateClosedDB(st *Store) (restore func()) {
+	orig := st.db
+	st.db = closedDB{}
+	return func() { st.db = orig }
 }

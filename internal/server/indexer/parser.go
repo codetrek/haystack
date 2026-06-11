@@ -122,7 +122,7 @@ func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool
 		log.Printf("[Indexer] File `%s` (%.2f MiB) is too large to index, skipping", file.RelFilePath, float64(info.Size())/1024/1024)
 	}
 
-	existing, _ := documents.GetDocument(file.Workspace.Id, id, false)
+	existing, _ := stInst.GetDocument(file.Workspace.Id, id, false)
 	// If the document exists and the modified time is the same, return nil
 	if existing != nil &&
 		existing.ModifiedTime == info.ModTime().UnixNano() {

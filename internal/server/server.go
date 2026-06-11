@@ -28,8 +28,8 @@ var (
 		// Zero-value Options selects production defaults inside New.
 		return invertedindex.New(db, mpsc, invertedindex.Options{})
 	}
-	documentsInit = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
-		return documents.Init(db, mpsc, idx)
+	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) (*documents.Store, error) {
+		return documents.New(db, mpsc, idx, documents.Options{})
 	}
 	workspaceInit = func(db kv.Store) error { return workspace.Init(db) }
 	symbolsInit   = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
@@ -87,18 +87,20 @@ func run() error {
 		return fmt.Errorf("error initializing inverted index: %w", err)
 	}
 
-	if err := documentsInit(db, mpsc, idx); err != nil {
+	st, err := documentsNew(db, mpsc, idx)
+	if err != nil {
 		running.Shutdown()
-		return fmt.Errorf("error initializing storage: %w", err)
+		return fmt.Errorf("error initializing documents store: %w", err)
 	}
+
+	// Wire the documents store into dependent packages.
+	indexer.SetDocStore(st)
+	workspace.SetDocStore(st)
 
 	if err := workspaceInit(db); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing workspace: %w", err)
 	}
-
-	// Wire up the documents count function for workspace to derive TotalFiles.
-	workspace.CountByWorkspaceFunc = documents.CountByWorkspace
 
 	if err := symbolsInit(db, mpsc, idx); err != nil {
 		running.Shutdown()
@@ -106,7 +108,7 @@ func run() error {
 	}
 
 	indexer.Run(wg)
-	searcher.Run(wg, idx)
+	searcher.Run(wg, idx, st)
 
 	if conf.Get().ForTest.Path != "" {
 		indexer.SyncIfNeeded(conf.Get().ForTest.Path)
@@ -123,7 +125,7 @@ func run() error {
 	)
 
 	wg.Wait()
-	documents.CloseAndWait()
+	st.CloseAndWait()
 	idx.CloseAndWait()
 	symbols.CloseAndWait()
 	mpsc.Stop()

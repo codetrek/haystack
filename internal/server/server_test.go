@@ -219,8 +219,10 @@ func startTestServer(t *testing.T) func() {
 	idx, err := invertedindex.New(indexdb, mpsc, testInvertedIndexOptions)
 	assert.NoError(t, err)
 
-	err = documents.Init(db, mpsc, idx)
+	st, err := documents.New(db, mpsc, idx, documents.Options{})
 	assert.NoError(t, err)
+	indexer.SetDocStore(st)
+	workspace.SetDocStore(st)
 
 	err = workspace.Init(db)
 	assert.NoError(t, err)
@@ -229,7 +231,7 @@ func startTestServer(t *testing.T) func() {
 	assert.NoError(t, err)
 
 	indexer.Run(wg)
-	searcher.Run(wg, idx)
+	searcher.Run(wg, idx, st)
 
 	go httpapi.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", testPort), "")
 
@@ -240,12 +242,14 @@ func startTestServer(t *testing.T) func() {
 	return func() {
 		running.Shutdown()
 		wg.Wait()
-		documents.CloseAndWait()
+		st.CloseAndWait()
 		idx.CloseAndWait()
 		mpsc.Stop()
 		alloc.Close()
 		db.Close()
 		indexdb.Close()
+		workspace.SetDocStore(nil)
+		indexer.SetDocStore(nil)
 	}
 }
 

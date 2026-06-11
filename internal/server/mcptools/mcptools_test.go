@@ -107,9 +107,12 @@ This is a test project.`,
 		if !assert.NoError(t, err) {
 			return
 		}
-		if !assert.NoError(t, documents.Init(db, mpsc, idx)) {
+		st, stErr := documents.New(db, mpsc, idx, documents.Options{})
+		if !assert.NoError(t, stErr) {
 			return
 		}
+		indexer.SetDocStore(st)
+		workspace.SetDocStore(st)
 		if !assert.NoError(t, workspace.Init(db)) {
 			return
 		}
@@ -124,7 +127,7 @@ This is a test project.`,
 		indexer.SetIdAllocator(alloc)
 
 		indexer.Run(wg)
-		searcher.Run(wg, idx)
+		searcher.Run(wg, idx, st)
 
 		// Create and index workspace
 		_, err = indexer.CreateWorkspace(testWorkspacePath, true, nil)
@@ -147,7 +150,9 @@ This is a test project.`,
 		testCleanup = func() {
 			running.Shutdown()
 			wg.Wait()
-			documents.CloseAndWait()
+			st.CloseAndWait()
+			workspace.SetDocStore(nil)
+			indexer.SetDocStore(nil)
 			idx.CloseAndWait()
 			symbols.CloseAndWait()
 			mpsc.Stop()

@@ -36,9 +36,11 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	if err != nil {
 		t.Fatalf("invertedindex.New: %v", err)
 	}
-	if err := documents.Init(env.DB, env.Mpsc, idx); err != nil {
-		t.Fatalf("documents.Init: %v", err)
+	st, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
+	if err != nil {
+		t.Fatalf("documents.New: %v", err)
 	}
+	SetDocStore(st)
 	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
@@ -47,8 +49,9 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	}
 
 	return env, func() {
+		SetDocStore(nil)
 		symbols.CloseAndWait()
-		documents.CloseAndWait()
+		st.CloseAndWait()
 		idx.CloseAndWait()
 		alloc.Close()
 		env.TeardownBase()
@@ -335,7 +338,7 @@ func TestParse_UnchangedFileSkip(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -381,7 +384,7 @@ func TestParse_SameHashSkip(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -515,7 +518,7 @@ func TestProcessFile_NewTextFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -611,7 +614,7 @@ func TestParserRun_ProcessesSentFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 

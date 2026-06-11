@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/queue"
@@ -17,8 +18,10 @@ var errFake = errors.New("fake init error")
 // noopInitII is a no-op invertedindexInit replacement: returns a nil Index with no error.
 func noopInitII(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) { return nil, nil }
 
-// noopInitDoc is a no-op documentsInit / symbolsInit replacement.
-func noopInitDoc(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error { return nil }
+// noopDocNew is a no-op documentsNew replacement.
+func noopDocNew(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.Store, error) {
+	return nil, nil
+}
 
 // noopInitDBOnly is a no-op Init replacement for kv.Store only.
 func noopInitDBOnly(_ kv.Store) error { return nil }
@@ -27,18 +30,18 @@ func noopInitDBOnly(_ kv.Store) error { return nil }
 // with no-ops, and returns a restore function.
 func saveAndMockInits() func() {
 	origII := invertedindexInit
-	origDoc := documentsInit
+	origDoc := documentsNew
 	origWS := workspaceInit
 	origSym := symbolsInit
 
 	invertedindexInit = noopInitII
-	documentsInit = noopInitDoc
+	documentsNew = noopDocNew
 	workspaceInit = noopInitDBOnly
-	symbolsInit = noopInitDoc
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error { return nil }
 
 	return func() {
 		invertedindexInit = origII
-		documentsInit = origDoc
+		documentsNew = origDoc
 		workspaceInit = origWS
 		symbolsInit = origSym
 	}
@@ -71,15 +74,15 @@ func TestRun_DocumentsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	documentsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error {
-		return errFake
+	documentsNew = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.Store, error) {
+		return nil, errFake
 	}
 
 	setupRunEnv(t)
 
 	err := run()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error initializing storage")
+	assert.Contains(t, err.Error(), "error initializing documents store")
 }
 
 func TestRun_WorkspaceInitError(t *testing.T) {

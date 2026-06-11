@@ -64,10 +64,15 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic("Failed to init inverted index: " + err.Error())
 	}
-	documents.Init(db, mpsc, idx)
+	st, err := documents.New(db, mpsc, idx, documents.Options{})
+	if err != nil {
+		panic("Failed to init documents: " + err.Error())
+	}
+	indexer.SetDocStore(st)
+	workspace.SetDocStore(st)
 	symbols.Init(db, mpsc, idx)
 	// Inject the inverted index into the searcher so search handlers work.
-	searcher.Run(&runningWg, idx)
+	searcher.Run(&runningWg, idx, st)
 
 	alloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {
@@ -90,7 +95,9 @@ func TestMain(m *testing.M) {
 	testEnv.workspacePath = wsPath
 	testEnv.cleanup = func() {
 		symbols.CloseAndWait()
-		documents.CloseAndWait()
+		st.CloseAndWait()
+		workspace.SetDocStore(nil)
+		indexer.SetDocStore(nil)
 		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()

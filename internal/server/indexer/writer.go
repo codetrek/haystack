@@ -87,11 +87,11 @@ func (w *Writer) processDocs(docs []*WriteDoc) {
 	}
 
 	for workspaceID, docs := range newDocs {
-		documents.SaveNewDocuments(workspaceID, docs)
+		stInst.SaveNewDocuments(workspaceID, docs)
 	}
 
 	for workspaceID, docs := range existingDocs {
-		documents.UpdateDocuments(workspaceID, docs)
+		stInst.UpdateDocuments(workspaceID, docs)
 	}
 }
 

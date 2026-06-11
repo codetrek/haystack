@@ -399,7 +399,7 @@ func TestRun(t *testing.T) {
 	running.InitShutdown(&shutdownWg)
 
 	var wg sync.WaitGroup
-	Run(&wg, nil)
+	Run(&wg, nil, nil)
 
 	running.Shutdown()
 	shutdownWg.Wait()
@@ -472,9 +472,13 @@ func TestFullIntegration(t *testing.T) {
 		t.Fatalf("invertedindex.New: %v", err)
 	}
 	idxInst = idx
-	if err := documents.Init(env.DB, env.Mpsc, idx); err != nil {
-		t.Fatalf("documents.Init: %v", err)
+	docSt, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
+	if err != nil {
+		t.Fatalf("documents.New: %v", err)
 	}
+	stInst = docSt
+	indexer.SetDocStore(docSt)
+	workspace.SetDocStore(docSt)
 	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
@@ -572,7 +576,7 @@ func TestFullIntegration(t *testing.T) {
 		var funcsDocId string
 		dl := time.Now().Add(30 * time.Second)
 		for time.Now().Before(dl) {
-			documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+			stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 				if relPath == "funcs.js" {
 					funcsDocId = id
 					return false
@@ -912,7 +916,7 @@ func TestFullIntegration(t *testing.T) {
 			return relPath == "keep.go"
 		})
 		for _, docid := range sorted {
-			doc, _ := documents.GetDocument(sharedWS.Id, docid, false)
+			doc, _ := stInst.GetDocument(sharedWS.Id, docid, false)
 			if doc != nil {
 				assert.Equal(t, "keep.go", doc.RelPath)
 			}
@@ -939,7 +943,7 @@ func TestFullIntegration(t *testing.T) {
 	// --- sortDocuments: with WildDocIds ---
 	t.Run("sortDocuments with wild docids", func(t *testing.T) {
 		var docId string
-		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 			if relPath == "wild.go" {
 				docId = id
 				return false
@@ -960,7 +964,7 @@ func TestFullIntegration(t *testing.T) {
 	// --- sortDocuments: filter rejects WildDocIds too ---
 	t.Run("sortDocuments filter rejects wild", func(t *testing.T) {
 		var docId string
-		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 			if relPath == "reject_wild.go" {
 				docId = id
 				return false
@@ -986,7 +990,7 @@ func TestFullIntegration(t *testing.T) {
 			largeDocIds[fmt.Sprintf("fake-doc-%d", i)] = struct{}{}
 		}
 		// Also insert real indexed doc IDs so ScanFiles finds matches.
-		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 			largeDocIds[id] = struct{}{}
 			return true
 		})
@@ -1546,7 +1550,7 @@ func TestFullIntegration(t *testing.T) {
 	// --- getFunctionFileMatch: valid doc ---
 	t.Run("getFunctionFileMatch valid doc", func(t *testing.T) {
 		var docId string
-		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 			if relPath == "funcs.js" {
 				docId = id
 				return false
@@ -1599,7 +1603,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- collectWithKeywords: single keyword ---
 	t.Run("collectWithKeywords single keyword", func(t *testing.T) {
-		ft, err := documents.GetWorkspace(sharedWS.Id)
+		ft, err := stInst.GetWorkspace(sharedWS.Id)
 		assert.NoError(t, err)
 
 		term := &SimpleContentSearchEngineTerm{Keywords: []string{"keep_marker"}}
@@ -1617,7 +1621,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- collectWithKeywords: intersection empties out ---
 	t.Run("collectWithKeywords intersection empty", func(t *testing.T) {
-		ft, err := documents.GetWorkspace(sharedWS.Id)
+		ft, err := stInst.GetWorkspace(sharedWS.Id)
 		assert.NoError(t, err)
 
 		term := &SimpleContentSearchEngineTerm{Keywords: []string{"kwone", "kwtwo"}}
@@ -1849,7 +1853,7 @@ func TestFullIntegration(t *testing.T) {
 	// Directly call with query words that match a known function name.
 	t.Run("getFunctionFileMatch matched true", func(t *testing.T) {
 		var docId string
-		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 			if relPath == "funcs.js" {
 				docId = id
 				return false
@@ -1874,7 +1878,7 @@ func TestFullIntegration(t *testing.T) {
 	// Query words that cannot be found in sequence in any function name.
 	t.Run("getFunctionFileMatch matched false", func(t *testing.T) {
 		var docId string
-		documents.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
+		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
 			if relPath == "funcs.js" {
 				docId = id
 				return false
@@ -1958,7 +1962,7 @@ func TestFullIntegration(t *testing.T) {
 		// Only files containing BOTH terms should survive intersection.
 		// Verify by resolving doc IDs to paths.
 		for docId := range result.DocIds {
-			doc, _ := documents.GetDocument(sharedWS.Id, docId, false)
+			doc, _ := stInst.GetDocument(sharedWS.Id, docId, false)
 			if doc != nil {
 				assert.Equal(t, "andfileA.go", doc.RelPath,
 					"only andfileA.go should survive AND intersection")
@@ -2102,7 +2106,10 @@ func TestFullIntegration(t *testing.T) {
 	shutdownWg.Wait()
 	indexerWg.Wait()
 	symbols.CloseAndWait()
-	documents.CloseAndWait()
+	stInst.CloseAndWait()
+	stInst = nil
+	indexer.SetDocStore(nil)
+	workspace.SetDocStore(nil)
 	idx.CloseAndWait()
 	idxInst = nil
 	alloc.Close()

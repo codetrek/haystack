@@ -96,7 +96,7 @@ func TestRemoveFile_Integration(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestAddOrSyncFile_NewFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -156,7 +156,7 @@ func TestAddOrSyncFile_DirectoryIsIgnored(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestAddOrSyncFile_NonExistentFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestRefreshFileIfNeeded_DeletedFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -316,7 +316,7 @@ func TestRefreshFileIfNeeded_DirectoryAtFilePath(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -365,7 +365,7 @@ func TestRefreshFilesIfNeeded_MixedDocs(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -630,7 +630,7 @@ func TestRemoveFile_ValidDoc(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -675,7 +675,7 @@ func TestAddOrSyncFile_ExistingDocModified(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -723,7 +723,7 @@ func TestAddOrSyncFile_ExistingDocFileDeleted(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -863,7 +863,7 @@ func TestAddOrSyncFile_ExistingDocDirectoryReplacedFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 

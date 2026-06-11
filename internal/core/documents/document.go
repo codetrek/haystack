@@ -30,8 +30,8 @@ type Document struct {
 
 // GetDocument returns a document from the database
 // It returns nil if the document does not exist
-func GetDocument(workspaceid int, docid string, includeWords bool) (*Document, error) {
-	data, err := db.Get(EncodeDocumentMetaKey(workspaceid, docid))
+func (s *Store) GetDocument(workspaceid int, docid string, includeWords bool) (*Document, error) {
+	data, err := s.db.Get(EncodeDocumentMetaKey(workspaceid, docid))
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func GetDocument(workspaceid int, docid string, includeWords bool) (*Document, e
 	doc.ID = docid
 
 	if includeWords {
-		words, err := GetDocumentWords(workspaceid, docid)
+		words, err := s.GetDocumentWords(workspaceid, docid)
 		if err != nil {
 			return nil, err
 		}
@@ -61,8 +61,8 @@ func GetDocument(workspaceid int, docid string, includeWords bool) (*Document, e
 
 // GetDocumentWords returns the words of a document
 // It returns an empty array if the document does not exist
-func GetDocumentWords(workspaceid int, docid string) ([]string, error) {
-	words, err := db.Get(EncodeDocumentWordsKey(workspaceid, docid))
+func (s *Store) GetDocumentWords(workspaceid int, docid string) ([]string, error) {
+	words, err := s.db.Get(EncodeDocumentWordsKey(workspaceid, docid))
 	if err != nil {
 		return nil, err
 	}
@@ -76,27 +76,27 @@ func GetDocumentWords(workspaceid int, docid string) ([]string, error) {
 
 // SaveNewDocuments saves new documents to the database
 // It also updates the pending writes cache to merge with other documents and flush later
-func SaveNewDocuments(workspaceid int, docs []*Document) error {
-	return mpsc.RunFunc(func() error {
-		if db.IsClosed() {
+func (s *Store) SaveNewDocuments(workspaceid int, docs []*Document) error {
+	return s.q.RunFunc(func() error {
+		if s.db.IsClosed() {
 			log.Println("[Documents] Database is closed, skip saving new documents")
 			return nil
 		}
 
-		if isWorkspaceDeleted(workspaceid) {
+		if s.isWorkspaceDeleted(workspaceid) {
 			log.Println("[Documents] Error: workspace is deleted, skip updating documents")
 			return fmt.Errorf("workspace is deleted")
 		}
 
-		ft, err := GetWorkspace(workspaceid)
+		ft, err := s.GetWorkspace(workspaceid)
 		if err != nil {
 			log.Println("[Documents] Error: failed to get workspace:", err)
 			return err
 		}
 
-		batch := NewBatch(db)
+		batch := NewBatch(s.db)
 		for _, doc := range docs {
-			idxInst.Update(ft.InvertedId, doc.ID, doc.Words, nil)
+			s.indexDocument(ft.InvertedId, doc.ID, doc.Words, nil)
 			saveDocument(batch, workspaceid, doc)
 		}
 		err = batch.Commit()
@@ -105,9 +105,9 @@ func SaveNewDocuments(workspaceid int, docs []*Document) error {
 			return err
 		}
 
-		docCountMu.Lock()
-		docCount[workspaceid] += len(docs)
-		docCountMu.Unlock()
+		s.docCountMu.Lock()
+		s.docCount[workspaceid] += len(docs)
+		s.docCountMu.Unlock()
 
 		return nil
 	})
@@ -115,33 +115,33 @@ func SaveNewDocuments(workspaceid int, docs []*Document) error {
 
 // UpdateDocuments updates the words of a document
 // It also updates the pending writes cache to merge with other documents and flush later
-func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
-	return mpsc.RunFunc(func() error {
-		if db.IsClosed() {
+func (s *Store) UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
+	return s.q.RunFunc(func() error {
+		if s.db.IsClosed() {
 			log.Println("[Documents] Database is closed, skip updating documents")
 			return fmt.Errorf("database is closed")
 		}
 
-		if isWorkspaceDeleted(workspaceid) {
+		if s.isWorkspaceDeleted(workspaceid) {
 			log.Println("[Documents] Error: workspace is deleted, skip updating documents")
 			return fmt.Errorf("workspace is deleted")
 		}
 
-		ft, err := GetWorkspace(workspaceid)
+		ft, err := s.GetWorkspace(workspaceid)
 		if err != nil {
 			log.Println("[Documents] Error: failed to get workspace:", err)
 			return err
 		}
 
-		batch := NewBatch(db)
+		batch := NewBatch(s.db)
 		for _, updatedDoc := range updatedDocs {
 			// Get the current document words from the database
-			oldWords, err := GetDocumentWords(workspaceid, updatedDoc.ID)
+			oldWords, err := s.GetDocumentWords(workspaceid, updatedDoc.ID)
 			if err != nil {
 				continue
 			}
 
-			idxInst.Update(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
+			s.indexDocument(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
 
 			// Save the updated document
 			saveDocument(batch, workspaceid, updatedDoc)
@@ -157,20 +157,20 @@ func UpdateDocuments(workspaceid int, updatedDocs []*Document) error {
 
 // DeleteDocument deletes a document from the database
 // It will delete the document from the keywords index and the document meta
-func DeleteDocument(workspaceId int, docId string) error {
-	return mpsc.RunFunc(func() error {
-		if db.IsClosed() {
+func (s *Store) DeleteDocument(workspaceId int, docId string) error {
+	return s.q.RunFunc(func() error {
+		if s.db.IsClosed() {
 			log.Println("[Documents] Database is closed, skip deleting document")
 			return nil
 		}
 
-		ft, err := GetWorkspace(workspaceId)
+		ft, err := s.GetWorkspace(workspaceId)
 		if err != nil {
 			log.Println("[Documents] Error: failed to get workspace:", err)
 			return err
 		}
 
-		doc, err := GetDocument(workspaceId, docId, true)
+		doc, err := s.GetDocument(workspaceId, docId, true)
 		if err != nil {
 			log.Println("[Documents] Error: failed to get document:", err)
 			return err
@@ -182,10 +182,10 @@ func DeleteDocument(workspaceId int, docId string) error {
 
 		defer log.Printf("[Documents] Document `%s` deleted from workspace `%d`", doc.RelPath, workspaceId)
 
-		idxInst.Update(ft.InvertedId, docId, []string{}, doc.Words)
+		s.indexDocument(ft.InvertedId, docId, []string{}, doc.Words)
 
 		// delete the document meta and words
-		batch := NewBatch(db)
+		batch := NewBatch(s.db)
 		batch.Delete(EncodeDocumentMetaKey(workspaceId, docId))
 		batch.Delete(EncodeDocumentWordsKey(workspaceId, docId))
 		batch.Delete(EncodeDocumentPathKey(workspaceId, docId))
@@ -195,9 +195,9 @@ func DeleteDocument(workspaceId int, docId string) error {
 			return err
 		}
 
-		docCountMu.Lock()
-		docCount[workspaceId] -= 1
-		docCountMu.Unlock()
+		s.docCountMu.Lock()
+		s.docCount[workspaceId] -= 1
+		s.docCountMu.Unlock()
 
 		return nil
 	})

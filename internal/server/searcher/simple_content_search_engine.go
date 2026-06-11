@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/tokenizer"
@@ -111,7 +110,7 @@ func (q *SimpleContentSearchEngineAndClause) CollectDocuments(workspaceId int) (
 }
 
 func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invertedindex.SearchResult {
-	ft, err := documents.GetWorkspace(workspaceId)
+	ft, err := stInst.GetWorkspace(workspaceId)
 	if err != nil {
 		log.Printf("[Searcher] CollectDocuments: failed to get fulltext index: %v", err)
 		return invertedindex.SearchResult{}

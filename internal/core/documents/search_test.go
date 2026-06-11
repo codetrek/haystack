@@ -14,19 +14,19 @@ func TestGetDocumentPath_Exists(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	doc := &Document{
 		ID:      "d1",
 		RelPath: "src/app.go",
 		Words:   []string{"app"},
 	}
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	path := GetDocumentPath(1, "d1")
+	path := env.St.GetDocumentPath(1, "d1")
 	assert.Equal(t, "src/app.go", path)
 }
 
@@ -34,9 +34,9 @@ func TestGetDocumentPath_Missing(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
-	path := GetDocumentPath(1, "nonexistent")
+	path := env.St.GetDocumentPath(1, "nonexistent")
 	assert.Empty(t, path, "missing doc should return empty path")
 }
 
@@ -48,20 +48,20 @@ func TestScanFiles_NormalScan(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	docs := []*Document{
 		{ID: "a", RelPath: "a.go", Words: []string{"a"}},
 		{ID: "b", RelPath: "b.go", Words: []string{"b"}},
 		{ID: "c", RelPath: "c.go", Words: []string{"c"}},
 	}
-	err := SaveNewDocuments(1, docs)
+	err := env.St.SaveNewDocuments(1, docs)
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	collected := map[string]string{}
-	ScanFiles(1, func(docid, relPath string) bool {
+	env.St.ScanFiles(1, func(docid, relPath string) bool {
 		collected[docid] = relPath
 		return true
 	})
@@ -76,20 +76,20 @@ func TestScanFiles_CallbackReturnsFalseStops(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	docs := []*Document{
 		{ID: "a", RelPath: "a.go", Words: []string{"a"}},
 		{ID: "b", RelPath: "b.go", Words: []string{"b"}},
 		{ID: "c", RelPath: "c.go", Words: []string{"c"}},
 	}
-	err := SaveNewDocuments(1, docs)
+	err := env.St.SaveNewDocuments(1, docs)
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	count := 0
-	ScanFiles(1, func(docid, relPath string) bool {
+	env.St.ScanFiles(1, func(docid, relPath string) bool {
 		count++
 		return false // stop after first
 	})
@@ -101,24 +101,24 @@ func TestScanFiles_DeletedDocNotScanned(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	docs := []*Document{
 		{ID: "keep", RelPath: "keep.go", Words: []string{"keep"}},
 		{ID: "del", RelPath: "del.go", Words: []string{"del"}},
 	}
-	err := SaveNewDocuments(1, docs)
+	err := env.St.SaveNewDocuments(1, docs)
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	err = DeleteDocument(1, "del")
+	err = env.St.DeleteDocument(1, "del")
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	collected := map[string]string{}
-	ScanFiles(1, func(docid, relPath string) bool {
+	env.St.ScanFiles(1, func(docid, relPath string) bool {
 		collected[docid] = relPath
 		return true
 	})
@@ -131,10 +131,10 @@ func TestScanFiles_EmptyWorkspace(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	count := 0
-	ScanFiles(1, func(docid, relPath string) bool {
+	env.St.ScanFiles(1, func(docid, relPath string) bool {
 		count++
 		return true
 	})
@@ -149,13 +149,13 @@ func TestScanFiles_EmptyDocIdSkipped(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Save a normal document so we have something to scan
 	docs := []*Document{
 		{ID: "real", RelPath: "real.go", Words: []string{"w"}},
 	}
-	err := SaveNewDocuments(1, docs)
+	err := env.St.SaveNewDocuments(1, docs)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -166,13 +166,13 @@ func TestScanFiles_EmptyDocIdSkipped(t *testing.T) {
 	// DecodeDocumentPathKey will return docid="" for this key, triggering
 	// the `if docid == ""` branch that should skip the entry.
 	badKey := EncodeDocumentPathKey(1, "")
-	err = db.Put(badKey, []byte("phantom.go"))
+	err = env.DB.Put(badKey, []byte("phantom.go"))
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	collected := map[string]string{}
-	ScanFiles(1, func(docid, relPath string) bool {
+	env.St.ScanFiles(1, func(docid, relPath string) bool {
 		collected[docid] = relPath
 		return true
 	})

@@ -64,7 +64,7 @@ func isFileChanged(workspace *workspace.Workspace, doc *documents.Document) bool
 }
 
 func getFunctionFileMatch(workspace *workspace.Workspace, queryFunctionWords []string, docId string) (map[string][]types.SymbolsFileMatch, error) {
-	doc, err := documents.GetDocument(workspace.Id, docId, false)
+	doc, err := stInst.GetDocument(workspace.Id, docId, false)
 	if err != nil || doc == nil {
 		return nil, err
 	}
@@ -189,7 +189,7 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 
 	for docId := range r.DocIds {
 		// Get document info for file path
-		doc, err := documents.GetDocument(workspace.Id, docId, false)
+		doc, err := stInst.GetDocument(workspace.Id, docId, false)
 		if err != nil || doc == nil {
 			continue
 		}

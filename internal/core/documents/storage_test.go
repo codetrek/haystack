@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestInit(t *testing.T) {
+func TestNew(t *testing.T) {
 	// Set up a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "haystack-test-*")
 	if err != nil {
@@ -30,9 +30,9 @@ func TestInit(t *testing.T) {
 	mpsc.Start()
 	defer mpsc.Stop()
 
-	err = Init(db, mpsc, nil)
+	st, err := New(db, mpsc, nil, Options{})
 	if err != nil {
-		t.Fatalf("Init failed: %v", err)
+		t.Fatalf("New failed: %v", err)
 	}
 
 	// Verify if the storage directory was created
@@ -57,7 +57,7 @@ func TestInit(t *testing.T) {
 	}
 
 	// Cleanup
-	CloseAndWait()
+	st.CloseAndWait()
 	db.Close()
 }
 
@@ -78,15 +78,15 @@ func TestCloseAndWait(t *testing.T) {
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()
 
-	err = Init(db, mpsc, nil)
+	st, err := New(db, mpsc, nil, Options{})
 	if err != nil {
-		t.Fatalf("Init failed: %v", err)
+		t.Fatalf("New failed: %v", err)
 	}
 
 	// Test closing
 	done := make(chan struct{})
 	go func() {
-		CloseAndWait()
+		st.CloseAndWait()
 		db.Close()
 		close(done)
 		mpsc.Stop()
@@ -124,7 +124,7 @@ func TestCreate_InvertedIndexCreateTableError(t *testing.T) {
 		return
 	}
 
-	err = Create(100, "should-fail")
+	err = env.St.Create(100, "should-fail")
 	assert.Error(t, err, "Create should fail when invertedindex.CreateTable returns error")
 	assert.Contains(t, err.Error(), "failed to create inverted index table")
 
@@ -136,13 +136,13 @@ func TestCreate_DbPutError(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	// simulateClosedDB replaces only the documents package's db with a stub
+	// simulateClosedDB replaces only the documents store's db with a stub
 	// that always returns errors. The inverted index's CreateTable() still uses
 	// the real DB and will succeed, but db.Put() in Create() will fail.
-	restore := simulateClosedDB()
+	restore := simulateClosedDB(env.St)
 	defer restore()
 
-	err := Create(200, "put-should-fail")
+	err := env.St.Create(200, "put-should-fail")
 	assert.Error(t, err, "Create should fail when db.Put returns error")
 }
 
@@ -154,9 +154,9 @@ func TestCreateAndGetWorkspace(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 42)
+	mustCreateWorkspace(t, env.St, 42)
 
-	ws, err := GetWorkspace(42)
+	ws, err := env.St.GetWorkspace(42)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -167,7 +167,7 @@ func TestCreateAndGetWorkspace(t *testing.T) {
 	assert.Equal(t, "test-workspace", ws.Desc)
 
 	// Second call should come from cache
-	ws2, err := GetWorkspace(42)
+	ws2, err := env.St.GetWorkspace(42)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -178,7 +178,7 @@ func TestGetWorkspace_NonExistent(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	_, err := GetWorkspace(999)
+	_, err := env.St.GetWorkspace(999)
 	assert.Error(t, err, "non-existent workspace should return error")
 }
 
@@ -190,7 +190,7 @@ func TestDelete_MarksWorkspaceDeleted(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Save a document so we can verify it gets cleaned up
 	doc := &Document{
@@ -198,13 +198,13 @@ func TestDelete_MarksWorkspaceDeleted(t *testing.T) {
 		RelPath: "file.go",
 		Words:   []string{"word"},
 	}
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	// Verify document exists before delete
-	got, err := GetDocument(1, "d1", false)
+	got, err := env.St.GetDocument(1, "d1", false)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -213,17 +213,17 @@ func TestDelete_MarksWorkspaceDeleted(t *testing.T) {
 	}
 
 	// Delete workspace
-	err = Delete(1)
+	err = env.St.Delete(1)
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	// Workspace should be marked as deleted
-	assert.True(t, isWorkspaceDeleted(1))
+	assert.True(t, env.St.isWorkspaceDeleted(1))
 
 	// New saves to the deleted workspace should fail
 	doc2 := &Document{ID: "d2", RelPath: "y.go", Words: []string{"y"}}
-	err = SaveNewDocuments(1, []*Document{doc2})
+	err = env.St.SaveNewDocuments(1, []*Document{doc2})
 	assert.Error(t, err)
 }
 
@@ -235,8 +235,8 @@ func TestIsWorkspaceDeleted(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	assert.False(t, isWorkspaceDeleted(99))
+	assert.False(t, env.St.isWorkspaceDeleted(99))
 
-	markWorkspaceDeleted(99)
-	assert.True(t, isWorkspaceDeleted(99))
+	env.St.markWorkspaceDeleted(99)
+	assert.True(t, env.St.isWorkspaceDeleted(99))
 }

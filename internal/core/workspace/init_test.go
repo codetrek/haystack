@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -39,11 +40,20 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 		os.RemoveAll(tempDir)
 		t.Fatalf("invertedindex.New failed: %v", err)
 	}
-	documents.Init(db, mpsc, idx)
+	st, err := documents.New(db, mpsc, idx, documents.Options{})
+	if err != nil {
+		idx.CloseAndWait()
+		db.Close()
+		mpsc.Stop()
+		os.RemoveAll(tempDir)
+		t.Fatalf("documents.New failed: %v", err)
+	}
+	SetDocStore(st)
 	symbols.Init(db, mpsc, idx)
 
 	err = Init(db)
 	if err != nil {
+		st.CloseAndWait()
 		idx.CloseAndWait()
 		db.Close()
 		mpsc.Stop()
@@ -52,8 +62,9 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 	}
 
 	cleanup = func() {
+		SetDocStore(nil)
 		symbols.CloseAndWait()
-		documents.CloseAndWait()
+		st.CloseAndWait()
 		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()
@@ -82,11 +93,11 @@ func TestInit(t *testing.T) {
 	mpsc.Start()
 	defer mpsc.Stop()
 
-	err = documents.Init(db, mpsc, nil)
+	st, err := documents.New(db, mpsc, nil, documents.Options{})
 	if err != nil {
-		t.Fatalf("Storage Init failed: %v", err)
+		t.Fatalf("documents.New failed: %v", err)
 	}
-	defer documents.CloseAndWait()
+	defer st.CloseAndWait()
 
 	workspacdId := 1
 	// Create test workspace data
@@ -525,14 +536,18 @@ func TestGetAll_WithIndexingProgress(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	// Set up CountByWorkspaceFunc to return a known value
-	CountByWorkspaceFunc = func(wsId int) int {
-		if wsId == ws.Id {
-			return 99
+	// Pre-populate 99 documents in the real store so CountByWorkspace returns 99.
+	docs := make([]*documents.Document, 99)
+	for i := 0; i < 99; i++ {
+		docs[i] = &documents.Document{
+			ID:      fmt.Sprintf("doc%d", i),
+			RelPath: fmt.Sprintf("file%d.go", i),
+			Words:   []string{"word"},
 		}
-		return 0
 	}
-	defer func() { CountByWorkspaceFunc = nil }()
+	if err := docStoreInst.SaveNewDocuments(ws.Id, docs); err != nil {
+		t.Fatalf("SaveNewDocuments failed: %v", err)
+	}
 
 	// Start indexing
 	err = ws.StartIndexing()
@@ -549,7 +564,7 @@ func TestGetAll_WithIndexingProgress(t *testing.T) {
 				t.Error("Workspace should be marked as indexing")
 			}
 			if w.TotalFiles != 99 {
-				t.Errorf("TotalFiles = %d, want 99 (from CountByWorkspaceFunc)", w.TotalFiles)
+				t.Errorf("TotalFiles = %d, want 99", w.TotalFiles)
 			}
 			break
 		}

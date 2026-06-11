@@ -1,8 +1,8 @@
 package documents
 
-func GetDocumentPath(workspaceId int, docid string) string {
+func (s *Store) GetDocumentPath(workspaceId int, docid string) string {
 	key := EncodeDocumentPathKey(workspaceId, docid)
-	value, _ := db.Get(key)
+	value, _ := s.db.Get(key)
 	if value == nil {
 		return ""
 	}
@@ -10,8 +10,8 @@ func GetDocumentPath(workspaceId int, docid string) string {
 	return string(value)
 }
 
-func ScanFiles(workspaceId int, callback func(docid, relPath string) bool) {
-	db.Scan(EncodeDocumentPathKey(workspaceId, ""), func(key, value []byte) bool {
+func (s *Store) ScanFiles(workspaceId int, callback func(docid, relPath string) bool) {
+	s.db.Scan(EncodeDocumentPathKey(workspaceId, ""), func(key, value []byte) bool {
 		_, docid := DecodeDocumentPathKey(string(key))
 		if docid == "" {
 			return true

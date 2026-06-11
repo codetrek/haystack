@@ -8,7 +8,6 @@ import (
 	"sort"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
@@ -142,7 +141,9 @@ func Create(workspacePath string) (*Workspace, error) {
 
 	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
 
-	documents.Create(workspace.Id, workspacePath)
+	if docStoreInst != nil {
+		docStoreInst.Create(workspace.Id, workspacePath)
+	}
 	symbols.Create(workspace.Id, workspacePath)
 	return workspace, nil
 }
@@ -161,7 +162,9 @@ func Delete(workspaceId int) error {
 	delete(workspacePaths, workspace.Path)
 
 	internal.Delete(workspaceId)
-	documents.Delete(workspaceId)
+	if docStoreInst != nil {
+		docStoreInst.Delete(workspaceId)
+	}
 	symbols.Delete(workspace.Id)
 
 	return nil

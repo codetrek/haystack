@@ -14,9 +14,9 @@ func TestGetDocument_Missing(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
-	doc, err := GetDocument(1, "nonexistent", false)
+	doc, err := env.St.GetDocument(1, "nonexistent", false)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -27,13 +27,13 @@ func TestGetDocument_DbGetError(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Swap in a closed DB stub so db.Get() returns an error
-	restore := simulateClosedDB()
+	restore := simulateClosedDB(env.St)
 	defer restore()
 
-	doc, err := GetDocument(1, "any-doc", false)
+	doc, err := env.St.GetDocument(1, "any-doc", false)
 	assert.Error(t, err, "GetDocument should propagate db.Get error")
 	assert.Nil(t, doc)
 }
@@ -42,18 +42,18 @@ func TestGetDocument_DecodeError(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Write invalid (non-JSON) data directly to the document meta key
 	// so DecodeDocumentMetaValue will fail.
 	docid := "corrupt-doc"
 	key := EncodeDocumentMetaKey(1, docid)
-	err := db.Put(key, []byte("this is not valid json"))
+	err := env.DB.Put(key, []byte("this is not valid json"))
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	doc, err := GetDocument(1, docid, false)
+	doc, err := env.St.GetDocument(1, docid, false)
 	assert.Error(t, err, "GetDocument should propagate decode error")
 	assert.Nil(t, doc)
 }
@@ -62,7 +62,7 @@ func TestGetDocument_RoundTrip_WithoutWords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	orig := &Document{
 		ID:           "doc1",
@@ -74,12 +74,12 @@ func TestGetDocument_RoundTrip_WithoutWords(t *testing.T) {
 		PathWords:    []string{"src", "main", "go"},
 	}
 
-	err := SaveNewDocuments(1, []*Document{orig})
+	err := env.St.SaveNewDocuments(1, []*Document{orig})
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	doc, err := GetDocument(1, "doc1", false)
+	doc, err := env.St.GetDocument(1, "doc1", false)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -100,7 +100,7 @@ func TestGetDocument_RoundTrip_WithWords(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	orig := &Document{
 		ID:           "doc1",
@@ -111,12 +111,12 @@ func TestGetDocument_RoundTrip_WithWords(t *testing.T) {
 		Words:        []string{"hello", "world"},
 	}
 
-	err := SaveNewDocuments(1, []*Document{orig})
+	err := env.St.SaveNewDocuments(1, []*Document{orig})
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	doc, err := GetDocument(1, "doc1", true)
+	doc, err := env.St.GetDocument(1, "doc1", true)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -136,9 +136,9 @@ func TestGetDocumentWords_Missing(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
-	words, err := GetDocumentWords(1, "nonexistent")
+	words, err := env.St.GetDocumentWords(1, "nonexistent")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -149,7 +149,7 @@ func TestGetDocumentWords_RoundTrip(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	doc := &Document{
 		ID:      "doc1",
@@ -157,12 +157,12 @@ func TestGetDocumentWords_RoundTrip(t *testing.T) {
 		Words:   []string{"alpha", "beta", "gamma"},
 	}
 
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	words, err := GetDocumentWords(1, "doc1")
+	words, err := env.St.GetDocumentWords(1, "doc1")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -177,7 +177,7 @@ func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	doc := &Document{
 		ID:      "d1",
@@ -187,13 +187,13 @@ func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
 		Words:   []string{"func", "util"},
 	}
 
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	// Verify meta
-	got, err := GetDocument(1, "d1", false)
+	got, err := env.St.GetDocument(1, "d1", false)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -208,14 +208,14 @@ func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
 	assert.NotZero(t, got.LastSyncTime, "LastSyncTime should be set by saveDocument")
 
 	// Verify words
-	words, err := GetDocumentWords(1, "d1")
+	words, err := env.St.GetDocumentWords(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
 	assert.Equal(t, []string{"func", "util"}, words)
 
 	// Verify path
-	path := GetDocumentPath(1, "d1")
+	path := env.St.GetDocumentPath(1, "d1")
 	assert.Equal(t, "pkg/util.go", path)
 }
 
@@ -223,7 +223,7 @@ func TestSaveNewDocuments_MultipleDocuments(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	docs := []*Document{
 		{ID: "a", RelPath: "a.go", Words: []string{"one"}},
@@ -231,13 +231,13 @@ func TestSaveNewDocuments_MultipleDocuments(t *testing.T) {
 		{ID: "c", RelPath: "c.go", Words: []string{"three"}},
 	}
 
-	err := SaveNewDocuments(1, docs)
+	err := env.St.SaveNewDocuments(1, docs)
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	for _, d := range docs {
-		got, err := GetDocument(1, d.ID, true)
+		got, err := env.St.GetDocument(1, d.ID, true)
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -253,14 +253,14 @@ func TestSaveNewDocuments_ClosedDB(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Swap in a fake closed DB to trigger the db.IsClosed() early return
-	restore := simulateClosedDB()
+	restore := simulateClosedDB(env.St)
 	defer restore()
 
 	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	// SaveNewDocuments returns nil when db is closed (silent skip)
 	assert.NoError(t, err, "closed DB should cause a silent skip, not an error")
 }
@@ -269,13 +269,13 @@ func TestSaveNewDocuments_DeletedWorkspaceRejected(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Mark workspace as deleted
-	markWorkspaceDeleted(1)
+	env.St.markWorkspaceDeleted(1)
 
 	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	assert.Error(t, err, "saving to a deleted workspace should fail")
 }
 
@@ -287,7 +287,7 @@ func TestUpdateDocuments_OverwriteExisting(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	orig := &Document{
 		ID:      "d1",
@@ -296,7 +296,7 @@ func TestUpdateDocuments_OverwriteExisting(t *testing.T) {
 		Hash:    "oldhash",
 		Words:   []string{"old", "word"},
 	}
-	err := SaveNewDocuments(1, []*Document{orig})
+	err := env.St.SaveNewDocuments(1, []*Document{orig})
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -308,12 +308,12 @@ func TestUpdateDocuments_OverwriteExisting(t *testing.T) {
 		Hash:    "newhash",
 		Words:   []string{"new", "updated"},
 	}
-	err = UpdateDocuments(1, []*Document{updated})
+	err = env.St.UpdateDocuments(1, []*Document{updated})
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	got, err := GetDocument(1, "d1", true)
+	got, err := env.St.GetDocument(1, "d1", true)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -330,14 +330,14 @@ func TestUpdateDocuments_ClosedDB(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Swap in a fake closed DB to trigger the db.IsClosed() early return
-	restore := simulateClosedDB()
+	restore := simulateClosedDB(env.St)
 	defer restore()
 
 	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
-	err := UpdateDocuments(1, []*Document{doc})
+	err := env.St.UpdateDocuments(1, []*Document{doc})
 	// UpdateDocuments returns an error when db is closed
 	assert.Error(t, err, "closed DB should return an error")
 }
@@ -346,11 +346,11 @@ func TestUpdateDocuments_DeletedWorkspaceRejected(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
-	markWorkspaceDeleted(1)
+	mustCreateWorkspace(t, env.St, 1)
+	env.St.markWorkspaceDeleted(1)
 
 	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
-	err := UpdateDocuments(1, []*Document{doc})
+	err := env.St.UpdateDocuments(1, []*Document{doc})
 	assert.Error(t, err, "updating a deleted workspace should fail")
 }
 
@@ -358,7 +358,7 @@ func TestUpdateDocuments_NonExistentDocGraceful(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Update a document that was never saved -- should not panic,
 	// GetDocumentWords returns empty for missing docs so the
@@ -368,13 +368,13 @@ func TestUpdateDocuments_NonExistentDocGraceful(t *testing.T) {
 		RelPath: "ghost.go",
 		Words:   []string{"phantom"},
 	}
-	err := UpdateDocuments(1, []*Document{doc})
+	err := env.St.UpdateDocuments(1, []*Document{doc})
 	if !assert.NoError(t, err) {
 		return
 	}
 
 	// The document should now exist (saveDocument is called regardless).
-	got, err := GetDocument(1, "ghost", true)
+	got, err := env.St.GetDocument(1, "ghost", true)
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -393,36 +393,36 @@ func TestDeleteDocument_ExistingDoc(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	doc := &Document{
 		ID:      "d1",
 		RelPath: "del.go",
 		Words:   []string{"remove", "me"},
 	}
-	err := SaveNewDocuments(1, []*Document{doc})
+	err := env.St.SaveNewDocuments(1, []*Document{doc})
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	err = DeleteDocument(1, "d1")
+	err = env.St.DeleteDocument(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
 
-	got, err := GetDocument(1, "d1", false)
+	got, err := env.St.GetDocument(1, "d1", false)
 	if !assert.NoError(t, err) {
 		return
 	}
 	assert.Nil(t, got, "document should be deleted")
 
-	words, err := GetDocumentWords(1, "d1")
+	words, err := env.St.GetDocumentWords(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
 	assert.Empty(t, words, "words should be deleted")
 
-	path := GetDocumentPath(1, "d1")
+	path := env.St.GetDocumentPath(1, "d1")
 	assert.Empty(t, path, "path should be deleted")
 }
 
@@ -430,13 +430,13 @@ func TestDeleteDocument_ClosedDB(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
 	// Swap in a fake closed DB to trigger the db.IsClosed() early return
-	restore := simulateClosedDB()
+	restore := simulateClosedDB(env.St)
 	defer restore()
 
-	err := DeleteDocument(1, "d1")
+	err := env.St.DeleteDocument(1, "d1")
 	// DeleteDocument returns nil when db is closed (silent skip)
 	assert.NoError(t, err, "closed DB should cause a silent skip, not an error")
 }
@@ -445,9 +445,9 @@ func TestDeleteDocument_MissingDocReturnsError(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	mustCreateWorkspace(t, 1)
+	mustCreateWorkspace(t, env.St, 1)
 
-	err := DeleteDocument(1, "nonexistent")
+	err := env.St.DeleteDocument(1, "nonexistent")
 	assert.Error(t, err, "deleting a missing doc should return error")
 }
 
@@ -456,6 +456,6 @@ func TestDeleteDocument_NonExistentWorkspaceReturnsError(t *testing.T) {
 	defer env.teardown()
 
 	// Do NOT create workspace 999 — GetWorkspace should fail
-	err := DeleteDocument(999, "d1")
+	err := env.St.DeleteDocument(999, "d1")
 	assert.Error(t, err, "deleting from a non-existent workspace should return error")
 }
