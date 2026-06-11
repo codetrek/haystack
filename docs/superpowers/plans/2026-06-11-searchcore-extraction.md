@@ -513,16 +513,33 @@ git log --oneline 46a0e0b..HEAD
 
 # P4 — collection 注册表进库 〔依赖 P3〕
 
-**任务级路线:**
-- **4.1** 新建 `searchcore/collection`:`Catalog`(组合 `documents.Store`)+ `Collection` handle + `Record`
-  (核心字段 ID/Name/Desc/CreatedAt/LastAccessed/LastFullSync + `Extra []byte`);id 经 `store.GetIncrementalId(key-1)`。
-  逻辑取自 `internal/core/workspace/internal`(注册表)+ documents 的 workspace 记录。
-- **4.2** key-type(1-2)库内 Options 默认常量。
-- **4.3** **读时 shim**:旧 workspace JSON(过滤器内联)→ 新 `Record`(filters→Extra),首次写回新格式。
-- **4.4** haystack `workspace` 退化为薄包装:持 `collection.Collection`;过滤器(读 conf)+ 运行期索引状态留下;
-  **移除 `CountByWorkspaceFunc` hack**(直接调 collection/documents Count)。
-- **4.5** 删除 `internal/core/workspace/internal`;`server.go` 装配 `collection.New(...)`。
-- **验证:** 全绿;旧 workspace 列表/过滤器经 shim 正确还原。
+**设计决策(细化 spec §9 的 shim)**:库 `collection` **保持零 haystack 知识**——Record 用库自有 JSON 格式 +
+通用 `Extra []byte`。**迁移放 haystack 侧**(workspace 包装器知道旧格式):启动时一次性把旧 key-2 的
+workspace JSON 记录转成 `collection.Record`(path→Name、times→times、`{use_global_filters,filters}`→`Extra`),
+幂等(按是否为新格式判定)。库不 import/不感知 haystack 旧字段。风险:迁移出错最多丢 workspace 列表
+(需重加),**不丢已索引数据**(key 10-22 不动)。`CountByWorkspaceFunc` hack 已在 P3.1 移除。
+
+### P4.1 — 新建纯净 `collection` 库包(green,独立)
+- `searchcore/collection`,零 haystack 依赖。`type Record struct { ID int; Name, Desc string;
+  CreatedAt, LastAccessed, LastFullSync time.Time; Extra []byte }`(库自有 JSON tag)。
+- `type Options struct { KeyTypeIncrId, KeyTypeRecord byte }`(默认 1/2,= 现 storage.KeyTypeWorkspaceIncrId/
+  Workspace;on-disk 兼容);codec 编解码为方法,用 `kv.IsKeyType`。
+- `type Catalog struct`,`New(store kv.Store, opts Options) (*Catalog, error)`;方法:
+  `Create(name string) (*Record, error)`(id 经 `store.GetIncrementalId(key-1)`、写 key-2)、`Get(id)`、
+  `GetByName(name)`(Scan key-2 比对 Name)、`List()`、`Delete(id)`、`Save(*Record)`(更新,如改 Name/Extra/times)。
+  (注:Catalog 是否要组合 documents.Store 由 P4.2 接线决定;P4.1 先做纯注册表,documents 在 haystack 侧组合更灵活。)
+- 单测(CRUD、name↔id、id 续号、Extra 往返、key 默认值);`go test ./collection/... -race`;`GOWORK=off` 独立构建。
+
+### P4.2 — haystack workspace 改薄包装 + 启动迁移(green)
+- `workspace` 内部持 `*collection.Catalog`(server.go 装配 `collection.New(db, ...)`);其 manage 函数
+  (Create/Get/GetByPath/GetAll/Move/Delete)改为走 Catalog;`Workspace` 结构的 Path→collection Name,
+  times→Record 核心字段,`{UseGlobalFilters,Filters}`→序列化进 `Record.Extra`;运行期索引状态(非持久化)留下。
+- **启动一次性迁移**(haystack 侧,知道旧格式):扫描旧 key-2 记录,凡旧格式(含 "path" 字段、无新 marker)
+  → 解析旧 workspace JSON → 构造 `collection.Record`(filters→Extra)→ 经 Catalog 写回新格式。幂等。
+- 删除 `internal/core/workspace/internal`(注册表迁库)。`storage` 的 KeyTypeWorkspace* 常量可随之收敛
+  (workspace 不再用;若 symbols 等不用则删)。
+- 验证:两 module build+全测试绿(含 -race);`GOWORK=off` 独立;**用旧 workspace 数据 fixture 跑迁移**,
+  确认 workspace 列表/路径/过滤器/times 正确还原,且二次启动幂等(不重复迁移)。
 
 # P5 — engine 解耦进库 〔依赖 P4〕
 
