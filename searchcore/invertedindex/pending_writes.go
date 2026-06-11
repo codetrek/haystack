@@ -80,7 +80,7 @@ func (idx *Index) flushPendingWrites(closing bool) {
 			wordsCount++
 			docsCount += len(relatedDocs.DocIds)
 
-			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, nil)
+			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, idx.encodeInvertedKey(wp.TableId, kw, len(relatedDocs.DocIds)))
 			delete(wp.InvertedIndex, kw)
 
 			// delete empty table
@@ -125,9 +125,10 @@ func (idx *Index) flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 
 	for _, wp := range idx.pendingDeletes {
 		for kw, relatedDocs := range wp.InvertedIndex {
-			// Skip the keyword if it has been updated in the last 2 seconds
-			// and has less than 50 documents
-			if !closing && len(relatedDocs.DocIds) < 50 && time.Since(relatedDocs.UpdatedAt) < 5*time.Second {
+			// Skip the keyword if it has not yet reached the delete-batch threshold
+			// and is younger than the delete-wait timeout.
+			if !closing && len(relatedDocs.DocIds) < idx.opts.flushDeleteWaitBatchSize() &&
+				time.Since(relatedDocs.UpdatedAt) < idx.opts.flushDeleteWaitTimeout() {
 				continue
 			}
 

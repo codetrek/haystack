@@ -17,7 +17,7 @@ func (idx *Index) Search(tableId int, query string, limit int, filterKeyword fun
 		DocIds: make(map[string]struct{}),
 	}
 
-	err := idx.db.Scan(encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
+	err := idx.db.Scan(idx.encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
 		if filterKeyword != nil && !filterKeyword(string(key)) {
 			return true
 		}
@@ -47,7 +47,7 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 		DocIds: make(map[string]struct{}),
 	}
 
-	err := idx.db.Scan(encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
+	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
 		for _, docid := range decodeInvertedValue(value) {
 			results.DocIds[docid] = struct{}{}
 		}

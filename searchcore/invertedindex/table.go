@@ -12,7 +12,7 @@ type TableInfo struct {
 }
 
 func (idx *Index) CreateTable(description string) (int, error) {
-	tableId, err := idx.db.GetIncrementalId(encodeNextTableIdKey())
+	tableId, err := idx.db.GetIncrementalId(idx.encodeNextTableIdKey())
 	if err != nil {
 		return -1, err
 	}
@@ -24,7 +24,7 @@ func (idx *Index) CreateTable(description string) (int, error) {
 		Description: description,
 	}
 
-	return tableId, idx.db.Put(encodeTableKey(tableId), encodeTableValue(info))
+	return tableId, idx.db.Put(idx.encodeTableKey(tableId), encodeTableValue(info))
 }
 
 // DeleteTable deletes a table from the database and all of its inverted index data.
@@ -33,7 +33,7 @@ func (idx *Index) DeleteTable(tableId int) error {
 	idx.clearPendingWrites(tableId)
 
 	batch := idx.db.NewBatch(0)
-	batch.DeletePrefix(encodeInvertedSearchKey(tableId, ""))
-	batch.Delete(encodeTableKey(tableId))
+	batch.DeletePrefix(idx.encodeInvertedSearchKey(tableId, ""))
+	batch.Delete(idx.encodeTableKey(tableId))
 	return batch.Commit()
 }

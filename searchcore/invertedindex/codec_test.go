@@ -4,9 +4,15 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/codetrek/haystack/internal/core/storage"
 )
+
+// testCodecIdx is a minimal *Index with default key-type bytes used by codec tests.
+// It avoids the need for a full test environment (database + queue).
+var testCodecIdx = &Index{
+	keyTypeRow:    DefaultKeyTypeRow,
+	keyTypeTable:  DefaultKeyTypeTable,
+	keyTypeNextId: DefaultKeyTypeNextId,
+}
 
 // ---------------------------------------------------------------------------
 // parseId
@@ -39,12 +45,12 @@ func TestParseId(t *testing.T) {
 // encodeInvertedSearchKey
 // ---------------------------------------------------------------------------
 func TestEncodeInvertedSearchKey(t *testing.T) {
-	key := encodeInvertedSearchKey(5, "hello")
+	key := testCodecIdx.encodeInvertedSearchKey(5, "hello")
 	s := string(key)
 
-	// First byte must be KeyTypeRow
-	if s[0] != KeyTypeRow {
-		t.Fatalf("expected first byte %d, got %d", KeyTypeRow, s[0])
+	// First byte must be DefaultKeyTypeRow
+	if s[0] != DefaultKeyTypeRow {
+		t.Fatalf("expected first byte %d, got %d", DefaultKeyTypeRow, s[0])
 	}
 
 	// Must contain tableId|query
@@ -57,11 +63,11 @@ func TestEncodeInvertedSearchKey(t *testing.T) {
 // encodeInvertedKeyPrefix
 // ---------------------------------------------------------------------------
 func TestEncodeInvertedKeyPrefix(t *testing.T) {
-	prefix := encodeInvertedKeyPrefix(3, "myword")
+	prefix := testCodecIdx.encodeInvertedKeyPrefix(3, "myword")
 	s := string(prefix)
 
-	if s[0] != KeyTypeRow {
-		t.Fatalf("expected first byte %d, got %d", KeyTypeRow, s[0])
+	if s[0] != DefaultKeyTypeRow {
+		t.Fatalf("expected first byte %d, got %d", DefaultKeyTypeRow, s[0])
 	}
 
 	// Must end with a trailing pipe (separator before doccount)
@@ -78,16 +84,16 @@ func TestEncodeDecodeInvertedKeyRoundTrip(t *testing.T) {
 	keyword := "testing"
 	doccount := 42
 
-	key := encodeInvertedKey(tableId, keyword, doccount)
+	key := testCodecIdx.encodeInvertedKey(tableId, keyword, doccount)
 	s := string(key)
 
-	// First byte is KeyTypeRow
-	if s[0] != KeyTypeRow {
-		t.Fatalf("expected first byte %d, got %d", KeyTypeRow, s[0])
+	// First byte is DefaultKeyTypeRow
+	if s[0] != DefaultKeyTypeRow {
+		t.Fatalf("expected first byte %d, got %d", DefaultKeyTypeRow, s[0])
 	}
 
 	// Decode and verify
-	gotTable, gotKeyword, gotDoccount, gotTick := decodeInvertedKey(s)
+	gotTable, gotKeyword, gotDoccount, gotTick := testCodecIdx.decodeInvertedKey(s)
 	if gotTable != tableId {
 		t.Errorf("tableId: got %d, want %d", gotTable, tableId)
 	}
@@ -111,15 +117,15 @@ func TestDecodeInvertedKeyErrors(t *testing.T) {
 		key  string
 	}{
 		{"empty key", ""},
-		{"wrong key type prefix", string([]byte{storage.KeyTypeDocWords}) + "1|word|5|1234"},
-		{"too few parts", string([]byte{KeyTypeRow}) + "1|word"},
-		{"too many parts", string([]byte{KeyTypeRow}) + "1|word|5|1234|extra"},
-		{"non-numeric doccount", string([]byte{KeyTypeRow}) + "1|word|abc|1234"},
+		{"wrong key type prefix", string([]byte{byte(11)}) + "1|word|5|1234"},
+		{"too few parts", string([]byte{DefaultKeyTypeRow}) + "1|word"},
+		{"too many parts", string([]byte{DefaultKeyTypeRow}) + "1|word|5|1234|extra"},
+		{"non-numeric doccount", string([]byte{DefaultKeyTypeRow}) + "1|word|abc|1234"},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tableId, keyword, doccount, tick := decodeInvertedKey(tc.key)
+			tableId, keyword, doccount, tick := testCodecIdx.decodeInvertedKey(tc.key)
 			if tableId != InvalidId {
 				t.Errorf("expected tableId = InvalidId, got %d", tableId)
 			}
@@ -139,8 +145,8 @@ func TestDecodeInvertedKeyErrors(t *testing.T) {
 // TestDecodeInvertedKeyNonNumericTableId verifies that a non-numeric tableId
 // returns InvalidId for the tableId while still parsing the other fields.
 func TestDecodeInvertedKeyNonNumericTableId(t *testing.T) {
-	key := string([]byte{KeyTypeRow}) + "abc|word|5|1234"
-	tableId, keyword, doccount, tick := decodeInvertedKey(key)
+	key := string([]byte{DefaultKeyTypeRow}) + "abc|word|5|1234"
+	tableId, keyword, doccount, tick := testCodecIdx.decodeInvertedKey(key)
 	if tableId != InvalidId {
 		t.Errorf("expected tableId = InvalidId, got %d", tableId)
 	}
@@ -160,12 +166,12 @@ func TestDecodeInvertedKeyNonNumericTableId(t *testing.T) {
 // encodeNextTableIdKey
 // ---------------------------------------------------------------------------
 func TestEncodeNextTableIdKey(t *testing.T) {
-	key := encodeNextTableIdKey()
+	key := testCodecIdx.encodeNextTableIdKey()
 	if len(key) != 1 {
 		t.Fatalf("expected 1 byte, got %d", len(key))
 	}
-	if key[0] != KeyTypeNextId {
-		t.Errorf("expected byte %d, got %d", KeyTypeNextId, key[0])
+	if key[0] != DefaultKeyTypeNextId {
+		t.Errorf("expected byte %d, got %d", DefaultKeyTypeNextId, key[0])
 	}
 }
 
@@ -173,10 +179,10 @@ func TestEncodeNextTableIdKey(t *testing.T) {
 // encodeTableKey
 // ---------------------------------------------------------------------------
 func TestEncodeTableKey(t *testing.T) {
-	key := encodeTableKey(9)
+	key := testCodecIdx.encodeTableKey(9)
 	s := string(key)
-	if s[0] != KeyTypeTable {
-		t.Fatalf("expected first byte %d, got %d", KeyTypeTable, s[0])
+	if s[0] != DefaultKeyTypeTable {
+		t.Fatalf("expected first byte %d, got %d", DefaultKeyTypeTable, s[0])
 	}
 	if !strings.Contains(s, "9") {
 		t.Errorf("expected key to contain '9', got %q", s)

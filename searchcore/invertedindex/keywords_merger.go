@@ -70,7 +70,7 @@ func (km *KeywordsMerger) GetWait() <-chan struct{} {
 
 func (km *KeywordsMerger) Start() {
 	km.merging = Merging{
-		NextIter: string(KeyTypeRow),
+		NextIter: string(km.idx.keyTypeRow),
 	}
 
 	km.shutdown, km.shutdownFn = context.WithCancel(context.Background())
@@ -82,6 +82,10 @@ func (km *KeywordsMerger) run() {
 	log.Printf("[Inverted] Keywords merger: started")
 
 	// Capture locals to avoid reading mutable struct fields after Shutdown.
+	// km.merging is intentionally NOT captured as a local here: it is owned
+	// exclusively by this single run() goroutine, so direct field access is
+	// safe. Post-Wait reads by callers (e.g. tests) are safe because the
+	// close(mergerDone) below provides the required happens-before guarantee.
 	shutdown := km.shutdown
 	idx := km.idx
 	mergerDone := km.mergerDone
@@ -100,7 +104,7 @@ func (km *KeywordsMerger) run() {
 		case <-time.After(nextDelay):
 			if km.merging.NextIter == "" {
 				km.merging = Merging{
-					NextIter: string(KeyTypeRow),
+					NextIter: string(idx.keyTypeRow),
 				}
 
 				log.Printf("[Inverted] Keywords merger: new scan started.")
@@ -213,8 +217,8 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 	pending := []*InvertedIndex{}
 	for {
 		var next *InvertedIndex
-		idx.db.ScanRange([]byte(nextIter), append([]byte{KeyTypeRow}, 0xff), func(key []byte, value []byte) bool {
-			tableId, keyword, doccount, _ := decodeInvertedKey(string(key))
+		idx.db.ScanRange([]byte(nextIter), append([]byte{idx.keyTypeRow}, 0xff), func(key []byte, value []byte) bool {
+			tableId, keyword, doccount, _ := idx.decodeInvertedKey(string(key))
 			if lastTableId == -1 {
 				lastTableId = tableId
 				current.Keyword = keyword
@@ -288,7 +292,7 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 
 		if isTimeout() {
 			// We'll reset NextIter to the next keyword
-			m.NextIter = string(encodeInvertedKeyPrefix(next.TableId, next.Keyword))
+			m.NextIter = string(idx.encodeInvertedKeyPrefix(next.TableId, next.Keyword))
 			break
 		}
 

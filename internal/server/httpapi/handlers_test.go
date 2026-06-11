@@ -15,7 +15,6 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
@@ -24,6 +23,7 @@ import (
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/queue"
 	mcpGoServer "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"

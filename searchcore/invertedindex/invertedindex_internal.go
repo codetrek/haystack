@@ -35,6 +35,9 @@ func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
 }
 
 // writeInvertedIndex writes a keyword to the database.
+// When key is nil the key is encoded using the default key-type byte
+// (DefaultKeyTypeRow = 20).  Callers with non-default key-type bytes must
+// pre-compute the key via idx.encodeInvertedKey and pass it explicitly.
 var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {
 	// Remove duplicates to ensure the data stored is clean
 	uniqueDocids := removeDuplicatesEfficiently(docids)
@@ -68,7 +71,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 
 	keys := []string{}
 	docids := map[string]struct{}{}
-	err := idx.db.Scan(encodeInvertedKeyPrefix(tableId, kw), func(key, value []byte) bool {
+	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, kw), func(key, value []byte) bool {
 		changed := false
 		tmpids := []string{}
 

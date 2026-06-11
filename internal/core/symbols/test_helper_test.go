@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
 	"github.com/codetrek/haystack/searchcore/queue"
 )

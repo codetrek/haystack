@@ -11,6 +11,19 @@ import (
 // Options holds tunables for the Index.
 // Zero values select sensible defaults.
 type Options struct {
+	// KeyTypeRow is the on-disk key-type prefix byte for inverted-index row keys.
+	// A zero value selects DefaultKeyTypeRow (20).  Changing this after data has
+	// been written is a breaking on-disk change.
+	KeyTypeRow byte
+
+	// KeyTypeTable is the on-disk key-type prefix byte for table-metadata keys.
+	// A zero value selects DefaultKeyTypeTable (21).
+	KeyTypeTable byte
+
+	// KeyTypeNextId is the on-disk key-type prefix byte for the next-table-id counter.
+	// A zero value selects DefaultKeyTypeNextId (22).
+	KeyTypeNextId byte
+
 	// FlushTicker is how often the flush goroutine enqueues a flush task.
 	// Default: 1 second.
 	FlushTicker time.Duration
@@ -25,12 +38,22 @@ type Options struct {
 	// Default: 200.
 	FlushWaitBatchSize int
 
+	// FlushDeleteWaitBatchSize is the number of doc-ids at which a pending-delete
+	// entry is flushed regardless of its age.
+	// Default: 50.
+	FlushDeleteWaitBatchSize int
+
+	// FlushDeleteWaitTimeout is the time a pending-delete entry must be older than
+	// before being flushed when the batch size threshold is not yet reached.
+	// Default: 5 seconds.
+	FlushDeleteWaitTimeout time.Duration
+
 	// FlushCooldown is the minimum interval between flush passes.
 	// Default: 1 second.
 	FlushCooldown time.Duration
 
 	// MaxInvertedIndexSize caps the number of doc-ids stored per index row.
-	// Default: 1000.
+	// Default: 1000 (MaxInvertedIndexSize).
 	MaxInvertedIndexSize int
 }
 
@@ -55,6 +78,20 @@ func (o *Options) flushWaitBatchSize() int {
 	return 200
 }
 
+func (o *Options) flushDeleteWaitBatchSize() int {
+	if o.FlushDeleteWaitBatchSize > 0 {
+		return o.FlushDeleteWaitBatchSize
+	}
+	return 50
+}
+
+func (o *Options) flushDeleteWaitTimeout() time.Duration {
+	if o.FlushDeleteWaitTimeout > 0 {
+		return o.FlushDeleteWaitTimeout
+	}
+	return 5 * time.Second
+}
+
 func (o *Options) flushCooldown() time.Duration {
 	if o.FlushCooldown > 0 {
 		return o.FlushCooldown
@@ -66,7 +103,7 @@ func (o *Options) maxInvertedIndexSize() int {
 	if o.MaxInvertedIndexSize > 0 {
 		return o.MaxInvertedIndexSize
 	}
-	return 1000
+	return MaxInvertedIndexSize
 }
 
 // Index is the instance-based inverted index.
@@ -74,6 +111,11 @@ type Index struct {
 	db   kv.Store
 	q    queue.Queue
 	opts Options
+
+	// resolved on-disk key-type bytes (set in New from opts with defaults applied)
+	keyTypeRow    byte
+	keyTypeTable  byte
+	keyTypeNextId byte
 
 	// pending writes/deletes — accessed only from the single-threaded mpsc queue
 	pendingWrites      map[int]*PendingTableWrites
@@ -91,10 +133,24 @@ type Index struct {
 
 // New creates and starts a new Index.
 func New(store kv.Store, q queue.Queue, opts Options) (*Index, error) {
+	// Apply key-type defaults (zero means "use default").
+	if opts.KeyTypeRow == 0 {
+		opts.KeyTypeRow = DefaultKeyTypeRow
+	}
+	if opts.KeyTypeTable == 0 {
+		opts.KeyTypeTable = DefaultKeyTypeTable
+	}
+	if opts.KeyTypeNextId == 0 {
+		opts.KeyTypeNextId = DefaultKeyTypeNextId
+	}
+
 	idx := &Index{
 		db:                  store,
 		q:                   q,
 		opts:                opts,
+		keyTypeRow:          opts.KeyTypeRow,
+		keyTypeTable:        opts.KeyTypeTable,
+		keyTypeNextId:       opts.KeyTypeNextId,
 		pendingWrites:       map[int]*PendingTableWrites{},
 		lastFlushWriteTime:  time.Now(),
 		pendingDeletes:      map[int]*PendingTableWrites{},

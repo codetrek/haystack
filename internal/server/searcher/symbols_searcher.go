@@ -119,6 +119,10 @@ func fuzzySearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbols
 	// Split query with space
 	// words := strings.Fields(req.Query)
 	words := wordsegmentation.Segment(englishCorpus, req.Query)
+	if idxInst == nil {
+		log.Printf("[Searcher] fuzzySearchSymbols: inverted index not initialised")
+		return result, nil
+	}
 	r := idxInst.Search(swt.InvertedId, words[0], -1, func(k string) bool {
 		for _, word := range words {
 			if !strings.Contains(k, word) {
@@ -173,6 +177,10 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 		return result, err
 	}
 
+	if idxInst == nil {
+		log.Printf("[Searcher] searchSymbols: inverted index not initialised")
+		return result, nil
+	}
 	r := idxInst.GetDocs(st.InvertedId, req.Query)
 	log.Printf("Query: %s, invertedId:%d len docids(%d)", req.Query, st.InvertedId, len(r.DocIds))
 

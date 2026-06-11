@@ -335,6 +335,9 @@ func newTestIndexWithDB(store kv.Store) *Index {
 		pendingWrites:  map[int]*PendingTableWrites{},
 		pendingDeletes: map[int]*PendingTableWrites{},
 		opts:           Options{},
+		keyTypeRow:     DefaultKeyTypeRow,
+		keyTypeTable:   DefaultKeyTypeTable,
+		keyTypeNextId:  DefaultKeyTypeNextId,
 	}
 }
 
@@ -939,6 +942,9 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 		pendingWrites:  map[int]*PendingTableWrites{},
 		pendingDeletes: map[int]*PendingTableWrites{},
 		opts:           Options{},
+		keyTypeRow:     DefaultKeyTypeRow,
+		keyTypeTable:   DefaultKeyTypeTable,
+		keyTypeNextId:  DefaultKeyTypeNextId,
 	}
 
 	km := &KeywordsMerger{idx: testIdx, InitialDelay: 10 * time.Millisecond}
@@ -996,6 +1002,9 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 		pendingWrites:  map[int]*PendingTableWrites{},
 		pendingDeletes: map[int]*PendingTableWrites{},
 		opts:           Options{},
+		keyTypeRow:     DefaultKeyTypeRow,
+		keyTypeTable:   DefaultKeyTypeTable,
+		keyTypeNextId:  DefaultKeyTypeNextId,
 	}
 
 	km := &KeywordsMerger{

@@ -9,12 +9,12 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/testutil"
 	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 )
 
 // setupTestEnv initialises the subsystems required for parsing tests.

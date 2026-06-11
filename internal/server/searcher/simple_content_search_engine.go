@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/tokenizer"
 )
 
@@ -139,6 +139,11 @@ func (q *SimpleContentSearchEngineTerm) CollectDocuments(workspaceId int) invert
 func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws []string) map[string]struct{} {
 	// If no prefixes, return empty result
 	if len(kws) == 0 {
+		return map[string]struct{}{}
+	}
+
+	if idxInst == nil {
+		log.Printf("[Searcher] collectWithKeywords: inverted index not initialised")
 		return map[string]struct{}{}
 	}
 

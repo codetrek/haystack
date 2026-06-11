@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/invertedindex"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/queue"
 )

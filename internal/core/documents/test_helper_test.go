@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/codetrek/haystack/searchcore/kv"
 )
 
