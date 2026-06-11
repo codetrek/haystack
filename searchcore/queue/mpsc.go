@@ -11,8 +11,22 @@ type Task interface {
 // Queue is the async task-queue injection interface; *Mpsc implements it.
 // searchcore packages (invertedindex, documents, ...) take a Queue so a
 // consumer can inject a single shared queue instance.
+//
+// Precondition: the underlying queue must be started (see *Mpsc.Start) before
+// Add or RunTask are called. The two methods behave differently when the queue
+// is not running:
+//
+//   - Add is fire-and-forget: if the queue has not been started (or has been
+//     stopped) the task is dropped and a message is logged; it never blocks.
+//   - RunTask blocks until the submitted task has run and returns its error.
+//     If the queue is never started, RunTask blocks indefinitely, so callers
+//     must ensure Start has been called.
 type Queue interface {
+	// Add enqueues task for asynchronous execution. Fire-and-forget: drops the
+	// task (and logs) if the queue is not started. Never blocks.
 	Add(task Task)
+	// RunTask enqueues task and blocks until it has run, returning its error.
+	// The queue must be started, otherwise this blocks indefinitely.
 	RunTask(task Task) error
 }
 
@@ -26,29 +40,33 @@ func (nt *NopeTask) Run() error {
 	return nil
 }
 
-type FuncTask struct {
+// funcTask adapts a plain func() error into a Task.
+type funcTask struct {
 	fn func() error
 }
 
-func (ft *FuncTask) Run() error {
+func (ft *funcTask) Run() error {
 	return ft.fn()
 }
 
-type FuncTaskWithArgs struct {
+// funcTaskWithArgs adapts a variadic func into a Task carrying its arguments.
+type funcTaskWithArgs struct {
 	fn   func(args ...interface{}) error
 	args []interface{}
 }
 
-func (ft *FuncTaskWithArgs) Run() error {
+func (ft *funcTaskWithArgs) Run() error {
 	return ft.fn(ft.args...)
 }
 
-type WaitTask struct {
+// waitTask wraps another Task so callers can block until it completes, using
+// the done channel to deliver the wrapped task's error.
+type waitTask struct {
 	task Task
 	done chan error
 }
 
-func (wt *WaitTask) Run() error {
+func (wt *waitTask) Run() error {
 	defer close(wt.done)
 	wt.done <- wt.task.Run()
 	return nil
@@ -65,6 +83,9 @@ type Mpsc struct {
 	done chan struct{}
 }
 
+// NewMpsc returns a new, unstarted Mpsc with the given name (used for log
+// labelling) and the default queue size of 100. Call Start before submitting
+// tasks.
 func NewMpsc(name string) *Mpsc {
 	return &Mpsc{
 		name:      name,
@@ -72,6 +93,9 @@ func NewMpsc(name string) *Mpsc {
 	}
 }
 
+// SetQueueSize sets the buffer size used when the queue is started. It must be
+// called before Start: a non-positive size or a call after Start has run is
+// ignored (and logged), leaving the previous size in effect.
 func (m *Mpsc) SetQueueSize(size int) {
 	if size <= 0 {
 		log.Printf("[%s] Invalid queue size: %d", m.name, size)
@@ -86,13 +110,20 @@ func (m *Mpsc) SetQueueSize(size int) {
 	m.queueSize = size
 }
 
+// Start launches the single consumer goroutine and opens the queue for
+// submissions. Calling Start on an already-started queue is a no-op (logged).
+// The buffer size is queueSize (see SetQueueSize), defaulting to 100.
 func (m *Mpsc) Start() {
 	// Start the queue
 	if m.q != nil {
 		log.Printf("[%s] Queue already started", m.name)
 		return
 	}
-	m.q = make(chan Task, 100)
+	size := m.queueSize
+	if size <= 0 {
+		size = 100
+	}
+	m.q = make(chan Task, size)
 	m.done = make(chan struct{})
 
 	go func() {
@@ -107,6 +138,8 @@ func (m *Mpsc) Start() {
 	}()
 }
 
+// Stop closes the queue and waits for the consumer to drain and exit. Calling
+// Stop on an already-stopped queue is a no-op (logged).
 func (m *Mpsc) Stop() {
 	if m.q == nil {
 		log.Printf("[%s] Queue already stopped", m.name)
@@ -121,6 +154,9 @@ func (m *Mpsc) Stop() {
 	log.Printf("[%s] Queue stopped", m.name)
 }
 
+// Add enqueues task for asynchronous execution. It is fire-and-forget: if the
+// queue is not started the task is dropped (and logged), and Add never blocks
+// on a not-started queue.
 func (m *Mpsc) Add(task Task) {
 	// Add a task to the queue
 	if m.q == nil {
@@ -130,25 +166,31 @@ func (m *Mpsc) Add(task Task) {
 	m.q <- task
 }
 
+// RunTask enqueues task and blocks until it has run, returning its error. The
+// queue must be started; otherwise RunTask blocks indefinitely.
 func (wq *Mpsc) RunTask(task Task) error {
-	WaitTask := &WaitTask{
+	wt := &waitTask{
 		task: task,
 		done: make(chan error),
 	}
-	wq.Add(WaitTask)
+	wq.Add(wt)
 
-	return <-WaitTask.done
+	return <-wt.done
 }
 
+// AddFunc enqueues fn for asynchronous execution. Fire-and-forget: drops fn
+// (and logs) if the queue is not started; never blocks on a not-started queue.
 func (m *Mpsc) AddFunc(fn func() error) {
 	// Add a function to the queue
 	if m.q == nil {
 		log.Printf("[%s] Queue not started", m.name)
 		return
 	}
-	m.q <- &FuncTask{fn: fn}
+	m.q <- &funcTask{fn: fn}
 }
 
+// RunFunc enqueues fn and blocks until it has run, returning its error. If the
+// queue is not started it returns nil immediately without running fn.
 func (m *Mpsc) RunFunc(fn func() error) error {
 	// Add a function to the queue and wait for it to finish
 	if m.q == nil {
@@ -156,24 +198,30 @@ func (m *Mpsc) RunFunc(fn func() error) error {
 		return nil
 	}
 
-	WaitTask := &WaitTask{
-		task: &FuncTask{fn: fn},
+	wt := &waitTask{
+		task: &funcTask{fn: fn},
 		done: make(chan error),
 	}
-	m.q <- WaitTask
+	m.q <- wt
 
-	return <-WaitTask.done
+	return <-wt.done
 }
 
+// AddFuncWithArgs enqueues fn (with args) for asynchronous execution.
+// Fire-and-forget: drops it (and logs) if the queue is not started; never
+// blocks on a not-started queue.
 func (m *Mpsc) AddFuncWithArgs(fn func(args ...interface{}) error, args ...interface{}) {
 	// Add a function with arguments to the queue
 	if m.q == nil {
 		log.Printf("[%s] Queue not started", m.name)
 		return
 	}
-	m.q <- &FuncTaskWithArgs{fn: fn, args: args}
+	m.q <- &funcTaskWithArgs{fn: fn, args: args}
 }
 
+// RunFuncWithArgs enqueues fn (with args) and blocks until it has run,
+// returning its error. If the queue is not started it returns nil immediately
+// without running fn.
 func (m *Mpsc) RunFuncWithArgs(fn func(args ...interface{}) error, args ...interface{}) error {
 	// Add a function with arguments to the queue and wait for it to finish
 	if m.q == nil {
@@ -181,11 +229,11 @@ func (m *Mpsc) RunFuncWithArgs(fn func(args ...interface{}) error, args ...inter
 		return nil
 	}
 
-	WaitTask := &WaitTask{
-		task: &FuncTaskWithArgs{fn: fn, args: args},
+	wt := &waitTask{
+		task: &funcTaskWithArgs{fn: fn, args: args},
 		done: make(chan error),
 	}
-	m.q <- WaitTask
+	m.q <- wt
 
-	return <-WaitTask.done
+	return <-wt.done
 }

@@ -199,7 +199,7 @@ func TestNopeTask(t *testing.T) {
 
 func TestFuncTask(t *testing.T) {
 	called := false
-	task := &FuncTask{fn: func() error {
+	task := &funcTask{fn: func() error {
 		called = true
 		return nil
 	}}
@@ -209,7 +209,7 @@ func TestFuncTask(t *testing.T) {
 
 func TestFuncTaskWithArgs(t *testing.T) {
 	var got interface{}
-	task := &FuncTaskWithArgs{
+	task := &funcTaskWithArgs{
 		fn: func(args ...interface{}) error {
 			got = args[0]
 			return nil
@@ -221,8 +221,8 @@ func TestFuncTaskWithArgs(t *testing.T) {
 }
 
 func TestWaitTask(t *testing.T) {
-	inner := &FuncTask{fn: func() error { return nil }}
-	wt := &WaitTask{
+	inner := &funcTask{fn: func() error { return nil }}
+	wt := &waitTask{
 		task: inner,
 		done: make(chan error),
 	}
