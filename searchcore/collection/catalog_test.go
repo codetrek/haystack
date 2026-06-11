@@ -662,3 +662,117 @@ func TestSave_TimestampRoundtrip(t *testing.T) {
 		db.Close()
 	}
 }
+
+// TestList_ReturnsCopies verifies that mutating a Record returned by List
+// does not affect the Catalog's internal state.
+func TestList_ReturnsCopies(t *testing.T) {
+	env := setupFull(t)
+	defer env.teardown()
+
+	_, err := env.catalog.Create("/workspace/list-copy")
+	require.NoError(t, err)
+
+	list := env.catalog.List()
+	require.Len(t, list, 1)
+
+	// Mutate the returned record (both a scalar field and the Extra slice).
+	list[0].Name = "mutated"
+	list[0].Extra = []byte("injected")
+
+	// A fresh List / Get must still show the original, unmutated values.
+	fresh := env.catalog.List()
+	require.Len(t, fresh, 1)
+	assert.Equal(t, "/workspace/list-copy", fresh[0].Name, "List() must return copies, not live pointers")
+	assert.Nil(t, fresh[0].Extra)
+
+	// GetByName must still resolve the original name.
+	_, err = env.catalog.GetByName("/workspace/list-copy")
+	assert.NoError(t, err)
+	_, err = env.catalog.GetByName("mutated")
+	assert.Error(t, err, "mutating a List() copy must not register a new name")
+}
+
+// TestSave_RenameToExistingNameErrors verifies that renaming a collection to a
+// name already owned by another collection returns an error and leaves both
+// collections' name index entries intact.
+func TestSave_RenameToExistingNameErrors(t *testing.T) {
+	env := setupFull(t)
+	defer env.teardown()
+
+	colA, err := env.catalog.Create("/workspace/aaa")
+	require.NoError(t, err)
+	_, err = env.catalog.Create("/workspace/bbb")
+	require.NoError(t, err)
+
+	// Try to rename A to B's name.
+	r := colA.Meta()
+	r.Name = "/workspace/bbb"
+	err = env.catalog.Save(r)
+	assert.Error(t, err, "renaming to an existing name must fail")
+
+	// Both original names must still resolve to their original ids.
+	gotA, err := env.catalog.GetByName("/workspace/aaa")
+	require.NoError(t, err)
+	assert.Equal(t, colA.ID(), gotA.ID())
+
+	gotB, err := env.catalog.GetByName("/workspace/bbb")
+	require.NoError(t, err)
+	assert.NotEqual(t, colA.ID(), gotB.ID(), "B's name must still map to B, not A")
+
+	// A's record must retain its original name (the failed Save must not persist).
+	assert.Equal(t, "/workspace/aaa", gotA.Meta().Name)
+}
+
+// TestSave_RenameToOwnNameSucceeds verifies that a no-op rename (Name unchanged)
+// and a genuine rename to a free name both succeed.
+func TestSave_RenameToFreeNameSucceeds(t *testing.T) {
+	env := setupFull(t)
+	defer env.teardown()
+
+	col, err := env.catalog.Create("/workspace/start")
+	require.NoError(t, err)
+
+	r := col.Meta()
+	r.Name = "/workspace/end"
+	err = env.catalog.Save(r)
+	require.NoError(t, err)
+
+	got, err := env.catalog.GetByName("/workspace/end")
+	require.NoError(t, err)
+	assert.Equal(t, col.ID(), got.ID())
+
+	_, err = env.catalog.GetByName("/workspace/start")
+	assert.Error(t, err, "old name must be released after rename")
+}
+
+// TestNew_EqualKeyTypesErrors verifies that New rejects Options where the
+// incr-id and record key-type bytes collide (after defaults are applied).
+func TestNew_EqualKeyTypesErrors(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "collection-eqkey-*")
+	require.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	db, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
+	require.NoError(t, err)
+	q := queue.NewMpsc("eqkey-q")
+	q.Start()
+	defer q.Stop()
+	idx, err := invertedindex.New(db, q, invertedindex.Options{})
+	require.NoError(t, err)
+	defer func() {
+		idx.CloseAndWait()
+		db.Close()
+	}()
+	docs, err := documents.New(db, q, idx, documents.Options{})
+	require.NoError(t, err)
+	defer docs.CloseAndWait()
+
+	// Explicitly equal non-default bytes.
+	_, err = collection.New(db, docs, collection.Options{KeyTypeIncrId: 7, KeyTypeRecord: 7})
+	assert.Error(t, err, "equal key-type bytes must be rejected")
+
+	// One zero (→ default) colliding with an explicit byte equal to the other default.
+	// IncrId zero → 1; Record set to 1 → collision.
+	_, err = collection.New(db, docs, collection.Options{KeyTypeRecord: collection.DefaultKeyTypeIncrId})
+	assert.Error(t, err, "explicit byte equal to the other default must be rejected")
+}

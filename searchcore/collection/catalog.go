@@ -18,6 +18,7 @@ package collection
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -94,6 +95,9 @@ func New(store kv.Store, docs *documents.Store, opts Options) (*Catalog, error) 
 	if opts.KeyTypeRecord == 0 {
 		opts.KeyTypeRecord = DefaultKeyTypeRecord
 	}
+	if opts.KeyTypeIncrId == opts.KeyTypeRecord {
+		return nil, fmt.Errorf("collection.New: KeyTypeIncrId and KeyTypeRecord must differ (both %d)", opts.KeyTypeIncrId)
+	}
 
 	c := &Catalog{
 		db:            store,
@@ -119,6 +123,7 @@ func (c *Catalog) loadFromStore() error {
 		r, err := unmarshalRecord(value)
 		if err != nil {
 			// Skip corrupted records; they won't appear in the in-memory index.
+			log.Printf("[Collection] Skipping corrupted record key %q: %v", string(key), err)
 			return true
 		}
 		c.byID[r.ID] = r
@@ -157,7 +162,9 @@ func (c *Catalog) Create(name string) (*Collection, error) {
 
 	if err := c.docs.Create(id, name); err != nil {
 		// Best-effort cleanup: remove the persisted key so the id isn't orphaned.
-		_ = c.db.Delete(c.encodeRecordKey(id))
+		if delErr := c.db.Delete(c.encodeRecordKey(id)); delErr != nil {
+			log.Printf("[Collection] Create rollback failed to delete orphaned record %d: %v", id, delErr)
+		}
 		return nil, fmt.Errorf("collection.Create: failed to create document table: %w", err)
 	}
 
@@ -193,48 +200,59 @@ func (c *Catalog) GetByName(name string) (*Collection, error) {
 	return &Collection{catalog: c, id: id}, nil
 }
 
-// List returns a snapshot of all collection records. The returned slice is
-// always non-nil. Callers must not mutate the returned records.
+// List returns a snapshot of all collection records. The returned slice and
+// every Record in it are independent copies; mutating them does not affect the
+// Catalog's internal state. The returned slice is always non-nil.
 func (c *Catalog) List() []*Record {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	out := make([]*Record, 0, len(c.byID))
 	for _, r := range c.byID {
-		out = append(out, r)
+		out = append(out, copyRecord(r))
 	}
 	return out
 }
 
-// Delete removes a collection by id: it deletes the document data via
-// documents.Store.Delete, removes the on-disk Record, and de-indexes the
-// collection from the in-memory maps. Returns an error if the id is not found.
+// Delete removes a collection by id. It first removes the on-disk Record and
+// de-indexes the collection from the in-memory maps (under the lock), then
+// purges the backing document data via documents.Store.Delete (outside the
+// lock, since that call blocks on a queue). Removing the record first ensures a
+// partial failure cannot leave a live record pointing at deleted document data;
+// if the document purge fails the orphaned data is logged. Returns an error if
+// the id is not found.
 func (c *Catalog) Delete(id int) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	r, ok := c.byID[id]
 	if !ok {
+		c.mu.Unlock()
 		return fmt.Errorf("collection.Delete: id %d not found", id)
 	}
 
-	if err := c.docs.Delete(id); err != nil {
-		return fmt.Errorf("collection.Delete: failed to delete document data: %w", err)
-	}
-
 	if err := c.db.Delete(c.encodeRecordKey(id)); err != nil {
+		c.mu.Unlock()
 		return fmt.Errorf("collection.Delete: failed to delete record key: %w", err)
 	}
 
 	delete(c.byName, r.Name)
 	delete(c.byID, id)
+	c.mu.Unlock()
+
+	// Purge document data outside the lock: documents.Store.Delete blocks on the
+	// shared queue, and the record is already gone from the catalog.
+	if err := c.docs.Delete(id); err != nil {
+		log.Printf("[Collection] Delete: record %d removed but document data orphaned: %v", id, err)
+		return fmt.Errorf("collection.Delete: failed to delete document data: %w", err)
+	}
 
 	return nil
 }
 
 // Save updates an existing collection record (e.g. changed Name, Extra, or
-// timestamps). The record's ID must already exist in the Catalog. It
-// re-persists the record and updates the in-memory index.
+// timestamps). The record's ID must already exist in the Catalog. If the Name
+// changed, it must not collide with another collection's name. It re-persists
+// the record and updates the in-memory index.
 func (c *Catalog) Save(r *Record) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -244,11 +262,18 @@ func (c *Catalog) Save(r *Record) error {
 		return fmt.Errorf("collection.Save: id %d not found", r.ID)
 	}
 
+	// Guard against renaming into a name already owned by another collection.
+	if old.Name != r.Name {
+		if _, taken := c.byName[r.Name]; taken {
+			return fmt.Errorf("collection.Save: name %q already in use", r.Name)
+		}
+	}
+
 	if err := c.persistRecord(r); err != nil {
 		return fmt.Errorf("collection.Save: failed to persist record: %w", err)
 	}
 
-	// Update in-memory index: remove old name entry if name changed.
+	// Update in-memory name index if the name changed.
 	if old.Name != r.Name {
 		delete(c.byName, old.Name)
 		c.byName[r.Name] = r.ID

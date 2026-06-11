@@ -3,8 +3,6 @@ package collection
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
-	"strings"
 )
 
 // Default on-disk key-type prefix bytes for the collection Catalog.
@@ -37,26 +35,6 @@ func (c *Catalog) encodeRecordKey(id int) []byte {
 // encodeRecordScanPrefix returns the prefix used to scan all collection records.
 func (c *Catalog) encodeRecordScanPrefix() []byte {
 	return []byte{c.keyTypeRecord}
-}
-
-// decodeRecordKey parses a raw record key, returning the collection id.
-// Returns -1 if the key is malformed or has the wrong type byte.
-func (c *Catalog) decodeRecordKey(key string) int {
-	if len(key) == 0 || key[0] != c.keyTypeRecord {
-		return -1
-	}
-	suffix := key[1:]
-	id, err := strconv.Atoi(strings.TrimSpace(suffix))
-	if err != nil {
-		return -1
-	}
-	return id
-}
-
-// marshalRecord serialises a Record to JSON. Record has only JSON-safe fields,
-// so Marshal cannot fail for well-formed input.
-func marshalRecord(r *Record) ([]byte, error) {
-	return json.Marshal(r)
 }
 
 // unmarshalRecord deserialises a Record from JSON.
