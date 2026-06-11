@@ -451,16 +451,32 @@ git log --oneline 46a0e0b..HEAD
 
 # P2 — invertedindex 实例式进库 〔依赖 P1〕
 
-**任务级路线(开工前展开为细化步骤):**
-- **2.1** `git mv internal/core/invertedindex searchcore/invertedindex`;包级单例 → `type Index struct`,
-  `Init(db, mpsc)` → `New(store kv.Store, q queue.Queue, opts Options) *Index`;`Search/Update/CreateTable/
-  DeleteTable/CloseAndWait` 改为方法;`db.GetIncrementalId`(tableId)、`db.ScheduleCompact` 经 `kv.Store`。
-- **2.2** key-type(20-22)改库内 Options 默认常量(替代 `storage.KeyTypeInverted*`);`IsKeyType` 用 `searchcore/kv` 版本。
-- **2.3** 迁移并实例式化 invertedindex 全部测试(含并发/coverage/crash 等)。
-- **2.4** haystack 接回:`server.go` 建 `idx := invertedindex.New(...)`;`symbols` 改用注入的同一个 `idx`
-  (替代它自建/包级调用);`documents`(此期仍在 internal)改为持注入 idx。
-- **验证:** 两 module `go build/test` 全绿;symbols 测试绿;旧倒排数据可读。
-- **并行:** 2.3(测试迁移)可与 2.4(haystack 接回)部分并行,但都依赖 2.1/2.2。
+**拆为两个原子绿任务**(语义转换与跨 module 移动分离;遵循 P1 模式指引):
+
+### P2.1 — invertedindex 就地转实例式 + 接线(green)
+仍在 `internal/core/invertedindex`,先做语义转换,避免与跨 module 移动叠加。
+- 包级 globals(`db`/`mpscQueue`/`cancelFlush`/`keywordsMerger` + `pending_writes` 的 maps/锁)
+  收进 `type Index struct`;`Init(db, mpsc)` → `New(store kv.Store, q queue.Queue, opts Options) (*Index, error)`。
+  **用 `queue.Queue` 接口,不用 `*queue.Mpsc`**。
+- 导出函数 `Search/GetDocs/Update/CreateTable/DeleteTable/CloseAndWait` → `*Index` 方法;内部函数
+  (`updateIndex/removeIndex/flushPendingWrites/getPendingWrite/mergeKeywordsIndex` 等)→ 方法或接收 *Index。
+- `KeywordsMerger` 作为 `Index` 的字段,持 `*Index` 回引用以访问其 db/pending 状态。
+- **goroutine/Close 严格按 P1 模板**:flush ticker(context cancel 已 OK)+ merger goroutine;
+  `CloseAndWait` 先释放锁再等待(参照 idtable Close 修复)。
+- 测试注入缝(`var writeInvertedIndex/rewriteIndex/NewBatch func...`):保留为包级 var 或转 Index 字段
+  (implementer 定;保留包级最省事,测试串行无碍)——记录选择。
+- `db.GetIncrementalId`(tableId,key-22)、`db.ScheduleCompact` 经 `kv.Store`(已是)。
+- **接线**:`server.go` 建**一个**共享 `idx := invertedindex.New(db, mpsc, ...)`;`documents.Init` 改为
+  接收并保存注入的 `*Index`(documents 此期仍包级单例,P3 再实例化),其调用改 `idx.Method`;
+  `symbols.Init` 同样接收**同一个** `*Index`(共享 tableId 计数器,D11)。
+- 迁移并实例化 invertedindex 测试(并发/coverage 等)。
+- 验证:`go build ./... && go test ./internal/... -count=1` 全绿;gofmt 干净。
+
+### P2.2 — 移入 searchcore + key-type Options(green)
+- `git mv internal/core/invertedindex searchcore/invertedindex`;改 documents/symbols/server/测试的 import 路径。
+- key-type(20-22)改 `Options` 默认常量(替代 `storage.KeyTypeInverted*`),默认值不变(on-disk 兼容);
+  `IsKeyType` 用 `searchcore/kv`;**去掉对 haystack `internal/core/storage` 的 import**。
+- 验证:两 module build + 全测试绿;`GOWORK=off` searchcore 独立构建;旧倒排数据可读。
 
 # P3 — documents 实例式进库(组合 idx) 〔依赖 P2〕
 
