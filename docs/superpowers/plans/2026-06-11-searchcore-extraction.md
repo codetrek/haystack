@@ -446,10 +446,17 @@ git log --oneline 46a0e0b..HEAD
 4. **共享依赖版本**:searchcore 任何与 haystack 共享的依赖 pin 到 haystack 的版本。
 5. **每个 implementer 自带**:`gofmt -w` + `gofmt -l` 验空;commit 错误不得静默(log 或上抛)。
 6. **每任务结束即绿**:移动包必同任务内改完所有 importer + 删旧;两 module build+test 全绿。
+7. **【P2 教训】绝不为"给无实例的 `var fn=func(...)` 测试缝/未转换的调用方提供实例状态"而引包级 `*Index`/`*Store` 全局。**
+   P2 两次踩此坑(`_legacyIdx`、`defaultIdx`),都是变相复活单例。正确做法二选一:
+   (a) 把 `*Index`(或所需的 key-type 字节)**穿进**该 var-func 缝的签名 / 调用方,在持有实例的调用点完成编码后传入;
+   (b) 把尚未转换的调用方(如 searcher)也一并注入实例(`Run(wg, idx)` / 包内 `idxInst` 注入)。
+   评审务必 `grep` 包级 `var .*\*(Index|Store)` 与遗留包级包装函数。
+8. **【P2 教训】移入库即按"公开库 API"收口**:`go mod tidy`(直接依赖不留 `// indirect`);实现细节类型一律
+   unexport(先 grep 确认零外部引用且未被序列化);导出符号补 doc;删死码/空导出 struct/废弃 JSON 字段。
 
 ---
 
-# P2 — invertedindex 实例式进库 〔依赖 P1〕
+# P2 — invertedindex 实例式进库 〔依赖 P1〕 ✅ 已完成(commit a68f4d6..5962d3f)
 
 **拆为两个原子绿任务**(语义转换与跨 module 移动分离;遵循 P1 模式指引):
 
