@@ -399,7 +399,7 @@ func TestRun(t *testing.T) {
 	running.InitShutdown(&shutdownWg)
 
 	var wg sync.WaitGroup
-	Run(&wg)
+	Run(&wg, nil)
 
 	running.Shutdown()
 	shutdownWg.Wait()
@@ -455,9 +455,9 @@ func TestFullIntegration(t *testing.T) {
 
 	// Speed up inverted index flush: reduce the "entry must be N seconds old"
 	// timeout so pending writes are flushed quickly.
-	origFlushWaitTimeout := invertedindex.FlushWaitTimeout
-	invertedindex.FlushWaitTimeout = 200 * time.Millisecond
-	defer func() { invertedindex.FlushWaitTimeout = origFlushWaitTimeout }()
+	iiOpts := invertedindex.Options{
+		FlushWaitTimeout: 200 * time.Millisecond,
+	}
 
 	var shutdownWg sync.WaitGroup
 	running.InitShutdown(&shutdownWg)
@@ -467,13 +467,15 @@ func TestFullIntegration(t *testing.T) {
 		t.Fatalf("idtable.New: %v", err)
 	}
 	indexer.SetIdAllocator(alloc)
-	if err := invertedindex.Init(env.DB, env.Mpsc); err != nil {
-		t.Fatalf("invertedindex.Init: %v", err)
+	idx, err := invertedindex.New(env.DB, env.Mpsc, iiOpts)
+	if err != nil {
+		t.Fatalf("invertedindex.New: %v", err)
 	}
-	if err := documents.Init(env.DB, env.Mpsc, invertedindex.GetLegacy()); err != nil {
+	idxInst = idx
+	if err := documents.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("documents.Init: %v", err)
 	}
-	if err := symbols.Init(env.DB, env.Mpsc, invertedindex.GetLegacy()); err != nil {
+	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
 	if err := workspace.Init(env.DB); err != nil {
@@ -588,8 +590,9 @@ func TestFullIntegration(t *testing.T) {
 	}
 	// Wait for the inverted-index to flush pending writes from both
 	// content indexing and symbol indexing.
-	// We reduced FlushWaitTimeout to 200ms; wait for that plus a ticker cycle.
-	time.Sleep(time.Duration(invertedindex.FlushWaitTimeout) + time.Duration(invertedindex.FlushTicker) + 200*time.Millisecond)
+	// We reduced FlushWaitTimeout to 200ms; wait for that plus a ticker cycle
+	// (default ticker is 1s).
+	time.Sleep(200*time.Millisecond + 1*time.Second + 200*time.Millisecond)
 
 	// makeWS creates a NEW workspace for tests that need isolated files.
 	// It does NOT wait for index flush - use only when index search isn't needed.
@@ -2100,7 +2103,8 @@ func TestFullIntegration(t *testing.T) {
 	indexerWg.Wait()
 	symbols.CloseAndWait()
 	documents.CloseAndWait()
-	invertedindex.CloseAndWait()
+	idx.CloseAndWait()
+	idxInst = nil
 	alloc.Close()
 	env.TeardownBase()
 }

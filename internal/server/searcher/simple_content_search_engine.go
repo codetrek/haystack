@@ -143,7 +143,7 @@ func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws 
 	}
 
 	// Get results for first prefix
-	rs := invertedindex.Search(invertedId, kws[0], -1, nil)
+	rs := idxInst.Search(invertedId, kws[0], -1, nil)
 	if len(kws) == 1 {
 		log.Printf("[Searcher] CollectDocuments: |--`%s` found %d documents using keyword `%s`", q.String(), len(rs.DocIds), kws[0])
 		return rs.DocIds
@@ -153,7 +153,7 @@ func (q *SimpleContentSearchEngineTerm) collectWithKeywords(invertedId int, kws 
 	log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", kws[0], q.String(), len(result))
 	// Intersect with results from other prefixes
 	for _, prefix := range kws[1:] {
-		r := invertedindex.Search(invertedId, prefix, -1, nil)
+		r := idxInst.Search(invertedId, prefix, -1, nil)
 		log.Printf("[Searcher] CollectDocuments: |----`%s` of `%s` found %d documents", prefix, q.String(), len(r.DocIds))
 
 		if len(r.DocIds) < len(result) {

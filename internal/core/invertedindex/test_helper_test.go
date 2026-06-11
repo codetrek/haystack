@@ -36,21 +36,12 @@ func setupTestEnv(t *testing.T) *testEnv {
 		batch.Put(key, content)
 	}
 
-	opts := Options{
-		FlushTicker:        FlushTicker,
-		FlushWaitTimeout:   FlushWaitTimeout,
-		FlushWaitBatchSize: FlushWaitBatchSize,
-		FlushCooldown:      FlushCooldown,
-	}
+	opts := Options{}
 	idx, err := New(env.DB, env.Mpsc, opts)
 	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
-
-	// Also set the legacy singleton so any code that still calls the package-level
-	// helpers (e.g. tests that directly call flushPendingWrites via forceFlush) works.
-	_legacyIdx = idx
 
 	return &testEnv{Env: env, idx: idx}
 }
@@ -61,7 +52,6 @@ func (e *testEnv) teardown() {
 
 	// 1. inverted index
 	e.idx.CloseAndWait()
-	_legacyIdx = nil
 
 	// 2. base resources (queue → db → temp dir)
 	e.TeardownBase()
@@ -87,9 +77,8 @@ func (closedDB) ScanRange([]byte, []byte, func([]byte, []byte) bool) error {
 
 // simulateClosedDB replaces the index db with a closedDB stub and
 // returns a restore function that puts the original db back.
-func simulateClosedDB() (restore func()) {
-	// Operates on _legacyIdx.db (which is the same as env.idx.db in tests).
-	orig := _legacyIdx.db
-	_legacyIdx.db = closedDB{}
-	return func() { _legacyIdx.db = orig }
+func simulateClosedDB(idx *Index) (restore func()) {
+	orig := idx.db
+	idx.db = closedDB{}
+	return func() { idx.db = orig }
 }

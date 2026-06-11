@@ -25,8 +25,14 @@ import (
 	"github.com/lithammer/fuzzysearch/fuzzy"
 )
 
-func Run(wg *sync.WaitGroup) {
+// idxInst is the inverted index instance injected via Run. It backs the
+// content and symbol search lookups.
+var idxInst *invertedindex.Index
+
+func Run(wg *sync.WaitGroup, idx *invertedindex.Index) {
 	log.Println("[Searcher] Starting...")
+
+	idxInst = idx
 
 	wg.Add(1)
 	go func() {

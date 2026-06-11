@@ -24,12 +24,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	env := testutil.SetupEnv(t, "TestDocQueue")
 
 	// Init inverted index first (documents.Create depends on it).
-	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{
-		FlushTicker:        invertedindex.FlushTicker,
-		FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
-		FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
-		FlushCooldown:      invertedindex.FlushCooldown,
-	})
+	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{})
 	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)

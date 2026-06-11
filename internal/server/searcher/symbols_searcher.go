@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
@@ -120,7 +119,7 @@ func fuzzySearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbols
 	// Split query with space
 	// words := strings.Fields(req.Query)
 	words := wordsegmentation.Segment(englishCorpus, req.Query)
-	r := invertedindex.Search(swt.InvertedId, words[0], -1, func(k string) bool {
+	r := idxInst.Search(swt.InvertedId, words[0], -1, func(k string) bool {
 		for _, word := range words {
 			if !strings.Contains(k, word) {
 				return false
@@ -174,7 +173,7 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 		return result, err
 	}
 
-	r := invertedindex.GetDocs(st.InvertedId, req.Query)
+	r := idxInst.GetDocs(st.InvertedId, req.Query)
 	log.Printf("Query: %s, invertedId:%d len docids(%d)", req.Query, st.InvertedId, len(r.DocIds))
 
 	// Group results by symbol name

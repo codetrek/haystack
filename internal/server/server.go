@@ -25,12 +25,8 @@ import (
 // Function variables for Init calls, enabling test overrides.
 var (
 	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (*invertedindex.Index, error) {
-		return invertedindex.New(db, mpsc, invertedindex.Options{
-			FlushTicker:        invertedindex.FlushTicker,
-			FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
-			FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
-			FlushCooldown:      invertedindex.FlushCooldown,
-		})
+		// Zero-value Options selects production defaults inside New.
+		return invertedindex.New(db, mpsc, invertedindex.Options{})
 	}
 	documentsInit = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
 		return documents.Init(db, mpsc, idx)
@@ -90,9 +86,6 @@ func run() error {
 		running.Shutdown()
 		return fmt.Errorf("error initializing inverted index: %w", err)
 	}
-	// Keep the legacy package-level reference in sync so that packages not yet
-	// converted to the instance-based API (e.g. searcher) still work.
-	invertedindex.SetLegacy(idx)
 
 	if err := documentsInit(db, mpsc, idx); err != nil {
 		running.Shutdown()
@@ -113,7 +106,7 @@ func run() error {
 	}
 
 	indexer.Run(wg)
-	searcher.Run(wg)
+	searcher.Run(wg, idx)
 
 	if conf.Get().ForTest.Path != "" {
 		indexer.SyncIfNeeded(conf.Get().ForTest.Path)

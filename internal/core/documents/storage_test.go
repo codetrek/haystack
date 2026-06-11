@@ -115,7 +115,7 @@ func TestCreate_InvertedIndexCreateTableError(t *testing.T) {
 	defer env.teardown()
 
 	// Write non-numeric data to the inverted-index next-table-id key.
-	// invertedindex.CreateTable calls db.GetIncrementalId which does
+	// The inverted index's CreateTable calls db.GetIncrementalId which does
 	// strconv.Atoi on the stored value — corrupting it makes Atoi fail,
 	// which propagates as an error from CreateTable.
 	nextTableIdKey := []byte{storage.KeyTypeInvertedNextTableId}
@@ -137,8 +137,8 @@ func TestCreate_DbPutError(t *testing.T) {
 	defer env.teardown()
 
 	// simulateClosedDB replaces only the documents package's db with a stub
-	// that always returns errors. invertedindex.CreateTable() still uses the
-	// real DB and will succeed, but db.Put() in Create() will fail.
+	// that always returns errors. The inverted index's CreateTable() still uses
+	// the real DB and will succeed, but db.Put() in Create() will fail.
 	restore := simulateClosedDB()
 	defer restore()
 

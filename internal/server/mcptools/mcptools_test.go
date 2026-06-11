@@ -45,10 +45,12 @@ func setupMCPTestEnv(t *testing.T) {
 		// Configure
 		conf.Get().Global.DataPath = filepath.Join(tempDir, "mcp_test_data")
 		conf.Get().Server.CacheSize = 8 * 1024 * 1024
-		invertedindex.FlushTicker = 50 * time.Millisecond
-		invertedindex.FlushWaitTimeout = 1 * time.Microsecond
-		invertedindex.FlushWaitBatchSize = 10
-		invertedindex.FlushCooldown = 50 * time.Millisecond
+		iiOpts := invertedindex.Options{
+			FlushTicker:        50 * time.Millisecond,
+			FlushWaitTimeout:   1 * time.Microsecond,
+			FlushWaitBatchSize: 10,
+			FlushCooldown:      50 * time.Millisecond,
+		}
 
 		// Create test files
 		testFiles := map[string]string{
@@ -101,16 +103,17 @@ This is a test project.`,
 		mpsc := queue.NewMpsc("MCPTestDBQueue")
 		mpsc.Start()
 
-		if !assert.NoError(t, invertedindex.Init(indexdb, mpsc)) {
+		idx, err := invertedindex.New(indexdb, mpsc, iiOpts)
+		if !assert.NoError(t, err) {
 			return
 		}
-		if !assert.NoError(t, documents.Init(db, mpsc, invertedindex.GetLegacy())) {
+		if !assert.NoError(t, documents.Init(db, mpsc, idx)) {
 			return
 		}
 		if !assert.NoError(t, workspace.Init(db)) {
 			return
 		}
-		if !assert.NoError(t, symbols.Init(db, mpsc, invertedindex.GetLegacy())) {
+		if !assert.NoError(t, symbols.Init(db, mpsc, idx)) {
 			return
 		}
 
@@ -121,7 +124,7 @@ This is a test project.`,
 		indexer.SetIdAllocator(alloc)
 
 		indexer.Run(wg)
-		searcher.Run(wg)
+		searcher.Run(wg, idx)
 
 		// Create and index workspace
 		_, err = indexer.CreateWorkspace(testWorkspacePath, true, nil)
@@ -145,7 +148,7 @@ This is a test project.`,
 			running.Shutdown()
 			wg.Wait()
 			documents.CloseAndWait()
-			invertedindex.CloseAndWait()
+			idx.CloseAndWait()
 			symbols.CloseAndWait()
 			mpsc.Stop()
 			alloc.Close()

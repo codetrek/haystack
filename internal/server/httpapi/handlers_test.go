@@ -20,6 +20,7 @@ import (
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
+	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/searchcore/idtable"
@@ -59,9 +60,14 @@ func TestMain(m *testing.M) {
 	mpsc := queue.NewMpsc("test-handler-queue")
 	mpsc.Start()
 
-	invertedindex.Init(db, mpsc)
-	documents.Init(db, mpsc, invertedindex.GetLegacy())
-	symbols.Init(db, mpsc, invertedindex.GetLegacy())
+	idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
+	if err != nil {
+		panic("Failed to init inverted index: " + err.Error())
+	}
+	documents.Init(db, mpsc, idx)
+	symbols.Init(db, mpsc, idx)
+	// Inject the inverted index into the searcher so search handlers work.
+	searcher.Run(&runningWg, idx)
 
 	alloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {
@@ -85,7 +91,7 @@ func TestMain(m *testing.M) {
 	testEnv.cleanup = func() {
 		symbols.CloseAndWait()
 		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
+		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()
 		os.RemoveAll(tempDir)

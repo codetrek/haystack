@@ -32,12 +32,19 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 	mpsc := queue.NewMpsc("TestQueue")
 	mpsc.Start()
 
-	invertedindex.Init(db, mpsc)
-	documents.Init(db, mpsc, invertedindex.GetLegacy())
-	symbols.Init(db, mpsc, invertedindex.GetLegacy())
+	idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
+	if err != nil {
+		db.Close()
+		mpsc.Stop()
+		os.RemoveAll(tempDir)
+		t.Fatalf("invertedindex.New failed: %v", err)
+	}
+	documents.Init(db, mpsc, idx)
+	symbols.Init(db, mpsc, idx)
 
 	err = Init(db)
 	if err != nil {
+		idx.CloseAndWait()
 		db.Close()
 		mpsc.Stop()
 		os.RemoveAll(tempDir)
@@ -47,7 +54,7 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 	cleanup = func() {
 		symbols.CloseAndWait()
 		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
+		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()
 		os.RemoveAll(tempDir)

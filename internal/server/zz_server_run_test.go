@@ -12,7 +12,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/shared/running"
 )
@@ -56,10 +55,6 @@ func TestZZ_Run(t *testing.T) {
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024
 	conf.Get().Server.LoggingStdout = false
 	conf.Get().ForTest.Path = testWorkspace
-
-	invertedindex.FlushTicker = 50 * time.Millisecond
-	invertedindex.FlushWaitTimeout = 1 * time.Microsecond
-	invertedindex.FlushWaitBatchSize = 10
 
 	running.RegisterLockFile(filepath.Join(tempDir, "server.lock"))
 

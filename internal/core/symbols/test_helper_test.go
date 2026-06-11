@@ -31,12 +31,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	conf.Get().Symbols.EnableFeature = true
 
 	// Init inverted index first (symbols.Create depends on it).
-	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{
-		FlushTicker:        invertedindex.FlushTicker,
-		FlushWaitTimeout:   invertedindex.FlushWaitTimeout,
-		FlushWaitBatchSize: invertedindex.FlushWaitBatchSize,
-		FlushCooldown:      invertedindex.FlushCooldown,
-	})
+	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{})
 	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)

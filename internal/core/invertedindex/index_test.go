@@ -55,7 +55,7 @@ func TestCreateTable_GetIncrementalIdError(t *testing.T) {
 	defer env.teardown()
 
 	// Swap in a closed DB stub so db.GetIncrementalId() returns an error
-	restore := simulateClosedDB()
+	restore := simulateClosedDB(env.idx)
 	defer restore()
 
 	tableId, err := env.idx.CreateTable("should fail")
