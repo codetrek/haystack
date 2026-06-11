@@ -8,8 +8,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 var errFake = errors.New("fake init error")

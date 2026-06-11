@@ -27,7 +27,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 const (

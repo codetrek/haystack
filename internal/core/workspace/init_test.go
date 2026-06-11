@@ -14,7 +14,7 @@ import (
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace/internal"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 // setupFullEnv initializes all required subsystems for testing manage.go functions.

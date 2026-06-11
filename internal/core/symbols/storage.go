@@ -1,8 +1,8 @@
 package symbols
 
 import (
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 const Shards = 8

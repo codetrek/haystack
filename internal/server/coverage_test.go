@@ -13,8 +13,8 @@ import (
 	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/shared/running"
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 // TestInitLog_Stdout verifies initLog configures stdout logging.

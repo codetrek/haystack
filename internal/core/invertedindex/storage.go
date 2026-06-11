@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 var (

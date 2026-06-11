@@ -8,8 +8,8 @@ import (
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/testutil"
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 // testEnv holds all resources created during test setup so they can

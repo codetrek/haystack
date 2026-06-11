@@ -19,7 +19,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/queue"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"

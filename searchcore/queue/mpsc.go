@@ -1,11 +1,25 @@
+// Package queue provides a multi-producer, single-consumer async task queue.
 package queue
 
 import "log"
 
+// Task is the unit of work dispatched through the queue.
 type Task interface {
 	Run() error
 }
 
+// Queue is the async task-queue injection interface; *Mpsc implements it.
+// searchcore packages (invertedindex, documents, ...) take a Queue so a
+// consumer can inject a single shared queue instance.
+type Queue interface {
+	Add(task Task)
+	RunTask(task Task) error
+}
+
+// compile-time assertion: *Mpsc satisfies Queue.
+var _ Queue = (*Mpsc)(nil)
+
+// NopeTask is a no-op Task used as a sentinel (e.g. to flush the queue).
 type NopeTask struct{}
 
 func (nt *NopeTask) Run() error {

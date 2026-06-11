@@ -22,7 +22,7 @@ import (
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/queue"
 	mcpGoServer "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 )

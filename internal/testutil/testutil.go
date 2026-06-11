@@ -13,8 +13,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 // Env holds the resources created by SetupEnv so that callers can access

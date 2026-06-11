@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/utils/queue"
 	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 var (
