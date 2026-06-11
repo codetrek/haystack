@@ -481,11 +481,11 @@ func TestPendingWritesCacheCreatesAndReturns(t *testing.T) {
 
 	origPW := env.idx.pendingWrites
 	defer func() { env.idx.pendingWrites = origPW }()
-	env.idx.pendingWrites = map[int]*PendingTableWrites{}
+	env.idx.pendingWrites = map[int]*pendingTableWrites{}
 
 	pw := env.idx.getPendingWrite(99)
 	if pw == nil {
-		t.Fatal("expected non-nil PendingTableWrites")
+		t.Fatal("expected non-nil pendingTableWrites")
 	}
 	if pw.TableId != 99 {
 		t.Errorf("expected TableId 99, got %d", pw.TableId)
@@ -497,7 +497,7 @@ func TestPendingWritesCacheCreatesAndReturns(t *testing.T) {
 	// Second call should return the same object
 	pw2 := env.idx.getPendingWrite(99)
 	if pw2 != pw {
-		t.Error("expected same PendingTableWrites object on second call")
+		t.Error("expected same pendingTableWrites object on second call")
 	}
 }
 
@@ -507,11 +507,11 @@ func TestPendingDeletesCacheCreatesAndReturns(t *testing.T) {
 
 	origPD := env.idx.pendingDeletes
 	defer func() { env.idx.pendingDeletes = origPD }()
-	env.idx.pendingDeletes = map[int]*PendingTableWrites{}
+	env.idx.pendingDeletes = map[int]*pendingTableWrites{}
 
 	pd := env.idx.getPendingDelete(88)
 	if pd == nil {
-		t.Fatal("expected non-nil PendingTableWrites for deletes")
+		t.Fatal("expected non-nil pendingTableWrites for deletes")
 	}
 	if pd.TableId != 88 {
 		t.Errorf("expected TableId 88, got %d", pd.TableId)
@@ -519,7 +519,7 @@ func TestPendingDeletesCacheCreatesAndReturns(t *testing.T) {
 
 	pd2 := env.idx.getPendingDelete(88)
 	if pd2 != pd {
-		t.Error("expected same PendingTableWrites object on second call")
+		t.Error("expected same pendingTableWrites object on second call")
 	}
 }
 
@@ -534,8 +534,8 @@ func TestClearPendingWrites(t *testing.T) {
 		env.idx.pendingDeletes = origPD
 	}()
 
-	env.idx.pendingWrites = map[int]*PendingTableWrites{}
-	env.idx.pendingDeletes = map[int]*PendingTableWrites{}
+	env.idx.pendingWrites = map[int]*pendingTableWrites{}
+	env.idx.pendingDeletes = map[int]*pendingTableWrites{}
 
 	env.idx.getPendingWrite(77)
 	env.idx.getPendingDelete(77)
@@ -695,7 +695,7 @@ func TestSearchMultipleKeywordsPrefix(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMergingMergedRowCount(t *testing.T) {
-	m := Merging{
+	m := merging{
 		TotalRowsBefore: 100,
 		TotalRowsAfter:  60,
 	}

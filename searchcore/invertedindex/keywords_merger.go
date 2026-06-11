@@ -9,12 +9,12 @@ import (
 	"github.com/dustin/go-humanize"
 )
 
-type KeywordsMerger struct {
+type keywordsMerger struct {
 	idx            *Index
 	shutdown       context.Context
 	shutdownFn     context.CancelFunc
 	mergerDone     chan struct{}
-	merging        Merging
+	merging        merging
 	InitialDelay   time.Duration // delay before the first merge scan (default 300s)
 	CompletedDelay time.Duration // delay after a full scan completes (default 8h)
 }
@@ -24,23 +24,21 @@ const (
 	defaultCompletedDelay = 8 * 3600 * time.Second
 )
 
-type Merging struct {
-	StartTime            time.Time `json:"start_time"`
-	NextMergeTime        time.Time `json:"next_merge_time"`
-	WaitingForFlushCache bool      `json:"-"`
-	NextIter             string    `json:"next_iter"`
-	TotalKeywords        int       `json:"total_keywords"`
-	TotalRowsBefore      int       `json:"total_rows_before"`
-	TotalRowsAfter       int       `json:"total_rows_after"`
+type merging struct {
+	WaitingForFlushCache bool
+	NextIter             string
+	TotalKeywords        int
+	TotalRowsBefore      int
+	TotalRowsAfter       int
 }
 
-func (m *Merging) MergedRowCount() int {
+func (m *merging) MergedRowCount() int {
 	return m.TotalRowsBefore - m.TotalRowsAfter
 }
 
 type mergeKeywordTask struct {
 	idx     *Index
-	merging Merging
+	merging merging
 }
 
 func (m *mergeKeywordTask) Run() error {
@@ -56,20 +54,20 @@ func (m *mergeKeywordTask) Run() error {
 	return nil
 }
 
-func (km *KeywordsMerger) Shutdown() {
+func (km *keywordsMerger) Shutdown() {
 	km.shutdownFn()
 }
 
-func (km *KeywordsMerger) Wait() {
+func (km *keywordsMerger) Wait() {
 	<-km.mergerDone
 }
 
-func (km *KeywordsMerger) GetWait() <-chan struct{} {
+func (km *keywordsMerger) GetWait() <-chan struct{} {
 	return km.mergerDone
 }
 
-func (km *KeywordsMerger) Start() {
-	km.merging = Merging{
+func (km *keywordsMerger) Start() {
+	km.merging = merging{
 		NextIter: string(km.idx.keyTypeRow),
 	}
 
@@ -78,7 +76,7 @@ func (km *KeywordsMerger) Start() {
 	go km.run()
 }
 
-func (km *KeywordsMerger) run() {
+func (km *keywordsMerger) run() {
 	log.Printf("[Inverted] Keywords merger: started")
 
 	// Capture locals to avoid reading mutable struct fields after Shutdown.
@@ -103,7 +101,7 @@ func (km *KeywordsMerger) run() {
 			return
 		case <-time.After(nextDelay):
 			if km.merging.NextIter == "" {
-				km.merging = Merging{
+				km.merging = merging{
 					NextIter: string(idx.keyTypeRow),
 				}
 
@@ -154,19 +152,19 @@ func (km *KeywordsMerger) run() {
 	}
 }
 
-type RecordRow struct {
+type recordRow struct {
 	Key      string
 	Value    string
 	DocCount int
 }
-type InvertedIndex struct {
+type invertedIndexEntry struct {
 	TableId  int
 	Keyword  string
-	Rows     []RecordRow
+	Rows     []recordRow
 	DocCount int
 }
 
-var rewriteIndex = func(batch kv.Batch, idx *Index, index *InvertedIndex, maxKeywordIndexSize int) int {
+var rewriteIndex = func(batch kv.Batch, idx *Index, index *invertedIndexEntry, maxKeywordIndexSize int) int {
 	if len(index.Rows) < 2 ||
 		index.DocCount/len(index.Rows) > maxKeywordIndexSize {
 		// We've already have a well batched keyword
@@ -205,7 +203,7 @@ var rewriteIndex = func(batch kv.Batch, idx *Index, index *InvertedIndex, maxKey
 	return mergedCount
 }
 
-func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging {
+func (idx *Index) mergeKeywordsIndex(m merging, maxKeywordIndexSize int) merging {
 	now := time.Now()
 	var isTimeout = func() bool {
 		return time.Since(now) > 300*time.Millisecond
@@ -213,11 +211,11 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 
 	batch := NewBatch(idx.db)
 	lastTableId := -1
-	current := &InvertedIndex{Rows: []RecordRow{}}
+	current := &invertedIndexEntry{Rows: []recordRow{}}
 	nextIter := m.NextIter
-	pending := []*InvertedIndex{}
+	pending := []*invertedIndexEntry{}
 	for {
-		var next *InvertedIndex
+		var next *invertedIndexEntry
 		idx.db.ScanRange([]byte(nextIter), append([]byte{idx.keyTypeRow}, 0xff), func(key []byte, value []byte) bool {
 			tableId, keyword, doccount, _ := idx.decodeInvertedKey(string(key))
 			if lastTableId == -1 {
@@ -239,7 +237,7 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 				if current.Keyword == keyword {
 					// we've reached the same keyword
 					// add the current key and value to the current keyword
-					current.Rows = append(current.Rows, RecordRow{
+					current.Rows = append(current.Rows, recordRow{
 						Key:      string(key),
 						Value:    string(value),
 						DocCount: doccount,
@@ -249,10 +247,10 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 				}
 			}
 
-			next = &InvertedIndex{
+			next = &invertedIndexEntry{
 				TableId: tableId,
 				Keyword: keyword,
-				Rows: append([]RecordRow{}, RecordRow{
+				Rows: append([]recordRow{}, recordRow{
 					Key:      string(key),
 					Value:    string(value),
 					DocCount: doccount,
@@ -283,7 +281,7 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 			m.TotalRowsAfter += rewriteIndex(batch, idx, c, maxKeywordIndexSize)
 			m.TotalKeywords++
 		}
-		pending = []*InvertedIndex{}
+		pending = []*invertedIndexEntry{}
 
 		if next == nil {
 			// we've reached the end of the database

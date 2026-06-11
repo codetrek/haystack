@@ -10,18 +10,25 @@ import (
 
 // Options holds tunables for the Index.
 // Zero values select sensible defaults.
+//
+// The KeyType* fields select the single on-disk key-type prefix byte for each
+// kind of key. Byte 0 (NUL) is reserved and cannot be selected by a consumer:
+// a zero field means "use the default" (NUL is a poor key prefix, and reserving
+// it lets the zero value double as the default sentinel). To use a custom
+// prefix, pick any non-zero byte.
 type Options struct {
 	// KeyTypeRow is the on-disk key-type prefix byte for inverted-index row keys.
-	// A zero value selects DefaultKeyTypeRow (20).  Changing this after data has
-	// been written is a breaking on-disk change.
+	// A zero value selects DefaultKeyTypeRow (20); byte 0 is reserved and cannot
+	// be selected. Changing this after data has been written is a breaking
+	// on-disk change.
 	KeyTypeRow byte
 
 	// KeyTypeTable is the on-disk key-type prefix byte for table-metadata keys.
-	// A zero value selects DefaultKeyTypeTable (21).
+	// A zero value selects DefaultKeyTypeTable (21); byte 0 is reserved.
 	KeyTypeTable byte
 
 	// KeyTypeNextId is the on-disk key-type prefix byte for the next-table-id counter.
-	// A zero value selects DefaultKeyTypeNextId (22).
+	// A zero value selects DefaultKeyTypeNextId (22); byte 0 is reserved.
 	KeyTypeNextId byte
 
 	// FlushTicker is how often the flush goroutine enqueues a flush task.
@@ -118,17 +125,17 @@ type Index struct {
 	keyTypeNextId byte
 
 	// pending writes/deletes — accessed only from the single-threaded mpsc queue
-	pendingWrites      map[int]*PendingTableWrites
+	pendingWrites      map[int]*pendingTableWrites
 	lastFlushWriteTime time.Time
 
-	pendingDeletes      map[int]*PendingTableWrites
+	pendingDeletes      map[int]*pendingTableWrites
 	lastFlushDeleteTime time.Time
 
 	// flush goroutine lifecycle
 	cancelFlush context.CancelFunc
 
 	// keywords merger
-	merger *KeywordsMerger
+	merger *keywordsMerger
 }
 
 // New creates and starts a new Index.
@@ -151,9 +158,9 @@ func New(store kv.Store, q queue.Queue, opts Options) (*Index, error) {
 		keyTypeRow:          opts.KeyTypeRow,
 		keyTypeTable:        opts.KeyTypeTable,
 		keyTypeNextId:       opts.KeyTypeNextId,
-		pendingWrites:       map[int]*PendingTableWrites{},
+		pendingWrites:       map[int]*pendingTableWrites{},
 		lastFlushWriteTime:  time.Now(),
-		pendingDeletes:      map[int]*PendingTableWrites{},
+		pendingDeletes:      map[int]*pendingTableWrites{},
 		lastFlushDeleteTime: time.Now(),
 	}
 
@@ -180,7 +187,7 @@ func New(store kv.Store, q queue.Queue, opts Options) (*Index, error) {
 		}
 	}()
 
-	idx.merger = &KeywordsMerger{idx: idx}
+	idx.merger = &keywordsMerger{idx: idx}
 	idx.merger.Start()
 
 	return idx, nil

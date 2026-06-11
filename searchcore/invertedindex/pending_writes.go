@@ -5,19 +5,16 @@ import (
 	"time"
 )
 
-type BufferedWrites struct {
-}
-
-type RelatedDocs struct {
+type relatedDocs struct {
 	DocIds    []string
 	UpdatedAt time.Time
 }
 
-type PendingTableWrites struct {
+type pendingTableWrites struct {
 	TableId int
 
 	// Map of keyword to document ids
-	InvertedIndex map[string]RelatedDocs
+	InvertedIndex map[string]relatedDocs
 }
 
 type flushPendingWritesTask struct {
@@ -34,12 +31,12 @@ func (t *flushPendingWritesTask) Run() error {
 
 // getPendingWrite returns the pending write cache for the table.
 // It will create a new cache if it does not exist.
-func (idx *Index) getPendingWrite(tableId int) *PendingTableWrites {
+func (idx *Index) getPendingWrite(tableId int) *pendingTableWrites {
 	wp := idx.pendingWrites[tableId]
 	if wp == nil {
-		wp = &PendingTableWrites{
+		wp = &pendingTableWrites{
 			TableId:       tableId,
-			InvertedIndex: make(map[string]RelatedDocs),
+			InvertedIndex: make(map[string]relatedDocs),
 		}
 		idx.pendingWrites[tableId] = wp
 	}
@@ -66,8 +63,6 @@ func (idx *Index) flushPendingWrites(closing bool) {
 	flushWaitTimeout := idx.opts.flushWaitTimeout()
 	flushWaitBatchSize := idx.opts.flushWaitBatchSize()
 
-	wordsCount := 0
-	docsCount := 0
 	for _, wp := range idx.pendingWrites {
 		for kw, relatedDocs := range wp.InvertedIndex {
 			// Skip the keyword if it has been updated in the last 2 seconds
@@ -76,9 +71,6 @@ func (idx *Index) flushPendingWrites(closing bool) {
 				time.Since(relatedDocs.UpdatedAt) < flushWaitTimeout {
 				continue
 			}
-
-			wordsCount++
-			docsCount += len(relatedDocs.DocIds)
 
 			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, idx.encodeInvertedKey(wp.TableId, kw, len(relatedDocs.DocIds)))
 			delete(wp.InvertedIndex, kw)
@@ -95,12 +87,12 @@ func (idx *Index) flushPendingWrites(closing bool) {
 
 // getPendingDelete returns the pending delete cache for the table.
 // It will create a new cache if it does not exist.
-func (idx *Index) getPendingDelete(tableId int) *PendingTableWrites {
+func (idx *Index) getPendingDelete(tableId int) *pendingTableWrites {
 	wp := idx.pendingDeletes[tableId]
 	if wp == nil {
-		wp = &PendingTableWrites{
+		wp = &pendingTableWrites{
 			TableId:       tableId,
-			InvertedIndex: make(map[string]RelatedDocs),
+			InvertedIndex: make(map[string]relatedDocs),
 		}
 		idx.pendingDeletes[tableId] = wp
 	}

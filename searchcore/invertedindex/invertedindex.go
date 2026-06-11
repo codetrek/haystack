@@ -7,11 +7,20 @@ import (
 
 const MaxInvertedIndexSize = 1000
 
+// SearchResult holds the set of document ids matched by a query. DocIds are
+// exact keyword matches; WildDocIds (populated by wildcard-aware callers) are
+// matches that came from wildcard expansion and may be filtered further by the
+// caller. Both are sets keyed by document id.
 type SearchResult struct {
 	DocIds     map[string]struct{} `json:"docIds"`
 	WildDocIds map[string]struct{} `json:"wildDocIds,omitempty"`
 }
 
+// Search returns the union of document ids whose keywords match query within
+// the given table. The query is lower-cased and matched as a keyword prefix.
+// If filterKeyword is non-nil it is called with each candidate key and must
+// return true for the key's documents to be included. A positive limit caps
+// the number of distinct document ids collected; limit <= 0 means unlimited.
 func (idx *Index) Search(tableId int, query string, limit int, filterKeyword func(string) bool) SearchResult {
 	results := SearchResult{
 		DocIds: make(map[string]struct{}),
@@ -42,6 +51,9 @@ func (idx *Index) Search(tableId int, query string, limit int, filterKeyword fun
 	return results
 }
 
+// GetDocs returns the union of document ids stored under the exact keyword key
+// within the given table. Unlike Search, the key is matched verbatim (no
+// lower-casing) as an inverted-key prefix, with no limit or filtering.
 func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 	results := SearchResult{
 		DocIds: make(map[string]struct{}),

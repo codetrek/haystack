@@ -74,7 +74,7 @@ func newMockBatch(db kv.Store) *mockBatchWrite {
 }
 
 // Helper function to verify write operations and document IDs
-func verifyWriteOperations(t *testing.T, mockBatch *mockBatchWrite, index *InvertedIndex, expectedWriteCount int, expectedDocIDs int) {
+func verifyWriteOperations(t *testing.T, mockBatch *mockBatchWrite, index *invertedIndexEntry, expectedWriteCount int, expectedDocIDs int) {
 	t.Helper()
 
 	// Check write calls
@@ -115,10 +115,10 @@ func TestRewriteIndexSingleRow(t *testing.T) {
 	// Use actual encoded document IDs
 	encodedValue := "doc1|doc2"
 
-	index := &InvertedIndex{
+	index := &invertedIndexEntry{
 		TableId: testTable1,
 		Keyword: "keyword1",
-		Rows: []RecordRow{
+		Rows: []recordRow{
 			{Key: "key1", Value: encodedValue, DocCount: 2},
 		},
 		DocCount: 2,
@@ -146,10 +146,10 @@ func TestRewriteIndexMultipleRows(t *testing.T) {
 	defer restoreWriteKeywordIndex()
 
 	// Use actual encoded document IDs
-	index := &InvertedIndex{
+	index := &invertedIndexEntry{
 		TableId: testTable1,
 		Keyword: "keyword1",
-		Rows: []RecordRow{
+		Rows: []recordRow{
 			{Key: "key1", Value: "cdocdoc1cdocdoc2", DocCount: 2},
 			{Key: "key2", Value: "cdocdoc3cdocdoc4", DocCount: 2},
 			{Key: "key3", Value: "cdocdoc5cdocdoc6", DocCount: 2},
@@ -184,10 +184,10 @@ func TestRewriteIndexWellBatched(t *testing.T) {
 	defer restoreWriteKeywordIndex()
 
 	// Use actual encoded document IDs
-	index := &InvertedIndex{
+	index := &invertedIndexEntry{
 		TableId: testTable1,
 		Keyword: "keyword1",
-		Rows: []RecordRow{
+		Rows: []recordRow{
 			{Key: "key1", Value: "doc1|doc2|doc3|doc4|doc5|doc6|doc7|doc8|doc9|doc10", DocCount: 10},
 			{Key: "key2", Value: "doc11|doc12|doc13|doc14|doc15|doc16|doc17|doc18|doc19|doc20", DocCount: 10},
 		},
@@ -234,10 +234,10 @@ func TestRewriteIndexMultipleBatches(t *testing.T) {
 	defer restoreWriteKeywordIndex()
 
 	// Use actual encoded document IDs
-	index := &InvertedIndex{
+	index := &invertedIndexEntry{
 		TableId: testTable1,
 		Keyword: "keyword1",
-		Rows: []RecordRow{
+		Rows: []recordRow{
 			{Key: "key1", Value: MakeDocsForKeyword("doc1", "doc2"), DocCount: 2},
 			{Key: "key2", Value: MakeDocsForKeyword("doc3", "doc4"), DocCount: 2},
 			{Key: "key3", Value: MakeDocsForKeyword("doc5", "doc6"), DocCount: 2},
@@ -332,8 +332,8 @@ func (d *mockDB) GetIncrementalId(key []byte) (int, error) {
 func newTestIndexWithDB(store kv.Store) *Index {
 	return &Index{
 		db:             store,
-		pendingWrites:  map[int]*PendingTableWrites{},
-		pendingDeletes: map[int]*PendingTableWrites{},
+		pendingWrites:  map[int]*pendingTableWrites{},
+		pendingDeletes: map[int]*pendingTableWrites{},
 		opts:           Options{},
 		keyTypeRow:     DefaultKeyTypeRow,
 		keyTypeTable:   DefaultKeyTypeTable,
@@ -352,7 +352,7 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 	idx := newTestIndexWithDB(mdb)
 
 	// Set up test data
-	input := Merging{
+	input := merging{
 		NextIter:        string(DefaultKeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
@@ -425,7 +425,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 	idx := newTestIndexWithDB(mdb)
 
 	// Set up test data
-	input := Merging{
+	input := merging{
 		NextIter:        string(DefaultKeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
@@ -559,7 +559,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	idx := newTestIndexWithDB(mdb)
 
 	// Set up test data
-	input := Merging{
+	input := merging{
 		NextIter:        string(DefaultKeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
@@ -756,7 +756,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	idx := newTestIndexWithDB(mdb)
 
 	// Run the function
-	input := Merging{
+	input := merging{
 		NextIter:        string(DefaultKeyTypeRow),
 		TotalKeywords:   0,
 		TotalRowsBefore: 0,
@@ -794,7 +794,7 @@ func TestMergeKeywordTask_Run_NoPendingWrites(t *testing.T) {
 	// pendingWrites is reset to empty in setupTestEnv
 	task := &mergeKeywordTask{
 		idx: env.idx,
-		merging: Merging{
+		merging: merging{
 			NextIter: string(DefaultKeyTypeRow),
 		},
 	}
@@ -813,11 +813,11 @@ func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
 	defer env.teardown()
 
 	// Add a pending write to trigger the waiting path
-	env.idx.pendingWrites[1] = &PendingTableWrites{}
+	env.idx.pendingWrites[1] = &pendingTableWrites{}
 
 	task := &mergeKeywordTask{
 		idx: env.idx,
-		merging: Merging{
+		merging: merging{
 			NextIter: string(DefaultKeyTypeRow),
 		},
 	}
@@ -831,7 +831,7 @@ func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
 	}
 
 	// Clean up
-	env.idx.pendingWrites = map[int]*PendingTableWrites{}
+	env.idx.pendingWrites = map[int]*pendingTableWrites{}
 }
 
 // ---------------------------------------------------------------------------
@@ -842,7 +842,7 @@ func TestKeywordsMerger_GetWait(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	km := &KeywordsMerger{idx: env.idx}
+	km := &keywordsMerger{idx: env.idx}
 	km.Start()
 
 	ch := km.GetWait()
@@ -871,7 +871,7 @@ func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	km := &KeywordsMerger{idx: env.idx}
+	km := &keywordsMerger{idx: env.idx}
 	km.Start()
 
 	// Verify mergerDone is not closed yet
@@ -939,15 +939,15 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 	testIdx := &Index{
 		db:             mockStore,
 		q:              env.idx.q,
-		pendingWrites:  map[int]*PendingTableWrites{},
-		pendingDeletes: map[int]*PendingTableWrites{},
+		pendingWrites:  map[int]*pendingTableWrites{},
+		pendingDeletes: map[int]*pendingTableWrites{},
 		opts:           Options{},
 		keyTypeRow:     DefaultKeyTypeRow,
 		keyTypeTable:   DefaultKeyTypeTable,
 		keyTypeNextId:  DefaultKeyTypeNextId,
 	}
 
-	km := &KeywordsMerger{idx: testIdx, InitialDelay: 10 * time.Millisecond}
+	km := &keywordsMerger{idx: testIdx, InitialDelay: 10 * time.Millisecond}
 	km.Start()
 
 	// Wait for the merge loop to run at least once.
@@ -999,15 +999,15 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 	testIdx := &Index{
 		db:             mockStore,
 		q:              env.idx.q,
-		pendingWrites:  map[int]*PendingTableWrites{},
-		pendingDeletes: map[int]*PendingTableWrites{},
+		pendingWrites:  map[int]*pendingTableWrites{},
+		pendingDeletes: map[int]*pendingTableWrites{},
 		opts:           Options{},
 		keyTypeRow:     DefaultKeyTypeRow,
 		keyTypeTable:   DefaultKeyTypeTable,
 		keyTypeNextId:  DefaultKeyTypeNextId,
 	}
 
-	km := &KeywordsMerger{
+	km := &keywordsMerger{
 		idx:            testIdx,
 		InitialDelay:   10 * time.Millisecond,
 		CompletedDelay: 10 * time.Millisecond,
@@ -1059,7 +1059,7 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 
 	idx := newTestIndexWithDB(mdb)
 
-	input := Merging{
+	input := merging{
 		NextIter: string(DefaultKeyTypeRow),
 	}
 
@@ -1080,12 +1080,12 @@ func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
 
 	// Insert pending writes so the merge task sees them and sets WaitingForFlushCache.
 	pw := env.idx.getPendingWrite(1)
-	pw.InvertedIndex["testword"] = RelatedDocs{
+	pw.InvertedIndex["testword"] = relatedDocs{
 		DocIds:    []string{"doc1"},
 		UpdatedAt: time.Now(),
 	}
 
-	km := &KeywordsMerger{idx: env.idx, InitialDelay: 10 * time.Millisecond}
+	km := &keywordsMerger{idx: env.idx, InitialDelay: 10 * time.Millisecond}
 	km.Start()
 
 	// Let the timer fire. The merge task should see pending writes and
@@ -1109,7 +1109,7 @@ func TestMergeKeywordTask_RunViaQueue(t *testing.T) {
 
 	task := &mergeKeywordTask{
 		idx: env.idx,
-		merging: Merging{
+		merging: merging{
 			NextIter: string(DefaultKeyTypeRow),
 		},
 	}

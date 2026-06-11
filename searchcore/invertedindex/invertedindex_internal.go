@@ -16,7 +16,7 @@ func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
 		// Add to write cache to merge with other documents and flush later. docid may be
 		// duplicated; however for performance we don't check for duplicates here — all
 		// duplicates will be merged later in the background.
-		cache.InvertedIndex[kw] = RelatedDocs{
+		cache.InvertedIndex[kw] = relatedDocs{
 			DocIds:    append(cache.InvertedIndex[kw].DocIds, docid),
 			UpdatedAt: time.Now(),
 		}
@@ -27,7 +27,7 @@ func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
 	w := idx.getPendingDelete(tableId)
 	for _, kw := range keywords {
 		// Add to delete cache to merge with other documents and flush later.
-		w.InvertedIndex[kw] = RelatedDocs{
+		w.InvertedIndex[kw] = relatedDocs{
 			DocIds:    append(w.InvertedIndex[kw].DocIds, docid),
 			UpdatedAt: time.Now(),
 		}
@@ -96,7 +96,6 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		return err
 	}
 
-	count := 0
 	for len(docids) > 0 {
 		docs := []string{}
 		for id := range docids {
@@ -116,7 +115,6 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		}
 
 		writeInvertedIndex(batch, tableId, kw, docs, key)
-		count++
 	}
 
 	for _, key := range keys {
