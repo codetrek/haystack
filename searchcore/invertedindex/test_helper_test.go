@@ -42,7 +42,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	q.Start()
 
 	// Reset the test-injection seams to their defaults.
-	NewBatch = func(db kv.Store) kv.Batch {
+	newBatch = func(db kv.Store) kv.Batch {
 		return db.NewBatch(MaxBatchSize)
 	}
 	writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {

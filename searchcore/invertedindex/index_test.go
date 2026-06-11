@@ -608,14 +608,14 @@ func TestUpdateAndRemoveIndex(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Batch write / NewBatch
+// Batch write / newBatch
 // ---------------------------------------------------------------------------
 
 func TestNewBatchDefault(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	batch := NewBatch(env.DB)
+	batch := newBatch(env.DB)
 	if batch == nil {
 		t.Fatal("expected non-nil batch")
 	}

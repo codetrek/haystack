@@ -380,10 +380,10 @@ func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
 // TestMergeKeywordsIndexSingleTable tests merging keywords from a single table
 func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 	originalWriteKeywordIndex := writeInvertedIndex
-	originalNewBatch := NewBatch
+	originalNewBatch := newBatch
 	defer func() {
 		writeInvertedIndex = originalWriteKeywordIndex
-		NewBatch = originalNewBatch
+		newBatch = originalNewBatch
 	}()
 
 	writtenTables := []int{}
@@ -491,10 +491,10 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 // TestMergeKeywordsIndexMultipleTables tests merging keywords from multiple tables
 func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	originalWriteKeywordIndex := writeInvertedIndex
-	originalNewBatch := NewBatch
+	originalNewBatch := newBatch
 	defer func() {
 		writeInvertedIndex = originalWriteKeywordIndex
-		NewBatch = originalNewBatch
+		newBatch = originalNewBatch
 	}()
 
 	// Track writes by table
@@ -527,7 +527,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 		writtenData[tableId][keyword] = docIDs
 	}
 
-	NewBatch = func(db kv.Store) kv.Batch {
+	newBatch = func(db kv.Store) kv.Batch {
 		return mockBatch
 	}
 
@@ -698,10 +698,10 @@ func (m *mockBatchWriteWithFuncs) DeletePrefix(prefix []byte) error {
 // TestMergeKeywordsIndexTimeout tests the timeout behavior of mergeKeywordsIndex
 func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	originalWriteKeywordIndex := writeInvertedIndex
-	originalNewBatch := NewBatch
+	originalNewBatch := newBatch
 	defer func() {
 		writeInvertedIndex = originalWriteKeywordIndex
-		NewBatch = originalNewBatch
+		newBatch = originalNewBatch
 	}()
 
 	// Create a lot of entries with properly formatted keys to trigger timeout
@@ -745,7 +745,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 		// No-op for this test
 	}
 
-	NewBatch = func(db kv.Store) kv.Batch {
+	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },
@@ -892,18 +892,18 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	// Save and mock writeInvertedIndex + NewBatch so mergeKeywordsIndex works.
+	// Save and mock writeInvertedIndex + newBatch so mergeKeywordsIndex works.
 	origWrite := writeInvertedIndex
-	origBatch := NewBatch
+	origBatch := newBatch
 	defer func() {
 		writeInvertedIndex = origWrite
-		NewBatch = origBatch
+		newBatch = origBatch
 	}()
 
 	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
 		// no-op: we don't need to persist data
 	}
-	NewBatch = func(db kv.Store) kv.Batch {
+	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },
@@ -971,14 +971,14 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 	defer env.teardown()
 
 	origWrite := writeInvertedIndex
-	origBatch := NewBatch
+	origBatch := newBatch
 	defer func() {
 		writeInvertedIndex = origWrite
-		NewBatch = origBatch
+		newBatch = origBatch
 	}()
 
 	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
-	NewBatch = func(db kv.Store) kv.Batch {
+	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },
@@ -1031,14 +1031,14 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 // considered "well batched" and skipped without merging.
 func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 	origWrite := writeInvertedIndex
-	origBatch := NewBatch
+	origBatch := newBatch
 	defer func() {
 		writeInvertedIndex = origWrite
-		NewBatch = origBatch
+		newBatch = origBatch
 	}()
 
 	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
-	NewBatch = func(db kv.Store) kv.Batch {
+	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
 			putFunc:    func(key, value []byte) error { return nil },

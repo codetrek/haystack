@@ -1,3 +1,5 @@
+// Package idtable allocates stable, compact int64 identifiers for arbitrary
+// byte keys, backed by a kv.Store with an LRU cache and background commit loop.
 package idtable
 
 import (
@@ -11,7 +13,7 @@ import (
 	"github.com/codetrek/haystack/searchcore/kv"
 )
 
-// Default key-type prefix bytes (match haystack's historical layout for on-disk compatibility).
+// Default key-type prefix bytes (match the historical on-disk layout for on-disk compatibility).
 const (
 	DefaultKeyTypeNextId  = byte(28)
 	DefaultKeyTypeKey     = byte(29)

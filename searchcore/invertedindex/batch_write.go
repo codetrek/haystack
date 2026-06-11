@@ -6,6 +6,6 @@ import (
 
 const MaxBatchSize = 512
 
-var NewBatch = func(db kv.Store) kv.Batch {
+var newBatch = func(db kv.Store) kv.Batch {
 	return db.NewBatch(MaxBatchSize)
 }

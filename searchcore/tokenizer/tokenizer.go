@@ -1,3 +1,5 @@
+// Package tokenizer provides text tokenization for indexing and search,
+// supporting ASCII, CJK, camelCase/snake_case decomposition, and stopword filtering.
 package tokenizer
 
 // Tokenizer defines the interface for text tokenization used by the inverted index.

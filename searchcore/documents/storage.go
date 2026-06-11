@@ -1,3 +1,6 @@
+// Package documents provides per-collection document storage that composes an
+// inverted index, persisting document metadata, keywords, and path information
+// in a kv.Store with async writes serialized through a shared queue.
 package documents
 
 import (

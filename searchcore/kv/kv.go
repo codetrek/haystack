@@ -1,11 +1,13 @@
+// Package kv defines the Store and Batch interfaces used by searchcore packages
+// to decouple storage from any specific key-value engine implementation.
 package kv
 
-// Store is the key-value store interface used throughout haystack.
+// Store is the key-value store interface used by searchcore packages.
 // It is implemented by pebblekv.PebbleDB.
 //
 // GetIncrementalId and ScheduleCompact are part of the interface to keep Store
 // a drop-in replacement for the original Pebble wrapper relied on by the
-// invertedindex and workspace packages (GetIncrementalId backs ID allocation;
+// invertedindex and collection packages (GetIncrementalId backs ID allocation;
 // ScheduleCompact lets the keyword merger trigger compaction after large
 // rewrites). Alternative backends must provide both: a backend without a native
 // compaction concept may implement ScheduleCompact as a no-op, but
@@ -32,7 +34,7 @@ type Store interface {
 	IsClosed() bool
 }
 
-// Batch is the write-batch interface used throughout haystack.
+// Batch is the write-batch interface used by searchcore packages.
 // It is implemented by pebblekv.PebbleBatch.
 type Batch interface {
 	Put(key, value []byte) error

@@ -50,6 +50,12 @@ q := queue.NewMpsc("writes")
 q.Start()
 defer q.Stop()
 
+// 2b. Mint a stable 8-byte document id from idtable (required by the
+//     inverted-index codec which packs ids as fixed-width 8-byte strings).
+alloc, _ := idtable.New(store, idtable.Options{})
+defer alloc.Close()
+docID, _ := alloc.GetId([]byte("main.go")) // path → stable 8-byte id
+
 // 3. Compose the stack (one shared inverted index instance).
 idx, _ := invertedindex.New(store, q, invertedindex.Options{})
 docs, _ := documents.New(store, q, idx, documents.Options{})
@@ -58,7 +64,7 @@ cat, _ := collection.New(store, docs, collection.Options{})
 // 4. Create a collection and add documents (Save auto-indexes).
 col, _ := cat.Create("my-project")
 col.Save([]*documents.Document{
-    {ID: idMustBeUnique, Path: "main.go", Words: []string{"hello", "world", "main"}},
+    {ID: docID, RelPath: "main.go", Words: []string{"hello", "world", "main"}},
 })
 
 // 5. Query its content.
@@ -73,14 +79,6 @@ for docID := range result.DocIds {
     //   matches := eng.IsLineMatch(line)  // [][]int match ranges for highlighting
     _ = docID
 }
-```
-
-Stable, compact document IDs can be minted with `idtable`:
-
-```go
-alloc, _ := idtable.New(store, idtable.Options{})
-defer alloc.Close()
-docID, _ := alloc.GetId([]byte("main.go")) // path → stable 8-byte id
 ```
 
 ## Packages
@@ -106,6 +104,7 @@ docID, _ := alloc.GetId([]byte("main.go")) // path → stable 8-byte id
   to coexist with other data in a shared store; the defaults are stable for on-disk compatibility.
   Byte `0` is reserved as the "use default" sentinel.
 - **Concurrency.** All types are safe for concurrent use; document/index writes are serialized
-  through the injected queue. Call `CloseAndWait()` on the index / `Close()` on the store at shutdown.
+  through the injected queue. At shutdown call in order: `idx.CloseAndWait()` → `docs.CloseAndWait()` → `store.Close()` (and `q.Stop()`).
+  Skipping `docs.CloseAndWait()` risks unflushed queue work.
 - **Forward-compatible.** `documents` keeps the document→index update behind a narrow internal seam,
   so additional index types (e.g. a vector index) can be added without changing the `Save` API.

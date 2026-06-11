@@ -1,3 +1,6 @@
+// Package invertedindex implements a low-level posting-list engine that maps
+// search terms to document identifiers, with batched async writes and a
+// background keyword-merging compactor.
 package invertedindex
 
 import (

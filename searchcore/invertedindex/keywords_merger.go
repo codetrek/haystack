@@ -209,7 +209,7 @@ func (idx *Index) mergeKeywordsIndex(m merging, maxKeywordIndexSize int) merging
 		return time.Since(now) > 300*time.Millisecond
 	}
 
-	batch := NewBatch(idx.db)
+	batch := newBatch(idx.db)
 	lastTableId := -1
 	current := &invertedIndexEntry{Rows: []recordRow{}}
 	nextIter := m.NextIter
