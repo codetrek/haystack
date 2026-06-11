@@ -9,7 +9,7 @@ import (
 
 	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/invertedindex/tokenizer"
+	"github.com/codetrek/haystack/searchcore/tokenizer"
 	"github.com/codetrek/haystack/internal/core/workspace"
 )
 
