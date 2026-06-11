@@ -10,9 +10,9 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/shared/running"
+	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/queue"
 )
@@ -89,32 +89,24 @@ func TestRun_IndexStorageError(t *testing.T) {
 	assert.Contains(t, err.Error(), "error initializing index storage")
 }
 
-// TestRun_IdTableInitError tests the run() error path when idtable.Init fails
-// (e.g., already initialized from a previous test).
+// TestRun_IdTableInitError tests the run() error path when idtable.New fails
+// (e.g., the data DB contains a corrupt nextId value).
 func TestRun_IdTableInitError(t *testing.T) {
 	tempDir := t.TempDir()
-
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024
+	conf.Get().Global.DataPath = tempDir
 
-	// Open a separate DB to initialize idtable
-	helperPath := filepath.Join(tempDir, "helper")
-	helperDb, err := storage.Open(helperPath, conf.Get().Server.CacheSize)
+	// Pre-seed a corrupt nextId so that idtable.New returns an error.
+	dataDB, err := storage.Open(filepath.Join(tempDir, "data"), conf.Get().Server.CacheSize)
 	assert.NoError(t, err)
-
-	err = idtable.Init(helperDb)
+	// KeyTypeNextId == 28 (DefaultKeyTypeNextId); write a non-numeric value.
+	err = dataDB.Put([]byte{idtable.DefaultKeyTypeNextId}, []byte("not-a-number"))
 	assert.NoError(t, err)
-	// Don't close idtable — the next run() call should fail at idtable.Init
-
-	// Point run() at a different data path so storage.Open succeeds
-	conf.Get().Global.DataPath = filepath.Join(tempDir, "run_data")
+	dataDB.Close()
 
 	err = run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing id table")
-
-	// Clean up
-	idtable.Close()
-	helperDb.Close()
 }
 
 // TestRun_LockError tests Run() when CheckAndLockServer fails (line 36-38).
@@ -152,6 +144,4 @@ func TestRun_RunError(t *testing.T) {
 
 	// Run() should log the error from run() and return without crashing.
 	Run()
-
-	idtable.Close()
 }

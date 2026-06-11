@@ -15,13 +15,14 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/queue"
 	mcpGoServer "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,12 @@ func TestMain(m *testing.M) {
 	invertedindex.Init(db, mpsc)
 	documents.Init(db, mpsc)
 	symbols.Init(db, mpsc)
-	idtable.Init(db)
+
+	alloc, err := idtable.New(db, idtable.Options{})
+	if err != nil {
+		panic("Failed to init idtable: " + err.Error())
+	}
+	indexer.SetIdAllocator(alloc)
 
 	err = workspace.Init(db)
 	if err != nil {

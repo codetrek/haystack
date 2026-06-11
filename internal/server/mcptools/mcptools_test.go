@@ -11,7 +11,6 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
@@ -19,6 +18,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
+	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/queue"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -101,9 +101,6 @@ This is a test project.`,
 		mpsc := queue.NewMpsc("MCPTestDBQueue")
 		mpsc.Start()
 
-		if !assert.NoError(t, idtable.Init(db)) {
-			return
-		}
 		if !assert.NoError(t, invertedindex.Init(indexdb, mpsc)) {
 			return
 		}
@@ -116,6 +113,12 @@ This is a test project.`,
 		if !assert.NoError(t, symbols.Init(db, mpsc)) {
 			return
 		}
+
+		alloc, allocErr := idtable.New(db, idtable.Options{})
+		if !assert.NoError(t, allocErr) {
+			return
+		}
+		indexer.SetIdAllocator(alloc)
 
 		indexer.Run(wg)
 		searcher.Run(wg)
@@ -145,7 +148,7 @@ This is a test project.`,
 			invertedindex.CloseAndWait()
 			symbols.CloseAndWait()
 			mpsc.Stop()
-			idtable.Close()
+			alloc.Close()
 			db.Close()
 			indexdb.Close()
 		}

@@ -17,7 +17,6 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
@@ -27,6 +26,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/queue"
 )
 
@@ -206,8 +206,9 @@ func startTestServer(t *testing.T) func() {
 	mpsc := queue.NewMpsc("TestDBQueue")
 	mpsc.Start()
 
-	err = idtable.Init(db)
+	alloc, err := idtable.New(db, idtable.Options{})
 	assert.NoError(t, err)
+	indexer.SetIdAllocator(alloc)
 
 	err = invertedindex.Init(indexdb, mpsc)
 	assert.NoError(t, err)
@@ -236,7 +237,7 @@ func startTestServer(t *testing.T) func() {
 		documents.CloseAndWait()
 		invertedindex.CloseAndWait()
 		mpsc.Stop()
-		idtable.Close()
+		alloc.Close()
 		db.Close()
 		indexdb.Close()
 	}

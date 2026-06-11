@@ -9,12 +9,12 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/idtable"
 )
 
 // setupTestEnv initialises the subsystems required for parsing tests.
@@ -27,9 +27,11 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	var shutdownWg sync.WaitGroup
 	running.InitShutdown(&shutdownWg)
 
-	if err := idtable.Init(env.DB); err != nil {
-		t.Fatalf("idtable.Init: %v", err)
+	alloc, err := idtable.New(env.DB, idtable.Options{})
+	if err != nil {
+		t.Fatalf("idtable.New: %v", err)
 	}
+	SetIdAllocator(alloc)
 	if err := invertedindex.Init(env.DB, env.Mpsc); err != nil {
 		t.Fatalf("invertedindex.Init: %v", err)
 	}
@@ -47,7 +49,7 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 		symbols.CloseAndWait()
 		documents.CloseAndWait()
 		invertedindex.CloseAndWait()
-		idtable.Close()
+		alloc.Close()
 		env.TeardownBase()
 	}
 }

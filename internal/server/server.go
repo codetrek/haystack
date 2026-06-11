@@ -9,7 +9,6 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
@@ -18,6 +17,7 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
+	"github.com/codetrek/haystack/searchcore/idtable"
 	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/queue"
 )
@@ -67,10 +67,12 @@ func run() error {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	if err := idtable.Init(db); err != nil {
+	idAlloc, err := idtable.New(db, idtable.Options{})
+	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing id table: %w", err)
 	}
+	indexer.SetIdAllocator(idAlloc)
 
 	if err := invertedindexInit(indexdb, mpsc); err != nil {
 		running.Shutdown()
@@ -118,7 +120,7 @@ func run() error {
 	symbols.CloseAndWait()
 	mpsc.Stop()
 
-	idtable.Close()
+	idAlloc.Close()
 
 	// DB could be closed safely now!
 	log.Println("[Server] Closing storage...")

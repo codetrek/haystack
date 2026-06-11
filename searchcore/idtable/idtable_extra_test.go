@@ -7,47 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/storage"
+	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
 	"github.com/stretchr/testify/assert"
 )
 
-// TestInitAlreadyInitialized covers the "already initialized" branch in Init.
-func TestInitAlreadyInitialized(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "haystack-idtable-extra-*")
-	assert.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	database, err := storage.Open(filepath.Join(tempDir, "data"), 0)
-	assert.NoError(t, err)
-	defer database.Close()
-
-	err = Init(database)
-	assert.NoError(t, err)
-
-	// Second Init should fail with "already initialized".
-	err = Init(database)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "already initialized")
-
-	Close()
-}
-
-// TestCloseWhenNotInitialized ensures Close on a nil state does not panic.
+// TestCloseWhenNotInitialized ensures Close on a zero-value Allocator does not panic.
 func TestCloseWhenNotInitialized(t *testing.T) {
-	// Save and clear global state.
-	oldDB := db
-	oldClosing := closing
-	oldDone := done
-	db = nil
-	closing = nil
-	done = nil
-
-	Close() // should be a no-op
-
-	// Restore state.
-	db = oldDB
-	closing = oldClosing
-	done = oldDone
+	a := &Allocator{}
+	a.Close() // should be a no-op
 }
 
 // TestGetIdDBReadPath covers the path where the key exists in the database
@@ -57,56 +24,52 @@ func TestGetIdDBReadPath(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	database, err := storage.Open(filepath.Join(tempDir, "data"), 0)
+	store, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
 	assert.NoError(t, err)
-	defer database.Close()
+	defer store.Close()
 
-	err = Init(database)
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
 	assert.NoError(t, err)
 
 	// Create a key.
 	key := []byte("db-read-test-key")
-	id1, err := GetId(key)
+	id1, err := alloc.GetId(key)
 	assert.NoError(t, err)
 
-	// Force a batch commit so the data is visible via db.Get.
-	mu.Lock()
-	tryCommit()
-	mu.Unlock()
+	// Force a batch commit so the data is visible via store.Get.
+	alloc.mu.Lock()
+	alloc.tryCommit()
+	alloc.mu.Unlock()
 
 	// Evict it from cache so the next GetId must read from DB.
-	lru.Delete(string(key))
+	alloc.lru.Delete(string(key))
 
 	// Get it again — should come from DB, not cache.
-	id2, err := GetId(key)
+	id2, err := alloc.GetId(key)
 	assert.NoError(t, err)
 	assert.Equal(t, id1, id2)
 
-	Close()
+	alloc.Close()
 }
 
-// TestInitPeriodicCommit covers the background goroutine's timer-triggered tryCommit path.
-func TestInitPeriodicCommit(t *testing.T) {
+// TestPeriodicCommit covers the background goroutine's timer-triggered tryCommit path.
+func TestPeriodicCommit(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "haystack-idtable-periodic-*")
 	assert.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	database, err := storage.Open(filepath.Join(tempDir, "data"), 0)
+	store, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
 	assert.NoError(t, err)
-	defer database.Close()
+	defer store.Close()
 
 	// Use a short commit interval so we don't wait 5+ seconds.
-	saved := CommitInterval
-	CommitInterval = 50 * time.Millisecond
-	defer func() { CommitInterval = saved }()
-
-	err = Init(database)
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
 	assert.NoError(t, err)
 
 	// Create some keys so there's data in the batch.
 	for i := 0; i < 5; i++ {
 		key := []byte("periodic-key-" + strconv.Itoa(i))
-		_, err := GetId(key)
+		_, err := alloc.GetId(key)
 		assert.NoError(t, err)
 	}
 
@@ -116,11 +79,11 @@ func TestInitPeriodicCommit(t *testing.T) {
 	// Verify the keys are still accessible (the commit didn't break anything).
 	for i := 0; i < 5; i++ {
 		key := []byte("periodic-key-" + strconv.Itoa(i))
-		_, err := GetId(key)
+		_, err := alloc.GetId(key)
 		assert.NoError(t, err)
 	}
 
-	Close()
+	alloc.Close()
 }
 
 // TestGetIdMultipleCallsSameKey verifies idempotent ID assignment with cache.
@@ -129,64 +92,64 @@ func TestGetIdMultipleCallsSameKey(t *testing.T) {
 	assert.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
-	database, err := storage.Open(filepath.Join(tempDir, "data"), 0)
+	store, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
 	assert.NoError(t, err)
-	defer database.Close()
+	defer store.Close()
 
-	err = Init(database)
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
 	assert.NoError(t, err)
 
 	key := []byte("same-key")
 
 	// Call GetId multiple times — should always return same ID (cache hit).
-	id1, err := GetId(key)
+	id1, err := alloc.GetId(key)
 	assert.NoError(t, err)
 
-	id2, err := GetId(key)
+	id2, err := alloc.GetId(key)
 	assert.NoError(t, err)
 	assert.Equal(t, id1, id2)
 
 	// Force commit, evict from cache, then call again (DB read path).
-	mu.Lock()
-	tryCommit()
-	mu.Unlock()
+	alloc.mu.Lock()
+	alloc.tryCommit()
+	alloc.mu.Unlock()
 
-	lru.Delete(string(key))
-	id3, err := GetId(key)
+	alloc.lru.Delete(string(key))
+	id3, err := alloc.GetId(key)
 	assert.NoError(t, err)
 	assert.Equal(t, id1, id3)
 
-	Close()
+	alloc.Close()
 }
 
-// TestGetIdWithExistingNextId covers Init when the DB already has a nextId value.
+// TestGetIdWithExistingNextId covers New when the DB already has a nextId value.
 func TestGetIdWithExistingNextId(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "haystack-idtable-existid-*")
 	assert.NoError(t, err)
 	defer os.RemoveAll(tempDir)
 
 	dbPath := filepath.Join(tempDir, "data")
-	database, err := storage.Open(dbPath, 0)
+	store, err := pebblekv.Open(dbPath, 0)
 	assert.NoError(t, err)
 
 	// Pre-seed a nextId into the DB.
-	err = database.Put(EncodeIncrIdKey(), []byte("100"))
+	err = store.Put([]byte{DefaultKeyTypeNextId}, []byte("100"))
 	assert.NoError(t, err)
 
-	err = Init(database)
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
 	assert.NoError(t, err)
-	assert.Equal(t, int64(100), nextId)
+	assert.Equal(t, int64(100), alloc.nextId)
 
 	// The next ID assigned should be 100.
 	key := []byte("key-after-seed")
-	id, err := GetId(key)
+	id, err := alloc.GetId(key)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, id)
 	// nextId should have incremented to 101.
-	assert.Equal(t, int64(101), nextId)
+	assert.Equal(t, int64(101), alloc.nextId)
 
-	Close()
-	database.Close()
+	alloc.Close()
+	store.Close()
 }
 
 // TestCloseCommitsPendingBatch verifies that Close flushes the pending batch.
@@ -196,32 +159,31 @@ func TestCloseCommitsPendingBatch(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	dbPath := filepath.Join(tempDir, "data")
-	database, err := storage.Open(dbPath, 0)
+	store, err := pebblekv.Open(dbPath, 0)
 	assert.NoError(t, err)
 
-	err = Init(database)
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
 	assert.NoError(t, err)
 
 	// Create keys that add to the batch.
 	key := []byte("batch-test-key")
-	id1, err := GetId(key)
+	id1, err := alloc.GetId(key)
 	assert.NoError(t, err)
 
 	// Close should flush the batch to the database.
-	Close()
-	database.Close()
+	alloc.Close()
+	store.Close()
 
 	// Reopen and verify the key survived.
-	database2, err := storage.Open(dbPath, 0)
+	store2, err := pebblekv.Open(dbPath, 0)
 	assert.NoError(t, err)
-	defer database2.Close()
+	defer store2.Close()
 
-	err = Init(database2)
+	alloc2, err := New(store2, Options{CommitInterval: 50 * time.Millisecond})
 	assert.NoError(t, err)
+	defer alloc2.Close()
 
-	id2, err := GetId(key)
+	id2, err := alloc2.GetId(key)
 	assert.NoError(t, err)
 	assert.Equal(t, id1, id2, "ID should survive close and reopen")
-
-	Close()
 }

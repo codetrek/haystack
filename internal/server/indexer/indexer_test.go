@@ -9,7 +9,6 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
@@ -909,8 +908,9 @@ func TestRemoveFile_GetDocumentIdError(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	// Close idtable so GetDocumentId → idtable.GetId returns "database is closed"
-	idtable.Close()
+	// Close idtable so GetDocumentId → GetId returns "id allocator not initialized"
+	idAllocator.Close()
+	SetIdAllocator(nil)
 
 	err = RemoveFile(ws, "anyfile.go")
 	if err == nil {

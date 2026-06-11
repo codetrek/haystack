@@ -7,7 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/searchcore/kv"
 	"github.com/codetrek/haystack/searchcore/queue"
 )
@@ -47,7 +46,6 @@ func setupRunEnv(t *testing.T) {
 	tempDir := t.TempDir()
 	conf.Get().Global.DataPath = tempDir
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024
-	idtable.Close() // ensure clean state so run() can init idtable
 }
 
 func TestRun_InvertedIndexInitError(t *testing.T) {
@@ -63,7 +61,6 @@ func TestRun_InvertedIndexInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing inverted index")
-	idtable.Close()
 }
 
 func TestRun_DocumentsInitError(t *testing.T) {
@@ -79,7 +76,6 @@ func TestRun_DocumentsInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing storage")
-	idtable.Close()
 }
 
 func TestRun_WorkspaceInitError(t *testing.T) {
@@ -95,7 +91,6 @@ func TestRun_WorkspaceInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing workspace")
-	idtable.Close()
 }
 
 func TestRun_SymbolsInitError(t *testing.T) {
@@ -111,5 +106,4 @@ func TestRun_SymbolsInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing symbols")
-	idtable.Close()
 }
