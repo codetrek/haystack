@@ -166,7 +166,7 @@ type InvertedIndex struct {
 	DocCount int
 }
 
-var rewriteIndex = func(batch kv.Batch, index *InvertedIndex, maxKeywordIndexSize int) int {
+var rewriteIndex = func(batch kv.Batch, idx *Index, index *InvertedIndex, maxKeywordIndexSize int) int {
 	if len(index.Rows) < 2 ||
 		index.DocCount/len(index.Rows) > maxKeywordIndexSize {
 		// We've already have a well batched keyword
@@ -197,7 +197,8 @@ var rewriteIndex = func(batch kv.Batch, index *InvertedIndex, maxKeywordIndexSiz
 			ids = append(ids, id)
 		}
 
-		writeInvertedIndex(batch, index.TableId, index.Keyword, ids, nil)
+		key := idx.encodeInvertedKey(index.TableId, index.Keyword, len(ids))
+		writeInvertedIndex(batch, index.TableId, index.Keyword, ids, key)
 		mergedCount++
 	}
 
@@ -279,7 +280,7 @@ func (idx *Index) mergeKeywordsIndex(m Merging, maxKeywordIndexSize int) Merging
 
 		for _, c := range pending {
 			m.TotalRowsBefore += len(c.Rows)
-			m.TotalRowsAfter += rewriteIndex(batch, c, maxKeywordIndexSize)
+			m.TotalRowsAfter += rewriteIndex(batch, idx, c, maxKeywordIndexSize)
 			m.TotalKeywords++
 		}
 		pending = []*InvertedIndex{}

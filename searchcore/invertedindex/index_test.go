@@ -567,7 +567,8 @@ func TestWriteInvertedIndexDeduplicates(t *testing.T) {
 
 	// Directly call writeInvertedIndex with duplicates
 	batch := env.DB.NewBatch(0)
-	writeInvertedIndex(batch, tableId, "dupkw", []string{doc, doc, doc}, nil)
+	key := env.idx.encodeInvertedKey(tableId, "dupkw", 3)
+	writeInvertedIndex(batch, tableId, "dupkw", []string{doc, doc, doc}, key)
 	batch.Commit()
 
 	res := env.idx.GetDocs(tableId, "dupkw")

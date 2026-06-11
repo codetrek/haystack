@@ -48,9 +48,6 @@ func setupTestEnv(t *testing.T) *testEnv {
 	writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {
 		uniqueDocids := removeDuplicatesEfficiently(docids)
 		content := encodeInvertedValue(uniqueDocids)
-		if len(key) == 0 {
-			key = encodeInvertedKey(tableId, kw, len(docids))
-		}
 		batch.Put(key, content)
 	}
 

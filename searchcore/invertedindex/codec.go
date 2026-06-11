@@ -15,33 +15,8 @@ const (
 	DefaultKeyTypeTable  = byte(21)
 	DefaultKeyTypeNextId = byte(22)
 
-	// KeyTypeRow, KeyTypeTable, KeyTypeNextId are the historical exported names
-	// for the default key-type bytes.  They equal the Default* constants and are
-	// retained for backward compatibility.
-	KeyTypeRow    = DefaultKeyTypeRow
-	KeyTypeTable  = DefaultKeyTypeTable
-	KeyTypeNextId = DefaultKeyTypeNextId
-
 	InvalidId = -1
 )
-
-// defaultIdx is a package-level *Index with default key-type bytes, used by
-// the package-level encode helpers below.  It carries no database or queue.
-var defaultIdx = &Index{
-	keyTypeRow:    DefaultKeyTypeRow,
-	keyTypeTable:  DefaultKeyTypeTable,
-	keyTypeNextId: DefaultKeyTypeNextId,
-}
-
-// The following package-level helpers wrap the corresponding *Index methods
-// using the default key-type bytes.  They are used by the package-level
-// writeInvertedIndex var (nil-key path) and by test helpers that operate
-// without a full *Index.  Production callers with an *Index should prefer
-// calling the method directly so that non-default key-type bytes are honoured.
-
-func encodeInvertedKey(tableId int, keyword string, doccount int) []byte {
-	return defaultIdx.encodeInvertedKey(tableId, keyword, doccount)
-}
 
 func isKeyType(key string, keyType byte) bool {
 	if len(key) == 0 {
