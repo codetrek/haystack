@@ -356,6 +356,31 @@ func TestDB_NewBatchAndOps(t *testing.T) {
 	assert.Equal(t, int32(0), batch.Count())
 }
 
+// TestBatch_DeletePrefix_CountAdvancesByOne guards against DeletePrefix
+// double-counting against the auto-commit limit: each batch operation,
+// including DeletePrefix, must advance Count() by exactly one.
+func TestBatch_DeletePrefix_CountAdvancesByOne(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	batch := db.NewBatch(100) // large limit so no auto-commit triggers
+	assert.Equal(t, int32(0), batch.Count())
+
+	assert.NoError(t, batch.DeletePrefix([]byte("pfx:")))
+	assert.Equal(t, int32(1), batch.Count())
+
+	assert.NoError(t, batch.DeletePrefix([]byte("pfx2:")))
+	assert.Equal(t, int32(2), batch.Count())
+
+	// Mix with other ops to confirm consistent per-op increment.
+	assert.NoError(t, batch.Put([]byte("k"), []byte("v")))
+	assert.Equal(t, int32(3), batch.Count())
+	assert.NoError(t, batch.DeleteRange([]byte("a"), []byte("z")))
+	assert.Equal(t, int32(4), batch.Count())
+}
+
 func TestBatch_PutError(t *testing.T) {
 	injectedErr := errors.New("set failed")
 	batch := &PebbleBatch{

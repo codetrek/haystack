@@ -1,3 +1,4 @@
+// Package pebblekv provides a Pebble-backed implementation of kv.Store.
 package pebblekv
 
 import (
@@ -27,6 +28,8 @@ type pebbleStore interface {
 	Close() error
 }
 
+// PebbleDB is a Pebble-backed implementation of kv.Store. It wraps an
+// underlying Pebble database and tracks whether it has been closed.
 type PebbleDB struct {
 	path   string
 	db     pebbleStore
@@ -100,11 +103,17 @@ func (d *PebbleDB) ScheduleCompact() {
 	}()
 }
 
-// GetIncrementalId retrieves an incremental ID for a given key
-// It increments the ID and stores it back in the database
-// Returns -1 if the key is not found
-// Returns 0 if the key is not found and the ID is set to 0
-// Returns the next ID if the key is found
+// GetIncrementalId returns a monotonically increasing ID for the given key.
+// The current value stored at key is returned, and the stored value is then
+// incremented by one for the next call.
+//
+// The first time a key is seen it returns 0 and stores 1 back. On each
+// subsequent call it returns the previously stored value (1, 2, 3, ...) and
+// stores the next value.
+//
+// On error it returns -1 together with a non-nil error: either the underlying
+// Get failed, or the stored value could not be parsed as an integer. If the
+// database is closed it returns 0 and a non-nil error.
 func (d *PebbleDB) GetIncrementalId(key []byte) (int, error) {
 	if d.IsClosed() {
 		return 0, fmt.Errorf("database is closed")
@@ -196,11 +205,10 @@ func (d *PebbleDB) Delete(key []byte) error {
 	return nil
 }
 
-// Batch performs multiple operations in a single atomic batch
-// maxBatchSize is the maximum number of operations in a single batch, set 0 to disable the limit
+// NewBatch creates a new write batch for atomically applying multiple operations.
+// maxBatchSize is the maximum number of operations in a single batch; set 0 to disable the limit.
 func (d *PebbleDB) NewBatch(maxBatchSize int32) kv.Batch {
 	return &PebbleBatch{
-		db:           d,
 		batch:        d.db.NewBatch(),
 		maxBatchSize: maxBatchSize,
 		count:        atomic.Int32{},

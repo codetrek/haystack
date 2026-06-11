@@ -18,8 +18,11 @@ type pebbleBatchWriter interface {
 	Close() error
 }
 
+// PebbleBatch is a Pebble-backed implementation of kv.Batch. It buffers
+// write operations and applies them atomically on Commit. When maxBatchSize
+// is greater than zero, the batch auto-commits (and resets) once the operation
+// count reaches that limit.
 type PebbleBatch struct {
-	db    *PebbleDB
 	batch pebbleBatchWriter
 
 	// maxBatchSize is the maximum number of operations in the batch, count is the number of operations in the batch
@@ -57,7 +60,9 @@ func (b *PebbleBatch) DeleteRange(start, end []byte) error {
 
 // DeletePrefix deletes all keys with the given prefix in the batch
 func (b *PebbleBatch) DeletePrefix(prefix []byte) error {
-	if err := b.DeleteRange(prefix, append(prefix, 0xFF)); err != nil {
+	// Call the underlying writer directly (not the public DeleteRange wrapper)
+	// so the auto-commit counter advances by exactly one per DeletePrefix.
+	if err := b.batch.DeleteRange(prefix, append(prefix, 0xFF), nil); err != nil {
 		return err
 	}
 
