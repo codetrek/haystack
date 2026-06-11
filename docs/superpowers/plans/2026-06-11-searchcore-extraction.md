@@ -487,15 +487,29 @@ git log --oneline 46a0e0b..HEAD
 
 # P3 — documents 实例式进库(组合 idx) 〔依赖 P2〕
 
-**任务级路线:**
-- **3.1** `git mv internal/core/documents searchcore/documents`;包级单例 → `type Store struct`,
-  `Init(db, q)` → `New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) *Store`;
-  `SaveNewDocuments/UpdateDocuments/DeleteDocument/GetDocument/CountByWorkspace/...` 改方法,参数带 collectionID。
-- **3.2** 把「Save→更新倒排」收敛为 documents 内部**窄 seam**(现仅对接注入的 `idx`;为 §12 向量留扩展点)。
-- **3.3** key-type(10-13)改库内 Options 默认常量。
-- **3.4** 迁移并实例式化 documents 测试。
-- **3.5** haystack 接回:`server.go` 装配 `documents.New(store, q, idx, ...)`;workspace/searcher/indexer 改用 Store 实例。
-- **验证:** 全绿;旧文档数据可读。
+**拆为两个原子绿任务(照 P2 节奏;严守 §模式指引 1-8,尤其勿引包级 `*Store` 全局)。**
+注:`documents.Init` 已接收注入的 `*invertedindex.Index`(P2.1 接好);documents 已持 idx。
+
+### P3.1 — documents 就地转实例式 + 接线(green)
+- 包级 globals(`db`、`q`、注入的 `idx`、deleted-workspace 标记 map)收进 `type Store struct`;
+  `Init(db, q, idx)` → `New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) (*Store, error)`。
+  **用 `queue.Queue` 接口**。
+- 导出函数 `Create/Delete/CountByWorkspace/GetWorkspace/GetDocument/GetDocumentWords/SaveNewDocuments/
+  UpdateDocuments/DeleteDocument/GetDocumentPath/ScanFiles/CloseAndWait` → `*Store` 方法。
+- 「Save→更新倒排」保持经注入的 idx;把该联动收敛为 Store 内部**窄 seam**(为 §12 向量留扩展点,现仅对接 idx)。
+- `var NewBatch = func(store kv.Store) kv.Batch` 测试缝:勿为它引全局,需要时穿 store/参数(P2 教训 #7)。
+- **接线**:`server.go` 建 `st := documents.New(db, mpsc, idx, ...)`(idx 为 P2 的共享实例);
+  `indexer`/`searcher`/`workspace` 经注入持 `*Store`(包内 `var stInst` 注入,仿 idxInst);
+  **移除 `CountByWorkspaceFunc` hack**——workspace 改为直接 `stInst.CountByWorkspace(id)`。
+- 迁移 documents 测试 + 各调用方 test-helper 为实例式。
+- 验证:`go build ./... && go test ./internal/... -count=1` 全绿(含 -race on documents);gofmt 干净。
+
+### P3.2 — 移入 searchcore + key-type Options(green)
+- `git mv internal/core/documents searchcore/documents`;改 indexer/searcher/workspace/server/测试 import 路径。
+- key-type(文档 10-13)改 `Options` 字段 + 默认常量(`DefaultKeyTypeDoc*`,值不变);codec 编解码改 `*Store` 方法
+  (仿 invertedindex P2.2);`IsKeyType` 用 `searchcore/kv`;**去 storage 依赖**。
+- 移库即收口公开 API(P2 教训 #8):`go mod tidy`;unexport 实现细节类型(先 grep 验零外部引用);导出符号补 doc;删死码。
+- 验证:两 module build + 全测试绿(含 -race);`GOWORK=off` 独立构建;**旧文档数据可读**(key 10-13 不变)。
 
 # P4 — collection 注册表进库 〔依赖 P3〕
 
