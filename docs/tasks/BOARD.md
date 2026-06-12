@@ -15,7 +15,7 @@
 | HAY-004f-qa | QA 验收：HNSW 性能 & E2E | QA | #50 | 2026-04-17 |
 | HAY-004g | HNSW Insert upsert 修补（重复 docId 孤儿节点） | Dev | #51 | 2026-04-17 |
 | HAY-006 | 补充 upsert 测试场景 | Dev | #52 | 2026-04-17 |
-| HAY-008 | searchcore 剥离（搜索内核独立 module，P1-P5） | Dev | branch worktree-searchcore | 2026-06-12 |
+| HAY-008 | searchcore 剥离（搜索内核独立 module，P1-P5） | Dev | PR #62 | 2026-06-12 |
 
 ## In Progress 🔵
 | ID | 任务 | Owner | Branch | 说明 |
@@ -29,4 +29,4 @@
 - [HAY-004 HNSW 设计](HAY-004-hnsw/design.md)
 - [coder/hnsw 审查报告](HAY-004-hnsw/hnsw-deep-review.md)
 - [HAY-007 MmapStore 设计](../design/HAY-007-mmap-store.md)
-- [HAY-008 searchcore 剥离设计](../superpowers/specs/2026-06-11-searchcore-extraction-design.md) / [实现计划](../superpowers/plans/2026-06-11-searchcore-extraction.md)
+- HAY-008 searchcore 剥离：见 PR #62（持久设计文档待补,详见 §docs 重整）
