@@ -26,7 +26,4 @@
 （空）
 
 ## 设计文档
-- [HAY-004 HNSW 设计](HAY-004-hnsw/design.md)
-- [coder/hnsw 审查报告](HAY-004-hnsw/hnsw-deep-review.md)
-- [HAY-007 MmapStore 设计](../design/HAY-007-mmap-store.md)
 - HAY-008 searchcore 剥离：见 PR #62（持久设计文档待补,详见 §docs 重整）
