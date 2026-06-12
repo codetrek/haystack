@@ -61,6 +61,10 @@ All workspace management endpoints are documented in detail at: [Workspace Manag
 - **Endpoint:** `POST /api/v1/workspace/sync-all`
 - **Description:** Synchronize all registered workspaces
 
+### Move Workspace
+- **Endpoint:** `POST /api/v1/workspace/move`
+- **Description:** Update the on-disk path of an existing workspace (identified by `id`)
+
 ## Document Management APIs
 
 All document management endpoints are documented in detail at: [Document Management APIs](./document-management.md)
@@ -98,9 +102,9 @@ All search endpoints are documented in detail at: [Search APIs](./search.md)
 Model Context Protocol integration is documented at: [MCP Integration](./mcp-integration.md)
 
 ### MCP Endpoints
-- **Base Endpoint:** `/mcp`
-- **SSE Endpoint:** `/mcp/sse`
-- **Message Endpoint:** `/mcp/message`
+- **Streamable HTTP Endpoint:** `/mcp`
+- **Legacy SSE Endpoint:** `/mcp/sse`
+- **Legacy SSE Message Endpoint:** `/mcp/message`
 
 ### MCP Tools
 - **HaystackSearch:** Code content search tool

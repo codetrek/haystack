@@ -6,7 +6,7 @@ Haystack provides a comprehensive REST API for local code search indexing and qu
 
 ### 1. Server Control APIs
 - **Health Check**: Monitor server status and health
-- **Server Management**: Start, stop, restart, and check status
+- **Server Management**: Check status, stop, and restart the server
 
 ### 2. Workspace Management APIs
 - **Create Workspace**: Initialize new code search workspace
@@ -14,6 +14,7 @@ Haystack provides a comprehensive REST API for local code search indexing and qu
 - **Delete Workspace**: Remove workspace and its index
 - **List Workspaces**: Get all available workspaces
 - **Get Workspace**: Retrieve specific workspace details
+- **Move Workspace**: Update the on-disk path of an existing workspace
 - **Sync Operations**: Synchronize workspace content
 
 ### 3. Document Management APIs

@@ -4,8 +4,11 @@ A reusable, embeddable **search core** for Go — full-text inverted indexing, d
 multi-collection management, and content query matching. Extracted from
 [haystack](https://github.com/codetrek/haystack) so it can be used standalone.
 
-Zero dependency on haystack internals. Backed by [Pebble](https://github.com/cockroachdb/pebble)
-out of the box, or any store implementing the small `kv.Store` interface.
+`searchcore` is its own Go module (`github.com/codetrek/haystack/searchcore`, own `go.mod`) with
+**zero dependency on haystack internals**: its packages depend only on each other and on third-party
+libraries, never on anything under haystack's `internal/`. Backed by
+[Pebble](https://github.com/cockroachdb/pebble) out of the box, or any store implementing the small
+`kv.Store` interface.
 
 ## Layering
 
@@ -18,7 +21,20 @@ engine       content query engine (compile query → collect candidates → line
 kv (+ pebblekv impl) · queue (MPSC) · tokenizer (CJK/camel/snake) · idtable (doc-id allocator)
 ```
 
-Each layer is instance-based, composes the layer below, and can be used on its own.
+Each search-layer package is instance-based, composes the layer below, and can be used on its own.
+The dependencies run downward only:
+
+- **`collection`** composes a `documents.Store` and is the registry/lifecycle of named collections.
+- **`documents`** composes an `invertedindex.Index` and stores per-collection documents; `Save`
+  auto-indexes a document's words.
+- **`invertedindex`** is the low-level term → doc-ids posting-list engine.
+- **`engine`** sits beside the storage stack: it reads from `invertedindex` and `documents` to
+  answer content queries, but nothing in the storage stack depends on it.
+
+The infra layer (`kv`/`pebblekv`, `queue`, `tokenizer`, `idtable`) underpins all of the above. Each
+search-layer package READMEs lives in its package directory: [`collection`](collection/README.md),
+[`documents`](documents/README.md), [`invertedindex`](invertedindex/README.md),
+[`engine`](engine/README.md).
 
 ## Install
 
@@ -89,7 +105,7 @@ for docID := range result.DocIds {
 | `kv/pebblekv` | Pebble-backed `kv.Store` (`Open`) |
 | `queue` | MPSC async task queue + `Queue` injection interface |
 | `tokenizer` | tokenization (ASCII, CJK, camelCase/snake_case, stopwords) |
-| `idtable` | key → stable compact int64 id allocator |
+| `idtable` | key → stable 8-byte id allocator |
 | `invertedindex` | low-level posting-list engine (`Index`) |
 | `documents` | per-collection document storage (`Store`), composes an index |
 | `collection` | collection registry + lifecycle (`Catalog`/`Collection`), composes documents |

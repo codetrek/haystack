@@ -52,7 +52,7 @@ client:
 ```yaml
 server:
   max_file_size: int64        # Maximum file size to index in bytes (default: 5MB)
-  index_workers: int          # Number of indexing workers (default: 4)
+  index_workers: int          # Number of indexing workers (default: 6)
   symbol_parser_workers: int  # Number of symbol parsing workers (default: 2)
   cache_size: int64          # Cache size in bytes (default: 16MB)
   logging_stdout: bool       # Enable stdout logging (default: false)
@@ -79,8 +79,8 @@ server:
         - "!.github/"       # Exception: include .github/
 
   search:                    # Search behavior configuration
-    max_wildcard_length: int      # Maximum wildcard pattern length (default: 24)
-    max_keyword_distance: int     # Maximum distance between keywords (default: 32)
+    max_wildcard_length: int      # Maximum wildcard pattern length (default: 24, max: 64)
+    max_keyword_distance: int     # Maximum distance between keywords (default: 32, max: 128)
     limit:                       # Server-side search limits
       max_results: int           # Maximum total results (default: 100000)
       max_results_per_file: int  # Maximum results per file (default: 500)
@@ -133,7 +133,7 @@ for_test:
 | `global.port` | 13134 | Default TCP server port |
 | `global.data_path` | `~/.haystack` | Default data directory |
 | `server.max_file_size` | 5MB | Maximum file size to index |
-| `server.index_workers` | 4 | Number of indexing workers |
+| `server.index_workers` | 6 | Number of indexing workers |
 | `server.symbol_parser_workers` | 2 | Number of symbol parsing workers |
 | `server.cache_size` | 16MB | Internal cache size |
 | `server.search.max_wildcard_length` | 24 | Maximum wildcard pattern length |
@@ -150,11 +150,13 @@ for_test:
 
 The configuration system includes automatic validation and correction:
 
-- **Worker Counts**: Index and symbol parser workers are automatically capped at the number of CPU cores
-- **Ports**: Invalid port numbers are reset to defaults or disabled
-- **File Sizes**: Zero or negative file sizes are reset to defaults
-- **Search Limits**: Client limits cannot exceed server limits
-- **Paths**: Relative socket paths are converted to absolute paths
+- **Worker Counts**: `index_workers` and `symbol_parser_workers` are reset to the number of CPU cores when set to zero/negative or above the CPU count
+- **Ports**: A port outside the range 1-65535 is reset to the default (13134) when no `socket_path` is set, or disabled (0) when a `socket_path` is set
+- **File Sizes**: Zero or negative `max_file_size` and `cache_size` values are reset to their defaults (5MB and 16MB)
+- **Search Ranges**: `max_wildcard_length` is capped at 64 (reset to 24 if out of range); `max_keyword_distance` is capped at 128 (reset to 32 if out of range)
+- **Server Search Limits**: `max_results`, `max_results_per_file`, and `max_files_results` are reset to their defaults when zero/negative or above the maxima (100000 / 500 / 1000)
+- **Client Search Limits**: Client `max_results` and `max_results_per_file` cannot exceed the server's corresponding limits, and `max_files_results` cannot exceed 1000; out-of-range values are reset to the client defaults (500 / 50 / 100)
+- **Paths**: A relative `socket_path` is resolved against the system temp directory
 
 ## Example Configuration
 

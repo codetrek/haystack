@@ -64,6 +64,10 @@ Creates a new workspace for code indexing and search. A workspace represents a d
 - `0`: Success
 - `1`: Error (workspace creation failed)
 
+### Notes
+
+- If a workspace already exists for the given path, the request still succeeds and returns the existing workspace with the message `Workspace already exists`.
+
 ---
 
 ## Update Workspace
@@ -304,3 +308,54 @@ Triggers synchronization for all registered workspaces.
 - Synchronization is performed asynchronously
 - The indexing status can be checked via the Get Workspace API
 - Sync operations respect workspace filter configurations
+
+---
+
+## Move Workspace
+
+**Endpoint:** `POST /api/v1/workspace/move`
+
+### Description
+
+Updates the on-disk path associated with an existing workspace. This is used when a workspace directory has been relocated, allowing the workspace (and its index) to keep tracking the same project under its new location. The workspace is identified by its numeric `id`.
+
+### Request
+
+- **Method:** POST
+- **Content-Type:** `application/json`
+
+**Request Body:**
+```json
+{
+  "id": 1,
+  "new_path": "/absolute/path/to/new/location"
+}
+```
+
+### Request Fields
+
+- `id` (required): Numeric identifier of the workspace to move
+- `new_path` (required): New absolute path for the workspace directory
+
+### Response
+
+```json
+{
+  "code": 0,
+  "message": "Ok",
+  "data": {
+    "id": 1,
+    "path": "/absolute/path/to/new/location",
+    "total_files": 150,
+    "created_time": "2024-01-01T00:00:00Z",
+    "last_accessed_time": "2024-01-01T00:00:00Z",
+    "last_full_sync_time": "2024-01-01T00:00:00Z",
+    "indexing": false
+  }
+}
+```
+
+### Response Codes
+
+- `0`: Success
+- `1`: Error (move failed, e.g. workspace not found)

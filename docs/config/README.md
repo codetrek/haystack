@@ -14,7 +14,7 @@ Haystack uses YAML configuration files to control various aspects of the search 
 - Server settings (ports, workers, file size limits)
 - Search behavior and result limits
 - File filtering and inclusion/exclusion patterns
-- Symbol parsing and AI features
+- Symbol parsing (ctags integration)
 - Client defaults and networking options
 
 ## Getting Started
@@ -30,4 +30,4 @@ Haystack uses YAML configuration files to control various aspects of the search 
 - **Performance tuning**: Configurable workers, cache sizes, and result limits
 - **Flexible filtering**: Include/exclude patterns with Git integration
 - **Multiple networking**: Support for both TCP and Unix domain sockets
-- **AI integration**: Configurable symbol parsing features
+- **Symbol parsing**: Configurable symbol parsing (ctags) features

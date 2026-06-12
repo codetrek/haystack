@@ -93,7 +93,7 @@ server:
 
 ## Symbol Configuration
 
-### Enable AI Features
+### Enable Symbol Features
 
 ```yaml
 symbols:

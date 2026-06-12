@@ -1,201 +1,117 @@
-# Indexer Implementation
+# indexer
 
-This directory contains the core indexing implementation for the Local Code Search Indexer. The indexer is responsible for scanning, parsing, and indexing files in workspaces.
+Package `indexer` **builds and maintains the search index** for each workspace.
+It is a multi-stage pipeline of long-running goroutines — scanner → parser →
+writer, with a parallel symbol-parser stage — that walk a workspace's files,
+tokenize their contents, and persist documents (and code symbols) into the
+`searchcore` document/inverted-index stores.
 
-## Architecture Overview
+The pipeline is the *write* side of Haystack; the matching *read* side is
+`internal/server/searcher`.
 
-The indexer is implemented as a pipeline of three main components:
+## Responsibility / scope
 
-1. **Scanner** (`scanner.go`)
-2. **Parser** (`parser.go`)
-3. **Writer** (`writer.go`)
+- Run the indexing pipeline as background stages (`Run`).
+- Full-workspace sync (`Sync`, `SyncIfNeeded`) and workspace creation
+  (`CreateWorkspace`).
+- Incremental per-file maintenance: add/update (`AddOrSyncFile`), delete
+  (`RemoveFile`), and on-demand refresh (`RefreshFileIfNeeded`,
+  `RefreshFilesIfNeeded`).
+- Decide whether a path is indexable (`ShouldIndexFile`, `IsNotIndexiable`,
+  `IsLikelyText`) and mint stable document ids from relative paths
+  (`GetDocumentId`, backed by `searchcore/idtable`).
 
-These components work together in a producer-consumer pattern to efficiently process files and build search indexes. The overall orchestration, including managing workspaces and specific file updates, is handled by `indexer.go`.
+## Dependency injection
 
-## Component Details
+The package holds two process-wide dependencies injected by
+`internal/server` before `Run`:
 
-### 1. Scanner (`scanner.go`)
+- `SetIdAllocator(*idtable.Allocator)` — used by `GetDocumentId`.
+- `SetDocStore(*documents.Store)` — the `searchcore/documents` store all stages
+  write through.
 
-The scanner is responsible for:
+The four stage objects (`scanner`, `parser`, `writer`, `symbolParser`) are
+package-level singletons guarded by a mutex; `Run(wg)` starts each one's
+goroutine(s) and registers a shutdown goroutine that stops them when the
+`running` shutdown signal fires.
 
-- Traversing directories of a given workspace.
-- Applying file filters (including .gitignore and custom patterns defined in workspace configuration).
-- Identifying files to be processed based on these filters.
-- Queueing identified files (as paths) for the parser.
-- Reporting progress during a scan by logging the number of files found.
+## Pipeline stages
 
-Key features:
+### Scanner (`scanner.go`)
 
-- Processes one workspace at a time from an internal queue.
-- Efficient directory traversal leveraging `fsutils.ListFiles`.
-- Supports `.gitignore` rules (if enabled for the workspace) and custom include/exclude glob patterns.
-- Tracks and logs the count of files added to the parsing queue for each workspace.
+Processes one workspace at a time from an internal FIFO queue (`Scanner.Add`,
+fed by `Sync`). For each workspace it walks the tree with `fsutils.ListFiles`,
+applying the workspace's filters: `.gitignore` rules (`GitIgnoreFilter`) when
+`Exclude.UseGitIgnore` is set, otherwise customized exclude globs, plus an
+include filter. Non-indexable extensions are skipped (`IsNotIndexiable`).
+Surviving paths are handed to the parser via `parser.Add`. On success it records
+`UpdateLastFullSync`; scanning aborts cleanly on shutdown or workspace deletion.
 
-### 2. Parser (`parser.go`)
+### Parser (`parser.go`)
 
-The parser handles:
+A pool of `Server.IndexWorkers` goroutines reading file paths off a channel. For
+each file (`parse`):
 
-- Reading content of individual files received from the scanner.
-- Detecting changes by comparing modification times and content hashes against previously indexed versions (if any).
-- Extracting and normalizing words from file content and also from their relative file paths.
-- Preparing document objects (containing metadata and extracted words) for the writer.
+1. Stat the file; flag it oversize if it exceeds `Server.MaxFileSize`.
+2. Skip if an existing document has the same modification time.
+3. For non-oversize files: read content, skip non-text content
+   (`IsLikelyText`), and skip if the content hash (`GetContentHash`) is unchanged.
+4. Tokenize content and the relative path with
+   `searchcore/tokenizer.TokenizeForIndex` to produce `Words` / `PathWords`.
+5. Build a `documents.Document` (id, rel path, size, mod time, hash, words) and
+   hand it to the writer (`writer.Add`), flagged as new or existing.
 
-Processing steps:
+Oversize files are still recorded as documents (with empty words) so they appear
+in file searches, but their content is not indexed and they are not sent to the
+symbol parser. Non-oversize files are additionally queued to the symbol parser.
 
-1. For each file path received, retrieve file metadata (size, modification time).
-2. Skip processing if the file exceeds the configured `Server.MaxFileSize`.
-3. If the file was previously indexed, compare its current modification time with the stored one. If unchanged, skip further processing for this file.
-4. Read file content. If the content is not likely text-based (e.g., binary file), skip.
-5. Generate a content hash from the file's content. If previously indexed and the hash is unchanged, skip.
-6. Extract words from the content:
-    - Use a primary regular expression (`[a-zA-Z0-9_][a-zA-Z0-9_-]+`) to find potential words.
-    - Further split these words based on camelCase and snake_case conventions (e.g., "MyFile" becomes "My", "File").
-    - Normalize all extracted words to lowercase.
-    - Filter words based on length constraints (typically 3-80 characters).
-    - Ensure only unique words (for this file's content) are kept.
-7. Extract and process words from the relative file path using a similar normalization and filtering process.
-8. Create a document structure containing the file's relative path, metadata (ID, size, modification time, hash), and the unique words from its content and path.
-9. Queue this document structure for the `Writer`.
+### Writer (`writer.go`)
 
-### 3. Writer (`writer.go`)
+A single goroutine that drains documents from a channel and **batches** them
+(up to 8 per cycle) before persisting. It groups documents per workspace and
+calls `documents.Store.SaveNewDocuments` / `UpdateDocuments`, which also update
+the inverted-index posting lists (writes are serialized through the shared
+`searchcore/queue`). Documents belonging to a deleted workspace are dropped. On
+shutdown it flushes any remaining queued documents before exiting.
 
-The writer manages:
+### Symbol parser (`symbol_parser.go`)
 
-- Receiving processed document structures from the parser.
-- Batching these documents for efficient writing to the persistent storage.
-- Invoking storage operations (create or update) via the `documents` package, which handles the actual interaction with Pebble DB.
+Active only when `Symbols.EnableFeature` is set and a `ctags` executable is
+found (`getCtagsPath`). Files are cached per workspace and flushed in batches
+(by `MaxBatchSize` or on a periodic timer). For each batch it groups files by
+language (`GetLangFromFilename`), runs universal-ctags with JSON output
+(`parseFunction`) to extract function/method symbols, and records them through
+`internal/core/symbols.AddFunctions` — which indexes symbol keywords into the
+symbol inverted-index tables. Files with no extracted symbols are still recorded
+with an empty function list so deletions/changes are tracked.
 
-Features:
+## Change detection & incremental updates
 
-- Operates asynchronously, decoupling parsing from direct storage writes.
-- Batches documents by collecting a small number of documents or after a short timeout before processing.
-- Delegates actual storage logic, index updates, transaction management, and detailed error handling during writes to the `documents` package.
-- Distinguishes between new documents and updates to existing documents when calling `documents` package functions.
+- `AddOrSyncFile` looks up the existing document: a new file is queued to the
+  parser; an existing path that is now missing or a directory is removed; an
+  existing file is re-parsed.
+- `RemoveFile` deletes the document from both the documents store and the symbol
+  store.
+- `RefreshFileIfNeeded` is called from the searcher during query time: it removes
+  documents whose files have disappeared or become directories, and re-queues
+  files whose modification time changed.
 
-## Indexing Process
+## Configuration (`internal/conf`)
 
-1. **Initialization** (Orchestrated by `indexer.Run` in `indexer.go`)
+- `Server.IndexWorkers` — parser worker count.
+- `Server.SymbolParserWorkers` — symbol-parser worker count.
+- `Server.MaxFileSize` — content-indexing size cap.
+- `Symbols.EnableFeature`, `BinPath.CTags` — symbol extraction.
 
-   - The `indexer.Run` function initializes and starts the Scanner, Parser, and Writer components, each in its own goroutine(s).
-   - Scanner begins its main loop, ready to process workspaces added to its queue.
-   - Parser workers (number defined by `Server.IndexWorkers` in configuration) are spawned, each ready to receive file processing tasks from the Scanner (via an internal channel in the Parser).
-   - Writer begins its main loop, ready to receive processed documents from the Parser (via an internal channel). Storage (Pebble DB) initialization is typically handled by the `documents` package when it's first accessed.
+## Relationships
 
-2. **File Processing Pipeline**
-
-   ```go
-   Scanner -> Parser -> Writer -> (documents package) -> Storage (Pebble DB)
-   ```
-
-   - The `Scanner` is given a workspace to process. It traverses the workspace, applies filters, and sends paths of files to be indexed to the `Parser`.
-   - A `Parser` worker receives a file path, performs change detection, reads content, extracts words, and creates a document structure.
-   - The `Parser` then sends this document structure to the `Writer`.
-   - The `Writer` batches these documents and uses functions from the `documents` package (e.g., `SaveNewDocuments`, `UpdateDocuments`) to persist them into Pebble DB.
-
-3. **Change Detection** (Primarily within `parser.go`, with support from `indexer.go`)
-
-   - **File Modification Time**: In `parser.go`, the current modification time of a file is compared against the stored modification time for an existing document. If they match, and other checks pass, the file might be skipped.
-   - **Content Hash**: If modification times differ or it's a new file, `parser.go` computes a hash of the file's content. This hash is compared against any stored hash for an existing document. If they match, the file is skipped.
-   - **File Existence/Type Changes**: `indexer.go` includes logic (e.g., `RefreshFileIfNeeded`, `AddOrSyncFile`) to handle cases where a tracked file path no longer exists, has become a directory, or a new file appears. This can lead to document removal or new document indexing.
-
-4. **Word Processing** (Within `parser.go`'s `parseString` and `camelSnakeSplit` functions)
-
-   - **Regex-based extraction**: Words are initially identified from content using a regular expression (e.g., `[a-zA-Z0-9_][a-zA-Z0-9_-]+`).
-   - **Splitting and Normalization**: Identified character sequences are further processed:
-     - Split based on camelCase and snake_case conventions (e.g., "CamelCaseWord" -> "Camel", "Case", "Word").
-     - Normalized to lowercase.
-   - **Filtering**: Words are filtered based on length (e.g., minimum 3, maximum 80 characters).
-   - **Duplicate Removal**: Only unique words (per document, case-insensitively) are stored in the index for that document.
-
-## Performance Optimizations
-
-1. **Concurrency**
-
-   - **Multiple Parser Workers**: The number of goroutines for parsing files is configurable (`Server.IndexWorkers`), allowing parallel processing of files.
-   - **Batch Writing**: The `Writer` collects multiple documents before writing them to storage, reducing I/O overhead.
-   - **Asynchronous Pipeline**: Scanner, Parser, and Writer operate as stages in a pipeline using Go channels, allowing them to work concurrently on different sets of data.
-
-2. **Resource Management**
-
-   - **File Size Limits**: Files exceeding a configurable size (`Server.MaxFileSize`) are skipped to prevent excessive memory usage and processing time.
-   - **Worker Pool Sizing**: The number of parser workers can be tuned.
-   - **Memory Considerations**: Primarily managed by processing files individually in parsers and by the file size limit. Content is read into memory for parsing.
-
-3. **Efficiency**
-
-   - **Change Detection**: By checking modification times and content hashes, the system avoids re-processing and re-indexing files that haven't changed.
-   - **Incremental Updates**: Only new or modified files are fully processed and written to storage.
-   - **Optimized Word Extraction**: Regex and string manipulations are used for word extraction, with efforts to normalize and store only relevant terms.
-
-## Configuration
-
-Key configuration options:
-
-- `Server.IndexWorkers`: Number of parser workers
-- `Server.MaxFileSize`: Maximum file size to index
-- Filter patterns for includes/excludes
-
-## Error Handling
-
-The system aims to be robust by logging errors encountered at various stages. Generally, errors with specific files do not halt the entire indexing process for a workspace.
-
-1. **File System Errors** (Primarily in `scanner.go` during traversal and `parser.go` during file access)
-
-   - **Permission Issues**: Logged if a directory or file cannot be accessed.
-   - **Missing Files**: If a file path queued for parsing is not found (e.g., deleted between scan and parse), an error is logged.
-   - **Read Errors**: Errors during file content reading in the parser are logged.
-   Typically, processing for that specific file is skipped, and the indexer moves on.
-
-2. **Processing Errors**
-
-   - **Parse Failures** (in `parser.go`):
-     - If a file is skipped due to size limits or being identified as non-text, this is logged.
-     - Errors during content hashing or word extraction are logged.
-   - **Write Failures** (in `writer.go` via the `documents` package): Errors during storage operations (e.g., Pebble DB issues) are handled within the `documents` package, which logs them. The success of a batch write operation depends on this underlying layer.
-
-3. **Resilience**
-
-   - **Error Logging**: Comprehensive logging throughout the `indexer`, `parser`, `scanner`, and `writer` components helps in diagnosing issues.
-   - **Skipping Problematic Items**: If a specific file encounters an unrecoverable error during its processing pipeline (scan, parse, or prepare for write), it is usually logged and skipped, allowing the indexing of other files to continue.
-   - **Workspace State**: The `indexer.go` and `workspace` package manage the state of workspaces (e.g., last sync time). `indexer.go` also contains logic (e.g., `RefreshFileIfNeeded`) to remove documents from the index if their corresponding files are found to be deleted or inaccessible during refresh operations.
-   - **Retry Mechanisms**: Explicit retry mechanisms are not a prominent feature within the scanner/parser/writer pipeline itself; resilience is primarily achieved by skipping problematic items and relying on future scans or sync operations to reconcile.
-
-## Usage
-
-1. **Starting the Indexer**
-
-   ```go
-   indexer.Run(wg)
-   ```
-
-2. **Adding Workspaces**
-
-   ```go
-   indexer.SyncIfNeeded(workspacePath)
-   ```
-
-3. **File Updates**
-
-   ```go
-   indexer.AddOrSyncFile(workspace, relPath)
-   ```
-
-## Development Guidelines
-
-1. **Adding Features**
-
-   - Follow pipeline architecture
-   - Maintain component isolation
-   - Add appropriate tests
-
-2. **Performance Tuning**
-
-   - Monitor worker utilization
-   - Adjust batch sizes
-   - Optimize filters
-
-3. **Testing**
-
-   - Unit tests for each component
-   - Integration tests
-   - Performance benchmarks
+- **Started/wired by** `internal/server` (`indexer.Run`, `SetDocStore`,
+  `SetIdAllocator`).
+- **Triggered by** `internal/server/httpapi` (workspace/document handlers) and,
+  at query time, by `internal/server/searcher` (`RefreshFileIfNeeded`,
+  `RemoveFile`, `AddOrSyncFile`).
+- **Writes through** `searchcore/documents` (+ `searchcore/invertedindex` via the
+  document store), `searchcore/tokenizer`, `searchcore/idtable`, and
+  `internal/core/symbols`.
+- **Reads from** `internal/core/workspace` for filters and indexing-progress
+  state.

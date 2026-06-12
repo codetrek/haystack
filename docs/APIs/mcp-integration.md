@@ -4,11 +4,11 @@ Haystack provides Model Context Protocol (MCP) integration for AI tools and lang
 
 ## Overview
 
-The MCP server is automatically initialized when Haystack starts with a TCP address. It provides three main tools for AI systems to search and analyze codebases.
+The MCP server is automatically initialized when Haystack starts with a TCP address. It provides two tools for AI systems to search and analyze codebases.
 
 ## MCP Endpoint
 
-**Legacy SSE:** `http://{server_address}/mcp/sse`
+**Legacy SSE:** `http://{server_address}/mcp/sse` (with the companion message endpoint `http://{server_address}/mcp/message`)
 **Streamable HTTP:** `http://{server_address}/mcp`
 
 ## MCP Tools
@@ -59,6 +59,7 @@ The MCP server is automatically initialized when Haystack starts with a TCP addr
 The MCP server is configured with the following capabilities:
 
 - **Resource Capabilities:** Read and subscribe support enabled
+- **Prompt Capabilities:** Enabled
 - **Logging:** Enabled for debugging and monitoring
 - **Keep-Alive:** 20-second intervals for SSE connections
 - **Heartbeat:** 20-second intervals for HTTP connections

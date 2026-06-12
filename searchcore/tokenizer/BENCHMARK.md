@@ -74,11 +74,11 @@ demonstrating near-linear scaling. The `sync.Once` initialization is safe under 
 ## How to Run
 
 ```bash
-go test -bench=. -benchmem ./internal/core/invertedindex/tokenizer/...
+go test -bench=. -benchmem ./tokenizer/...
 ```
 
 For more stable results:
 
 ```bash
-go test -bench=. -benchmem -count=5 ./internal/core/invertedindex/tokenizer/...
+go test -bench=. -benchmem -count=5 ./tokenizer/...
 ```

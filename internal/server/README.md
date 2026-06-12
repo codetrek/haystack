@@ -1,90 +1,90 @@
-# Server Directory
+# server
 
-This directory contains the server-side implementation of the Local Code Search Indexer. The server is responsible for managing the search index, processing queries, and handling client requests.
+Package `server` is the **process bootstrap and dependency-wiring layer** of the
+Haystack daemon. When the `haystack` binary runs in daemon mode (see
+`cmd/haystack/main.go`), it calls `server.Run()`; this package opens storage,
+constructs the search/index subsystems, wires them into the indexer, searcher,
+and HTTP/MCP server, and then blocks until shutdown.
 
-## Directory Structure
+It owns no request handling or query logic itself — those live in the
+sub-packages (`httpapi`, `indexer`, `searcher`, `mcptools`). This package's job
+is lifecycle and composition.
 
-- **`core/`**: Core server functionality and business logic.
-  - Contains sub-modules for document handling (`documents`), inverted indexes (`invertedindex`), code parsing (`parser`), database interaction (`pebble`), storage abstractions (`storage`), and workspace management (`workspace`).
-  - Manages server state and configurations.
-  - Provides core services to other components.
+## Responsibility / scope
 
-- **`indexer/`**: Search index creation and maintenance.
-  - Implements indexing strategies (e.g., `indexer.go`, `scanner.go`, `writer.go`).
-  - Manages index storage and updates.
-  - Handles index optimization.
+- Acquire the single-instance server lock and run the daemon (`Run`).
+- Open the two on-disk Pebble stores and the shared async write queue.
+- Construct the `searchcore` and `internal/core` subsystems in dependency order
+  and inject them into the packages that need them.
+- Start the indexer, searcher, and HTTP/MCP server goroutines.
+- Coordinate graceful shutdown and close everything in the correct order.
 
-- **`searcher/`**: Search query processing.
-  - Processes search requests (e.g., `searcher.go`, `query_parser.go`).
-  - Implements search algorithms.
-  - Manages search results.
+## Files
 
-- **`server/`**: HTTP/gRPC server implementation and API endpoint handling.
-  - Contains specific handlers for different functionalities like document operations (`document.go`), Model Context Protocol (`mcp.go`), search requests (`search.go`), server control (`server_cntl.go`), and workspace operations (`workspace.go`).
-  - The main request handling logic resides in `server.go` within this directory.
+- `server.go` — `Run` and the internal `run` function that perform all wiring
+  (described below). Also holds test-overridable function variables
+  (`invertedindexInit`, `documentsNew`, `workspaceInit`, `symbolsInit`).
+- `log.go` — `initLog` configures the standard logger to write either to stdout
+  (when `Server.LoggingStdout` is set) or to a rotating log file under
+  `<data_path>/logs/server.log` (via `lumberjack`).
 
-- **`log.go`**: Top-level file for server logging implementation.
-- **`server.go`**: Top-level file serving as the main server entry point, handling initialization and orchestration.
+## Startup wiring (`run`)
 
-## Key Components
+`run` builds the system bottom-up; any failure triggers `running.Shutdown()` and
+returns an error. In order:
 
-1. **Main Server (`server/server.go`)**
-   - Main server entry point.
-   - Handles server initialization, configuration, and component orchestration.
+1. **Storage.** Opens two Pebble-backed stores via `storage.Open`
+   (`internal/core/storage`):
+   - `<data_path>/data` — documents, collection catalog, the id allocator, and
+     workspace/symbol records.
+   - `<data_path>/index` — the inverted index (shared by content and symbol
+     search).
+   The data path and cache size come from `internal/conf`.
+2. **Async write queue.** Creates and starts a `searchcore/queue.Mpsc`
+   (`"DBQueue"`) that serializes batched writes for the index and document store.
+3. **Id allocator.** Builds a `searchcore/idtable.Allocator` over the data store
+   and injects it into the indexer (`indexer.SetIdAllocator`); it mints stable,
+   compact document ids from file paths.
+4. **Inverted index.** Constructs a `searchcore/invertedindex.Index` over the
+   index store and the queue.
+5. **Documents store.** Constructs a `searchcore/documents.Store` over the data
+   store, queue, and inverted index, then injects it into the indexer and
+   workspace packages (`indexer.SetDocStore`, `workspace.SetDocStore`).
+6. **Workspace registry.** Migrates any legacy workspace records
+   (`workspace.MigrateLegacyRecords`) **before** constructing the
+   `searchcore/collection.Catalog`, then calls `workspace.Init(cat)` to build the
+   in-memory registry from the catalog.
+7. **Symbols.** Initializes `internal/core/symbols` over the data store, queue,
+   and the shared inverted index.
+8. **Indexer & searcher.** Starts `indexer.Run(wg)` (the scan/parse/write/symbol
+   pipeline) and `searcher.Run(wg, idx, st)` (injecting the inverted index and
+   documents store used by content/file/symbol search).
+9. **HTTP/MCP server.** Calls `httpapi.StartServer(wg, tcpAddr, socketPath)`. A
+   loopback TCP address is built only when `Global.Port > 0`; the Unix socket
+   path comes from `Global.SocketPath`. The MCP endpoint is only enabled when a
+   TCP address is present.
 
-2. **Logging (`server/log.go`)**
-   - Implements server-wide logging.
-   - Manages log levels, formatting, and output.
+If `ForTest.Path` is configured, the workspace at that path is synced on startup
+(`indexer.SyncIfNeeded`) to support test fixtures.
 
-3. **Core Module (`server/core/`)**
-   - Encapsulates core business logic including document processing, storage management (utilizing PebbleDB via `pebble/`), parsing, and workspace data.
+## Shutdown
 
-4. **Indexer Module (`server/indexer/`)**
-   - Responsible for creating, updating, and optimizing search indexes.
-   - Includes components for scanning repositories (`scanner.go`) and writing index data (`writer.go`).
+`run` blocks on `wg.Wait()` until all started goroutines drain after a shutdown
+signal (managed by `internal/shared/running`). It then closes the subsystems in
+reverse dependency order: documents store, inverted index, symbols, the MPSC
+queue, the id allocator, and finally the two Pebble stores.
 
-5. **Searcher Module (`server/searcher/`)**
-   - Handles incoming search queries, parsing them (`query_parser.go`), and executing search operations using defined algorithms.
+## Relationships
 
-6. **API and Request Handling (`server/server/`)**
-   - Manages the specifics of API endpoints and request/response cycles.
-   - Implements handlers for search, document management, MCP, and other server interactions.
+- **Consumes** `internal/conf` (configuration), `internal/core/storage`,
+  `internal/core/workspace`, `internal/core/symbols`,
+  `internal/shared/running`, and the `searchcore` packages
+  (`collection`, `documents`, `idtable`, `invertedindex`, `kv`, `queue`).
+- **Owns / starts** the sub-packages `internal/server/indexer`,
+  `internal/server/searcher`, and `internal/server/httpapi` (which in turn wires
+  in `internal/server/mcptools`).
+- **Is invoked by** `internal/client` (`server run` / daemon launch) and
+  `cmd/haystack`.
 
-## Development Guidelines
-
-1. **Server Architecture**
-   - Follow clean architecture principles
-   - Keep components loosely coupled
-   - Use interfaces for component communication
-
-2. **Error Handling**
-   - Implement proper error handling
-   - Use appropriate error types
-   - Provide meaningful error messages
-
-3. **Performance**
-   - Optimize for concurrent operations
-   - Implement caching where appropriate
-   - Monitor resource usage
-
-4. **Testing**
-   - Write unit tests for all components
-   - Include integration tests
-   - Test error scenarios
-
-## Configuration
-
-Server configuration is handled through:
-
-- Environment variables
-- Configuration files
-- Command-line arguments
-
-## API Documentation
-
-The server exposes the following main APIs:
-
-- Search API
-- Index management API
-- System status API
-- Configuration API
+See `docs/architecture.md` for the system-wide view and the `searchcore` module
+boundary.

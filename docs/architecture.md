@@ -142,7 +142,7 @@ searches. The model spans two layers:
 
 - `internal/core/workspace` holds the haystack-side workspace concept: the
   in-memory registry (`init.go`), per-workspace filters and indexing-progress
-  state, and lifecycle operations (create / list / sync / delete in
+  state, and lifecycle operations (create / list / delete in
   `manage.go`). It also migrates legacy workspace records (`migrate.go`).
 - Persistence is delegated to `searchcore/collection`: each workspace is a
   **collection** in the catalog, keyed by the workspace's absolute path. During
