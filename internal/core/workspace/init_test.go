@@ -2,20 +2,69 @@ package workspace
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
+
+// setupCatalog is a test helper: runs migration, creates collection.Catalog + documents.Store.
+// Returns the catalog, documents store, queue, and a cleanup func.
+func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *documents.Store, mpsc *queue.Mpsc, idx *invertedindex.Index, cleanup func()) {
+	t.Helper()
+
+	mpsc = queue.NewMpsc("test-catalog-q")
+	mpsc.Start()
+
+	var err error
+	idx, err = invertedindex.New(db, mpsc, invertedindex.Options{})
+	if err != nil {
+		mpsc.Stop()
+		t.Fatalf("invertedindex.New: %v", err)
+	}
+
+	st, err = documents.New(db, mpsc, idx, documents.Options{})
+	if err != nil {
+		idx.CloseAndWait()
+		mpsc.Stop()
+		t.Fatalf("documents.New: %v", err)
+	}
+
+	if err := MigrateLegacyRecords(db, collection.Options{}); err != nil {
+		st.CloseAndWait()
+		idx.CloseAndWait()
+		mpsc.Stop()
+		t.Fatalf("MigrateLegacyRecords: %v", err)
+	}
+
+	cat, err = collection.New(db, st, collection.Options{})
+	if err != nil {
+		st.CloseAndWait()
+		idx.CloseAndWait()
+		mpsc.Stop()
+		t.Fatalf("collection.New: %v", err)
+	}
+
+	cleanup = func() {
+		st.CloseAndWait()
+		idx.CloseAndWait()
+		mpsc.Stop()
+	}
+	return cat, st, mpsc, idx, cleanup
+}
 
 // setupFullEnv initializes all required subsystems for testing manage.go functions.
 func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
@@ -29,26 +78,28 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 
 	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 
-	mpsc := queue.NewMpsc("TestQueue")
-	mpsc.Start()
+	cat, st, mpsc, idx, catCleanup := setupCatalog(t, db)
+	SetDocStore(st)
 
-	invertedindex.Init(db, mpsc)
-	documents.Init(db, mpsc)
-	symbols.Init(db, mpsc)
-
-	err = Init(db)
-	if err != nil {
+	if err := symbols.Init(db, mpsc, idx); err != nil {
+		catCleanup()
 		db.Close()
-		mpsc.Stop()
+		os.RemoveAll(tempDir)
+		t.Fatalf("symbols.Init failed: %v", err)
+	}
+
+	if err := Init(cat); err != nil {
+		symbols.CloseAndWait()
+		catCleanup()
+		db.Close()
 		os.RemoveAll(tempDir)
 		t.Fatalf("Init failed: %v", err)
 	}
 
 	cleanup = func() {
+		SetDocStore(nil)
 		symbols.CloseAndWait()
-		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
-		mpsc.Stop()
+		catCleanup()
 		db.Close()
 		os.RemoveAll(tempDir)
 	}
@@ -57,17 +108,14 @@ func setupFullEnv(t *testing.T) (cleanup func(), tempDir string) {
 }
 
 func TestInit(t *testing.T) {
-	// Set up a temporary directory for testing
 	tempDir, err := os.MkdirTemp("", "haystack-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
 	defer os.RemoveAll(tempDir)
 
-	// Set configuration
 	conf.Get().Global.DataPath = tempDir
 
-	// Initialize storage
 	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
@@ -75,44 +123,48 @@ func TestInit(t *testing.T) {
 	mpsc.Start()
 	defer mpsc.Stop()
 
-	err = documents.Init(db, mpsc)
+	st, err := documents.New(db, mpsc, nil, documents.Options{})
 	if err != nil {
-		t.Fatalf("Storage Init failed: %v", err)
+		t.Fatalf("documents.New failed: %v", err)
 	}
-	defer documents.CloseAndWait()
+	defer st.CloseAndWait()
 
-	workspacdId := 1
-	// Create test workspace data
-	workspaceData := map[string]interface{}{
-		"id":               workspacdId,
-		"path":             "/test/path",
-		"useGlobalFilters": true,
-		"createdAt":        time.Now().Format(time.RFC3339),
+	// Seed a new-format record directly so collection.New will pick it up.
+	workspaceID := 1
+	// Write incr-id counter first.
+	db.Put([]byte{collection.DefaultKeyTypeIncrId}, []byte("1"))
+
+	rec := collection.Record{
+		ID:           workspaceID,
+		Name:         "/test/path",
+		CreatedAt:    time.Now(),
+		LastAccessed: time.Now(),
+		Extra:        encodeExtra(true, nil),
 	}
-	workspaceJson, err := json.Marshal(workspaceData)
+	recJSON, _ := json.Marshal(rec)
+	recKey := []byte(fmt.Sprintf("%c%d", collection.DefaultKeyTypeRecord, workspaceID))
+	db.Put(recKey, recJSON)
+
+	cat, err := collection.New(db, st, collection.Options{})
 	if err != nil {
-		t.Fatalf("Failed to marshal workspace data: %v", err)
+		t.Fatalf("collection.New: %v", err)
 	}
-	db.Put(internal.EncodeWorkspaceKey(workspacdId), []byte(workspaceJson))
 
-	// Initialize workspace manager
-	err = Init(db)
+	err = Init(cat)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}
 
-	// Verify workspace is loaded correctly
 	ws, err := GetByPath("/test/path")
 	if err != nil {
 		t.Fatalf("Failed to get workspace: %v", err)
 	}
-	if ws.Id != workspacdId {
-		t.Errorf("Workspace ID mismatch, got %d, want test-workspace", ws.Id)
+	if ws.Id != workspaceID {
+		t.Errorf("Workspace ID mismatch, got %d, want %d", ws.Id, workspaceID)
 	}
 }
 
 func TestInitWithMalformedData(t *testing.T) {
-	// Test that Init handles malformed workspace JSON gracefully
 	tempDir, err := os.MkdirTemp("", "haystack-test-*")
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
@@ -124,35 +176,258 @@ func TestInitWithMalformedData(t *testing.T) {
 	db, _ := storage.Open(filepath.Join(tempDir, "data"), 0)
 	defer db.Close()
 
-	// Store malformed JSON
-	db.Put(internal.EncodeWorkspaceKey(1), []byte("this is not valid json{{{"))
+	mpsc := queue.NewMpsc("TestQueue")
+	mpsc.Start()
+	defer mpsc.Stop()
 
-	// Also store a valid workspace
-	validData := map[string]interface{}{
-		"id":   2,
-		"path": "/valid/path",
+	st, err := documents.New(db, mpsc, nil, documents.Options{})
+	if err != nil {
+		t.Fatalf("documents.New failed: %v", err)
 	}
-	validJSON, _ := json.Marshal(validData)
-	db.Put(internal.EncodeWorkspaceKey(2), validJSON)
+	defer st.CloseAndWait()
 
-	err = Init(db)
+	// Store malformed JSON at key-type-2 record slot 1.
+	malformedKey := []byte(fmt.Sprintf("%c%d", collection.DefaultKeyTypeRecord, 1))
+	db.Put(malformedKey, []byte("this is not valid json{{{"))
+
+	// Store a valid new-format record at slot 2.
+	validRec := collection.Record{
+		ID:           2,
+		Name:         "/valid/path",
+		CreatedAt:    time.Now(),
+		LastAccessed: time.Now(),
+	}
+	validJSON, _ := json.Marshal(validRec)
+	validKey := []byte(fmt.Sprintf("%c%d", collection.DefaultKeyTypeRecord, 2))
+	db.Put(validKey, validJSON)
+	// Also set incr-id counter to 2 so future allocations don't collide.
+	db.Put([]byte{collection.DefaultKeyTypeIncrId}, []byte("2"))
+
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		t.Fatalf("collection.New: %v", err)
+	}
+
+	err = Init(cat)
 	if err != nil {
 		t.Fatalf("Init should not fail on malformed data: %v", err)
 	}
 
-	// The malformed workspace should be skipped
+	// The malformed workspace should be skipped.
 	_, err = Get(1)
 	if err == nil {
 		t.Error("Malformed workspace should not be loaded")
 	}
 
-	// The valid workspace should be loaded
+	// The valid workspace should be loaded.
 	ws, err := Get(2)
 	if err != nil {
 		t.Fatalf("Valid workspace should be loaded: %v", err)
 	}
 	if ws.Path != "/valid/path" {
 		t.Errorf("Path mismatch, got %q, want %q", ws.Path, "/valid/path")
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Migration tests
+// ----------------------------------------------------------------------------
+
+// encodeOldWorkspace produces the legacy on-disk JSON that old haystack wrote.
+func encodeOldWorkspace(id int, path string, useGlobal bool, createdAt, lastAccessed, lastFullSync time.Time) []byte {
+	return encodeOldWorkspaceWithFilters(id, path, useGlobal, nil, createdAt, lastAccessed, lastFullSync)
+}
+
+// encodeOldWorkspaceWithFilters is encodeOldWorkspace plus a custom *types.Filters
+// payload, matching the legacy on-disk shape that carried filters inline.
+func encodeOldWorkspaceWithFilters(id int, path string, useGlobal bool, filters *types.Filters, createdAt, lastAccessed, lastFullSync time.Time) []byte {
+	type oldWS struct {
+		ID               int            `json:"id"`
+		Path             string         `json:"path"`
+		UseGlobalFilters bool           `json:"use_global_filters"`
+		Filters          *types.Filters `json:"filters,omitempty"`
+		CreatedAt        time.Time      `json:"created_time"`
+		LastAccessed     time.Time      `json:"last_accessed_time"`
+		LastFullSync     time.Time      `json:"last_full_sync_time"`
+	}
+	b, _ := json.Marshal(oldWS{
+		ID:               id,
+		Path:             path,
+		UseGlobalFilters: useGlobal,
+		Filters:          filters,
+		CreatedAt:        createdAt,
+		LastAccessed:     lastAccessed,
+		LastFullSync:     lastFullSync,
+	})
+	return b
+}
+
+// oldRecordKey encodes the on-disk key for a record using the default prefix.
+func oldRecordKey(id int) []byte {
+	return []byte(fmt.Sprintf("%c%d", collection.DefaultKeyTypeRecord, id))
+}
+
+// TestMigrateLegacyRecords is the required migration proof test.
+//
+// Scenario:
+//   - id=1: OLD format                       → must be migrated to new format.
+//   - id=2: OLD format                       → must be migrated to new format.
+//   - id=3: NEW format                       → must be left untouched.
+//   - id=4: OLD format with non-nil Filters  → filters must round-trip.
+//
+// Assertions after migration:
+//   - collection.New succeeds and sees all four records.
+//   - workspace.Init builds correct *Workspace for each (path, times, UseGlobalFilters, Filters).
+//   - The incr-id counter (key-type 1) is left byte-for-byte unchanged.
+//   - Running migration again is idempotent (on-disk bytes unchanged for id=3,
+//     and count stays at 4).
+func TestMigrateLegacyRecords(t *testing.T) {
+	tempDir := t.TempDir()
+	conf.Get().Global.DataPath = tempDir
+
+	db, err := storage.Open(filepath.Join(tempDir, "data"), 0)
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now().UTC().Truncate(time.Second)
+
+	// Seed old-format records.
+	db.Put(oldRecordKey(1), encodeOldWorkspace(1, "/ws/one", true, now, now, now))
+	db.Put(oldRecordKey(2), encodeOldWorkspace(2, "/ws/two", false, now, now, now))
+
+	// id=4: old format carrying a non-nil custom filter set that must survive
+	// migration into the new Extra payload.
+	customFilters := &types.Filters{
+		Include: []string{"*.go", "*.rs"},
+		Exclude: types.Exclude{UseGitIgnore: true, Customized: []string{"target/", "vendor/"}},
+	}
+	db.Put(oldRecordKey(4), encodeOldWorkspaceWithFilters(4, "/ws/four", false, customFilters, now, now, now))
+
+	// Seed a new-format record.
+	newRec3 := collection.Record{
+		ID:           3,
+		Name:         "/ws/three",
+		CreatedAt:    now,
+		LastAccessed: now,
+		Extra:        encodeExtra(true, nil),
+	}
+	newRec3JSON, _ := json.Marshal(newRec3)
+	db.Put(oldRecordKey(3), newRec3JSON)
+
+	// Set the incr-id counter to 4 so future allocations are safe.
+	db.Put([]byte{collection.DefaultKeyTypeIncrId}, []byte("4"))
+
+	// --- Capture incr-id counter + key=3 bytes before any migration ---
+	incrBefore, _ := db.Get([]byte{collection.DefaultKeyTypeIncrId})
+	val3Before, _ := db.Get(oldRecordKey(3))
+
+	// --- Run migration (first time) ---
+	if err := MigrateLegacyRecords(db, collection.Options{}); err != nil {
+		t.Fatalf("MigrateLegacyRecords: %v", err)
+	}
+
+	// --- Verify the incr-id counter (key-type 1) was NOT touched ---
+	incrAfter, _ := db.Get([]byte{collection.DefaultKeyTypeIncrId})
+	if string(incrBefore) != string(incrAfter) {
+		t.Errorf("incr-id counter changed by migration\nbefore: %s\nafter:  %s", incrBefore, incrAfter)
+	}
+
+	// --- Verify key=3 was NOT rewritten by migration ---
+	val3After1, _ := db.Get(oldRecordKey(3))
+	if string(val3Before) != string(val3After1) {
+		t.Errorf("new-format record id=3 was rewritten by migration\nbefore: %s\nafter:  %s", val3Before, val3After1)
+	}
+
+	// --- Construct Catalog + Init ---
+	mpsc := queue.NewMpsc("mig-test-q")
+	mpsc.Start()
+	defer mpsc.Stop()
+
+	st, err := documents.New(db, mpsc, nil, documents.Options{})
+	if err != nil {
+		t.Fatalf("documents.New: %v", err)
+	}
+	defer st.CloseAndWait()
+
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		t.Fatalf("collection.New after migration: %v", err)
+	}
+
+	if err := Init(cat); err != nil {
+		t.Fatalf("Init after migration: %v", err)
+	}
+
+	// --- Assert workspace 1 ---
+	ws1, err := GetByPath("/ws/one")
+	if err != nil {
+		t.Fatalf("GetByPath /ws/one: %v", err)
+	}
+	if ws1.Id != 1 {
+		t.Errorf("ws1.Id = %d, want 1", ws1.Id)
+	}
+	if !ws1.UseGlobalFilters {
+		t.Error("ws1.UseGlobalFilters should be true")
+	}
+	if !ws1.CreatedAt.Equal(now) {
+		t.Errorf("ws1.CreatedAt = %v, want %v", ws1.CreatedAt, now)
+	}
+
+	// --- Assert workspace 2 ---
+	ws2, err := GetByPath("/ws/two")
+	if err != nil {
+		t.Fatalf("GetByPath /ws/two: %v", err)
+	}
+	if ws2.Id != 2 {
+		t.Errorf("ws2.Id = %d, want 2", ws2.Id)
+	}
+	if ws2.UseGlobalFilters {
+		t.Error("ws2.UseGlobalFilters should be false")
+	}
+
+	// --- Assert workspace 3 (already new format) ---
+	ws3, err := GetByPath("/ws/three")
+	if err != nil {
+		t.Fatalf("GetByPath /ws/three: %v", err)
+	}
+	if ws3.Id != 3 {
+		t.Errorf("ws3.Id = %d, want 3", ws3.Id)
+	}
+
+	// --- Assert workspace 4: custom filters round-trip through migration ---
+	ws4, err := GetByPath("/ws/four")
+	if err != nil {
+		t.Fatalf("GetByPath /ws/four: %v", err)
+	}
+	if ws4.Id != 4 {
+		t.Errorf("ws4.Id = %d, want 4", ws4.Id)
+	}
+	if ws4.UseGlobalFilters {
+		t.Error("ws4.UseGlobalFilters should be false")
+	}
+	if ws4.Filters == nil {
+		t.Fatal("ws4.Filters should not be nil after migration")
+	}
+	if !reflect.DeepEqual(ws4.Filters, customFilters) {
+		t.Errorf("ws4.Filters did not round-trip\n got: %+v\nwant: %+v", ws4.Filters, customFilters)
+	}
+
+	// --- Idempotency: running migration again must not change id=3 ---
+	if err := MigrateLegacyRecords(db, collection.Options{}); err != nil {
+		t.Fatalf("second MigrateLegacyRecords: %v", err)
+	}
+
+	val3After2, _ := db.Get(oldRecordKey(3))
+	if string(val3After1) != string(val3After2) {
+		t.Errorf("idempotency failure: id=3 bytes changed on second migration\nbefore: %s\nafter:  %s", val3After1, val3After2)
+	}
+
+	// --- Total count unchanged ---
+	recs := cat.List()
+	if len(recs) != 4 {
+		t.Errorf("catalog.List() = %d records after second migration, want 4", len(recs))
 	}
 }
 
@@ -233,10 +508,10 @@ func TestWorkspaceConcurrency(t *testing.T) {
 	defer cleanup()
 
 	// Create multiple workspace directories
-	workspacePaths := make([]string, 10)
+	wsPaths := make([]string, 10)
 	for i := 0; i < 10; i++ {
-		workspacePaths[i] = filepath.Join(tempDir, "test-workspace", string(rune('a'+i)))
-		err := os.MkdirAll(workspacePaths[i], 0755)
+		wsPaths[i] = filepath.Join(tempDir, "test-workspace", string(rune('a'+i)))
+		err := os.MkdirAll(wsPaths[i], 0755)
 		if err != nil {
 			t.Fatalf("Failed to create test workspace directory: %v", err)
 		}
@@ -244,7 +519,7 @@ func TestWorkspaceConcurrency(t *testing.T) {
 
 	// Concurrently create workspaces
 	var createWg sync.WaitGroup
-	for _, path := range workspacePaths {
+	for _, path := range wsPaths {
 		createWg.Add(1)
 		go func(p string) {
 			defer createWg.Done()
@@ -518,14 +793,18 @@ func TestGetAll_WithIndexingProgress(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	// Set up CountByWorkspaceFunc to return a known value
-	CountByWorkspaceFunc = func(wsId int) int {
-		if wsId == ws.Id {
-			return 99
+	// Pre-populate 99 documents in the real store so CountByCollection returns 99.
+	docs := make([]*documents.Document, 99)
+	for i := 0; i < 99; i++ {
+		docs[i] = &documents.Document{
+			ID:      fmt.Sprintf("doc%d", i),
+			RelPath: fmt.Sprintf("file%d.go", i),
+			Words:   []string{"word"},
 		}
-		return 0
 	}
-	defer func() { CountByWorkspaceFunc = nil }()
+	if err := docStoreInst.SaveNewDocuments(ws.Id, docs); err != nil {
+		t.Fatalf("SaveNewDocuments failed: %v", err)
+	}
 
 	// Start indexing
 	err = ws.StartIndexing()
@@ -542,7 +821,7 @@ func TestGetAll_WithIndexingProgress(t *testing.T) {
 				t.Error("Workspace should be marked as indexing")
 			}
 			if w.TotalFiles != 99 {
-				t.Errorf("TotalFiles = %d, want 99 (from CountByWorkspaceFunc)", w.TotalFiles)
+				t.Errorf("TotalFiles = %d, want 99", w.TotalFiles)
 			}
 			break
 		}

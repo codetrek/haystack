@@ -8,7 +8,7 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/queue"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -30,7 +30,7 @@ func TestInit(t *testing.T) {
 	q.Start()
 	defer q.Stop()
 
-	err = Init(database, q)
+	err = Init(database, q, nil)
 	assert.NoError(t, err)
 
 	// Verify package globals are set
@@ -59,7 +59,7 @@ func TestCloseAndWait(t *testing.T) {
 	q := queue.NewMpsc("TestCloseQueue")
 	q.Start()
 
-	err = Init(database, q)
+	err = Init(database, q, nil)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
 	}

@@ -8,9 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/symbols"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/internal/utils"
 )
@@ -87,8 +85,7 @@ func Create(workspacePath string) (*Workspace, error) {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	workspace := workspacePaths[workspacePath]
-	if workspace != nil {
+	if workspacePaths[workspacePath] != nil {
 		return nil, fmt.Errorf("workspace already exists")
 	}
 
@@ -108,41 +105,38 @@ func Create(workspacePath string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace path must be a directory")
 	}
 
-	var id int
-	// Try 10 times to generate a unique workspace id
-	for range 10 {
-		id, err = internal.GetNextId()
-		if err != nil {
-			return nil, err
-		}
-
-		if _, ok := workspaces[id]; !ok {
-			break
-		}
+	// catalog.Create allocates the id, persists the Record, and calls
+	// docs.Create — no separate docStoreInst.Create call needed.
+	col, err := catalog.Create(workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create workspace record: %w", err)
 	}
 
-	if _, ok := workspaces[id]; ok {
-		return nil, fmt.Errorf("failed to generate unique workspace id")
-	}
-
-	workspace = &Workspace{
-		Id:               id,
+	meta := col.Meta()
+	workspace := &Workspace{
+		Id:               meta.ID,
 		Path:             workspacePath,
+		Desc:             meta.Desc,
 		UseGlobalFilters: true,
-		CreatedAt:        time.Now(),
-		LastAccessed:     time.Now(),
+		CreatedAt:        meta.CreatedAt,
+		LastAccessed:     meta.LastAccessed,
 	}
 
-	if err := workspace.Save(); err != nil {
-		return nil, err
+	// Persist UseGlobalFilters=true into the record's Extra field. The workspace
+	// is not yet published into the maps, so no other goroutine can observe it;
+	// the per-workspace mutex is unnecessary here.
+	rec := meta
+	rec.Desc = workspace.Desc
+	rec.Extra = encodeExtra(workspace.UseGlobalFilters, workspace.Filters)
+	if err := catalog.Save(rec); err != nil {
+		log.Printf("[Workspace] Warning: failed to save extra for new workspace %d: %v", workspace.Id, err)
 	}
 
 	workspaces[workspace.Id] = workspace
 	workspacePaths[workspace.Path] = workspace
 
-	log.Printf("[Workspace] New workspace created: %v, path: %v", id, workspacePath)
+	log.Printf("[Workspace] New workspace created: %v, path: %v", workspace.Id, workspacePath)
 
-	documents.Create(workspace.Id, workspacePath)
 	symbols.Create(workspace.Id, workspacePath)
 	return workspace, nil
 }
@@ -156,12 +150,19 @@ func Delete(workspaceId int) error {
 		return fmt.Errorf("workspace not found")
 	}
 
+	// Delete the catalog record (and its document data) FIRST. If this fails the
+	// in-memory overlay is left untouched so it stays consistent with disk; a
+	// later retry can succeed. catalog.Delete removes the record AND calls
+	// docs.Delete — no separate docStoreInst.Delete call needed.
+	if err := catalog.Delete(workspaceId); err != nil {
+		return fmt.Errorf("failed to delete workspace from catalog: %w", err)
+	}
+
+	// Catalog delete succeeded — now drop the workspace from the overlay.
 	workspace.SetDeleted()
 	delete(workspaces, workspaceId)
 	delete(workspacePaths, workspace.Path)
 
-	internal.Delete(workspaceId)
-	documents.Delete(workspaceId)
 	symbols.Delete(workspace.Id)
 
 	return nil
@@ -198,11 +199,19 @@ func Move(id int, newPath string) (*Workspace, error) {
 		return nil, fmt.Errorf("workspace path must be a directory")
 	}
 
-	log.Printf("[Workspace] Moving workspace %v from %v to %v", id, workspaces[id].Path, newPath)
-
 	oldPath := workspace.Path
+	log.Printf("[Workspace] Moving workspace %v from %v to %v", id, oldPath, newPath)
+
+	// Mutate Path/LastAccessed under the per-workspace mutex: Save() and
+	// Serialize() read these fields under the same lock, so writing them without
+	// it would be a data race. Save() takes the mutex itself, so release it
+	// first.
+	workspace.mutex.Lock()
 	workspace.Path = newPath
-	workspace.Save()
+	workspace.LastAccessed = time.Now()
+	workspace.mutex.Unlock()
+
+	workspace.Save() //nolint:errcheck — best-effort; catalog.Save guards the rename
 
 	workspacePaths[newPath] = workspace
 	delete(workspacePaths, oldPath)

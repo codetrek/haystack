@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/searchcore/documents"
 )
 
 // ---------------------------------------------------------------------------
@@ -198,7 +198,7 @@ func TestProcessDocs_SeparatesNewAndExisting(t *testing.T) {
 	ws := &workspace.Workspace{Id: 1, Path: "/tmp/ws1"}
 
 	// Create documents workspace first
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -250,10 +250,10 @@ func TestProcessDocs_MultipleWorkspaces(t *testing.T) {
 	ws1 := &workspace.Workspace{Id: 1, Path: "/tmp/ws1"}
 	ws2 := &workspace.Workspace{Id: 2, Path: "/tmp/ws2"}
 
-	if err := documents.Create(ws1.Id, "test1"); err != nil {
+	if err := stInst.Create(ws1.Id, "test1"); err != nil {
 		t.Fatalf("documents.Create ws1: %v", err)
 	}
-	if err := documents.Create(ws2.Id, "test2"); err != nil {
+	if err := stInst.Create(ws2.Id, "test2"); err != nil {
 		t.Fatalf("documents.Create ws2: %v", err)
 	}
 
@@ -349,7 +349,7 @@ func TestWriterRun_ProcessesDocsBeforeStop(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -395,7 +395,7 @@ func TestWriterRun_StopDrainsMultiplePendingDocs(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 

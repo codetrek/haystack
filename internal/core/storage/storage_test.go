@@ -5,6 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -131,24 +135,48 @@ func TestStorageVersion(t *testing.T) {
 }
 
 func TestIsKeyType(t *testing.T) {
-	assert.True(t, IsKeyType(string([]byte{KeyTypeWorkspace, 'a'}), KeyTypeWorkspace))
-	assert.False(t, IsKeyType(string([]byte{KeyTypeDocMeta, 'a'}), KeyTypeWorkspace))
-	assert.False(t, IsKeyType("", KeyTypeWorkspace))
+	assert.True(t, IsKeyType(string([]byte{KeyTypeSymbol, 'a'}), KeyTypeSymbol))
+	assert.False(t, IsKeyType(string([]byte{KeyTypeSymbol, 'a'}), KeyTypeSymbolDocFunctions))
+	assert.False(t, IsKeyType("", KeyTypeSymbol))
 }
 
+// TestKeyTypeConstants is a global-keyspace collision canary. It imports the
+// authoritative Default* constants from each searchcore sub-package and the
+// storage-local symbol consts, then asserts there are no duplicates across
+// the entire shared on-disk key namespace.
 func TestKeyTypeConstants(t *testing.T) {
-	// Verify no collisions between key types
-	types := []byte{
-		KeyTypeWorkspaceIncrId, KeyTypeWorkspace,
-		KeyTypeDocWorkspace, KeyTypeDocWords, KeyTypeDocMeta, KeyTypeDocPath,
-		KeyTypeInvertedRow, KeyTypeInvertedTable, KeyTypeInvertedNextTableId,
-		KeyTypeIdTableNextId, KeyTypeIdTableKey,
-		KeyTypeSymbol, KeyTypeSymbolDocFunctions, KeyTypeSymbolWords,
+	type entry struct {
+		name  string
+		value byte
 	}
-	seen := map[byte]bool{}
-	for _, kt := range types {
-		assert.NotEqual(t, byte(0), kt, "key type should not be 0")
-		assert.False(t, seen[kt], "duplicate key type: %d", kt)
-		seen[kt] = true
+	all := []entry{
+		// collection (1-2)
+		{"collection.DefaultKeyTypeIncrId", collection.DefaultKeyTypeIncrId},
+		{"collection.DefaultKeyTypeRecord", collection.DefaultKeyTypeRecord},
+		// documents (10-13)
+		{"documents.DefaultKeyTypeDocCollection", documents.DefaultKeyTypeDocCollection},
+		{"documents.DefaultKeyTypeDocWords", documents.DefaultKeyTypeDocWords},
+		{"documents.DefaultKeyTypeDocMeta", documents.DefaultKeyTypeDocMeta},
+		{"documents.DefaultKeyTypeDocPath", documents.DefaultKeyTypeDocPath},
+		// invertedindex (20-22)
+		{"invertedindex.DefaultKeyTypeRow", invertedindex.DefaultKeyTypeRow},
+		{"invertedindex.DefaultKeyTypeTable", invertedindex.DefaultKeyTypeTable},
+		{"invertedindex.DefaultKeyTypeNextId", invertedindex.DefaultKeyTypeNextId},
+		// idtable (28-29)
+		{"idtable.DefaultKeyTypeNextId", idtable.DefaultKeyTypeNextId},
+		{"idtable.DefaultKeyTypeKey", idtable.DefaultKeyTypeKey},
+		// storage symbols (30, 31, 33)
+		{"storage.KeyTypeSymbol", KeyTypeSymbol},
+		{"storage.KeyTypeSymbolDocFunctions", KeyTypeSymbolDocFunctions},
+		{"storage.KeyTypeSymbolWords", KeyTypeSymbolWords},
+	}
+
+	seen := map[byte]string{}
+	for _, e := range all {
+		assert.NotEqual(t, byte(0), e.value, "key type %s must not be 0 (reserved sentinel)", e.name)
+		if prev, dup := seen[e.value]; dup {
+			t.Errorf("key type collision: %s and %s both use byte %d", prev, e.name, e.value)
+		}
+		seen[e.value] = e.name
 	}
 }

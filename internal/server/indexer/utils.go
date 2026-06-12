@@ -2,14 +2,24 @@ package indexer
 
 import (
 	"crypto/md5"
+	"fmt"
 	"path/filepath"
 	"strings"
 
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/utils"
+	"github.com/codetrek/haystack/searchcore/idtable"
 
 	"github.com/gabriel-vasile/mimetype"
 )
+
+// idAllocator is the package-level id allocator injected by server.go before Run is called.
+var idAllocator *idtable.Allocator
+
+// SetIdAllocator injects the Allocator instance used by GetDocumentId.
+// Must be called before indexer.Run.
+func SetIdAllocator(a *idtable.Allocator) {
+	idAllocator = a
+}
 
 var NotIndexiableFileExts = map[string]struct{}{
 	".ds_store": {},
@@ -68,7 +78,10 @@ var NotIndexiableFileExts = map[string]struct{}{
 func GetDocumentId(relPath string) (string, error) {
 	relPath = filepath.ToSlash(relPath)
 	v := md5.Sum([]byte(relPath))
-	return idtable.GetId(v[:])
+	if idAllocator == nil {
+		return "", fmt.Errorf("id allocator not initialized")
+	}
+	return idAllocator.GetId(v[:])
 }
 
 func GetContentHash(content []byte) string {

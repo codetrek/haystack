@@ -8,12 +8,11 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/documents"
 )
 
 // ---------------------------------------------------------------------------
@@ -97,7 +96,7 @@ func TestRemoveFile_Integration(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -122,7 +121,7 @@ func TestAddOrSyncFile_NewFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -157,7 +156,7 @@ func TestAddOrSyncFile_DirectoryIsIgnored(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -185,7 +184,7 @@ func TestAddOrSyncFile_NonExistentFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -213,7 +212,7 @@ func TestRefreshFileIfNeeded_DeletedFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -317,7 +316,7 @@ func TestRefreshFileIfNeeded_DirectoryAtFilePath(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -366,7 +365,7 @@ func TestRefreshFilesIfNeeded_MixedDocs(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -631,7 +630,7 @@ func TestRemoveFile_ValidDoc(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -676,7 +675,7 @@ func TestAddOrSyncFile_ExistingDocModified(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -724,7 +723,7 @@ func TestAddOrSyncFile_ExistingDocFileDeleted(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -864,7 +863,7 @@ func TestAddOrSyncFile_ExistingDocDirectoryReplacedFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -909,8 +908,9 @@ func TestRemoveFile_GetDocumentIdError(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	// Close idtable so GetDocumentId → idtable.GetId returns "database is closed"
-	idtable.Close()
+	// Close idtable so GetDocumentId → GetId returns "id allocator not initialized"
+	idAllocator.Close()
+	SetIdAllocator(nil)
 
 	err = RemoveFile(ws, "anyfile.go")
 	if err == nil {

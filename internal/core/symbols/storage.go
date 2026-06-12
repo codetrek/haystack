@@ -1,20 +1,23 @@
 package symbols
 
 import (
-	"github.com/codetrek/haystack/internal/core/pebble"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 const Shards = 8
 
 var (
-	db   pebble.DB
-	mpsc *queue.Mpsc
+	db      kv.Store
+	mpsc    *queue.Mpsc
+	idxInst *invertedindex.Index
 )
 
-func Init(database pebble.DB, q *queue.Mpsc) error {
+func Init(database kv.Store, q *queue.Mpsc, idx *invertedindex.Index) error {
 	db = database
 	mpsc = q
+	idxInst = idx
 	return nil
 }
 
@@ -23,4 +26,5 @@ func CloseAndWait() {
 
 	db = nil
 	mpsc = nil
+	idxInst = nil
 }

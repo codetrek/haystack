@@ -8,10 +8,6 @@ import (
 	"sync"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/pebble"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
@@ -19,15 +15,29 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 // Function variables for Init calls, enabling test overrides.
 var (
-	invertedindexInit = func(db pebble.DB, mpsc *queue.Mpsc) error { return invertedindex.Init(db, mpsc) }
-	documentsInit     = func(db pebble.DB, mpsc *queue.Mpsc) error { return documents.Init(db, mpsc) }
-	workspaceInit     = func(db pebble.DB) error { return workspace.Init(db) }
-	symbolsInit       = func(db pebble.DB, mpsc *queue.Mpsc) error { return symbols.Init(db, mpsc) }
+	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (*invertedindex.Index, error) {
+		// Zero-value Options selects production defaults inside New.
+		return invertedindex.New(db, mpsc, invertedindex.Options{})
+	}
+	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) (*documents.Store, error) {
+		return documents.New(db, mpsc, idx, documents.Options{})
+	}
+	// workspaceInit receives the fully-constructed Catalog so the workspace
+	// package no longer needs its own kv.Store reference.
+	workspaceInit = func(cat *collection.Catalog) error { return workspace.Init(cat) }
+	symbolsInit   = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
+		return symbols.Init(db, mpsc, idx)
+	}
 )
 
 func Run() {
@@ -67,36 +77,56 @@ func run() error {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	if err := idtable.Init(db); err != nil {
+	idAlloc, err := idtable.New(db, idtable.Options{})
+	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing id table: %w", err)
 	}
+	indexer.SetIdAllocator(idAlloc)
 
-	if err := invertedindexInit(indexdb, mpsc); err != nil {
+	idx, err := invertedindexInit(indexdb, mpsc)
+	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing inverted index: %w", err)
 	}
 
-	if err := documentsInit(db, mpsc); err != nil {
+	st, err := documentsNew(db, mpsc, idx)
+	if err != nil {
 		running.Shutdown()
-		return fmt.Errorf("error initializing storage: %w", err)
+		return fmt.Errorf("error initializing documents store: %w", err)
 	}
 
-	if err := workspaceInit(db); err != nil {
+	// Wire the documents store into dependent packages.
+	indexer.SetDocStore(st)
+	workspace.SetDocStore(st)
+
+	// Migrate any legacy workspace records BEFORE constructing the Catalog so
+	// that collection.New sees only the new-format JSON. A migration failure may
+	// leave the store partially migrated, so abort startup rather than run
+	// collection.New against inconsistent data.
+	if err := workspace.MigrateLegacyRecords(db, collection.Options{}); err != nil {
+		running.Shutdown()
+		return fmt.Errorf("error migrating legacy workspace records: %w", err)
+	}
+
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		running.Shutdown()
+		return fmt.Errorf("error initializing collection catalog: %w", err)
+	}
+
+	if err := workspaceInit(cat); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing workspace: %w", err)
 	}
 
-	// Wire up the documents count function for workspace to derive TotalFiles.
-	workspace.CountByWorkspaceFunc = documents.CountByWorkspace
-
-	if err := symbolsInit(db, mpsc); err != nil {
+	if err := symbolsInit(db, mpsc, idx); err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing symbols: %w", err)
 	}
 
 	indexer.Run(wg)
-	searcher.Run(wg)
+	searcher.Run(wg, idx, st)
 
 	if conf.Get().ForTest.Path != "" {
 		indexer.SyncIfNeeded(conf.Get().ForTest.Path)
@@ -113,12 +143,12 @@ func run() error {
 	)
 
 	wg.Wait()
-	documents.CloseAndWait()
-	invertedindex.CloseAndWait()
+	st.CloseAndWait()
+	idx.CloseAndWait()
 	symbols.CloseAndWait()
 	mpsc.Stop()
 
-	idtable.Close()
+	idAlloc.Close()
 
 	// DB could be closed safely now!
 	log.Println("[Server] Closing storage...")

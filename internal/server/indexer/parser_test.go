@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/testutil"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 )
 
 // setupTestEnv initialises the subsystems required for parsing tests.
@@ -27,27 +28,38 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	var shutdownWg sync.WaitGroup
 	running.InitShutdown(&shutdownWg)
 
-	if err := idtable.Init(env.DB); err != nil {
-		t.Fatalf("idtable.Init: %v", err)
+	alloc, err := idtable.New(env.DB, idtable.Options{})
+	if err != nil {
+		t.Fatalf("idtable.New: %v", err)
 	}
-	if err := invertedindex.Init(env.DB, env.Mpsc); err != nil {
-		t.Fatalf("invertedindex.Init: %v", err)
+	SetIdAllocator(alloc)
+	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{})
+	if err != nil {
+		t.Fatalf("invertedindex.New: %v", err)
 	}
-	if err := documents.Init(env.DB, env.Mpsc); err != nil {
-		t.Fatalf("documents.Init: %v", err)
+	st, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
+	if err != nil {
+		t.Fatalf("documents.New: %v", err)
 	}
-	if err := symbols.Init(env.DB, env.Mpsc); err != nil {
+	SetDocStore(st)
+	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
-	if err := workspace.Init(env.DB); err != nil {
+	workspace.MigrateLegacyRecords(env.DB, collection.Options{}) //nolint:errcheck
+	cat, err := collection.New(env.DB, st, collection.Options{})
+	if err != nil {
+		t.Fatalf("collection.New: %v", err)
+	}
+	if err := workspace.Init(cat); err != nil {
 		t.Fatalf("workspace.Init: %v", err)
 	}
 
 	return env, func() {
+		SetDocStore(nil)
 		symbols.CloseAndWait()
-		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
-		idtable.Close()
+		st.CloseAndWait()
+		idx.CloseAndWait()
+		alloc.Close()
 		env.TeardownBase()
 	}
 }
@@ -332,7 +344,7 @@ func TestParse_UnchangedFileSkip(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -378,7 +390,7 @@ func TestParse_SameHashSkip(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -512,7 +524,7 @@ func TestProcessFile_NewTextFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 
@@ -608,7 +620,7 @@ func TestParserRun_ProcessesSentFile(t *testing.T) {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	if err := documents.Create(ws.Id, "test"); err != nil {
+	if err := stInst.Create(ws.Id, "test"); err != nil {
 		t.Fatalf("documents.Create: %v", err)
 	}
 

@@ -1,14 +1,14 @@
 package workspace
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
 )
 
 type IndexingState int
@@ -20,10 +20,14 @@ const (
 	IndexingFailed
 )
 
-// CountByWorkspaceFunc is a callback to count documents for a workspace.
-// It is set by the documents package during server initialization to avoid
-// circular imports.
-var CountByWorkspaceFunc func(wsId int) int
+// docStoreInst is injected via SetDocStore to avoid having workspace call
+// package-level documents functions. Set once during server initialisation.
+var docStoreInst *documents.Store
+
+// SetDocStore injects the documents.Store instance used for file counting.
+func SetDocStore(st *documents.Store) {
+	docStoreInst = st
+}
 
 type IndexingProgress struct {
 	StartedAt         *time.Time
@@ -34,6 +38,7 @@ type IndexingProgress struct {
 type Workspace struct {
 	Id               int            `json:"id"`
 	Path             string         `json:"path"`
+	Desc             string         `json:"desc,omitempty"`
 	UseGlobalFilters bool           `json:"use_global_filters"`
 	Filters          *types.Filters `json:"filters,omitempty" optional:"true"`
 
@@ -69,8 +74,8 @@ func (w *Workspace) GetTotalFiles() int {
 	w.mutex.Lock()
 	defer w.mutex.Unlock()
 
-	if CountByWorkspaceFunc != nil {
-		return CountByWorkspaceFunc(w.Id)
+	if docStoreInst != nil {
+		return docStoreInst.CountByCollection(w.Id)
 	}
 	return 0
 }
@@ -101,13 +106,30 @@ func (w *Workspace) StartIndexing() error {
 	return nil
 }
 
+// Save persists the workspace metadata to the Catalog.
 func (w *Workspace) Save() error {
-	json, err := w.Serialize()
-	if err != nil {
-		return err
+	w.mutex.Lock()
+	if w.deleted {
+		w.mutex.Unlock()
+		return fmt.Errorf("workspace is deleted")
+	}
+	// Snapshot fields under the lock.
+	rec := collection.Record{
+		ID:           w.Id,
+		Name:         w.Path,
+		Desc:         w.Desc,
+		CreatedAt:    w.CreatedAt,
+		LastAccessed: w.LastAccessed,
+		LastFullSync: w.LastFullSync,
+		Extra:        encodeExtra(w.UseGlobalFilters, w.Filters),
+	}
+	w.mutex.Unlock()
+
+	if catalog == nil {
+		return fmt.Errorf("workspace catalog not initialised")
 	}
 
-	return internal.Save(w.Id, string(json))
+	return catalog.Save(&rec)
 }
 
 func (w *Workspace) GetLastFullSync() time.Time {
@@ -183,15 +205,4 @@ func (w *Workspace) IsDeleted() bool {
 	defer w.mutex.Unlock()
 
 	return w.deleted
-}
-
-func (w *Workspace) Serialize() ([]byte, error) {
-	w.mutex.Lock()
-	defer w.mutex.Unlock()
-
-	if w.deleted {
-		return nil, fmt.Errorf("workspace is deleted")
-	}
-
-	return json.Marshal(w)
 }

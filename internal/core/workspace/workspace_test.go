@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,9 +11,58 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
-	"github.com/codetrek/haystack/internal/core/workspace/internal"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
+
+// newTestStore creates a transient documents.Store for use in workspace unit
+// tests. It returns the store and a cleanup function.
+func newTestStoreWithCount(t *testing.T, wsId int, count int) (st *documents.Store, cleanup func()) {
+	t.Helper()
+	tempDir := t.TempDir()
+	db, err := storage.Open(filepath.Join(tempDir, "data"), 0)
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	q := queue.NewMpsc("test-ws-queue")
+	q.Start()
+	st, err = documents.New(db, q, nil, documents.Options{})
+	if err != nil {
+		q.Stop()
+		db.Close()
+		t.Fatalf("documents.New: %v", err)
+	}
+	if err := st.Create(wsId, "test"); err != nil {
+		st.CloseAndWait()
+		q.Stop()
+		db.Close()
+		t.Fatalf("st.Create: %v", err)
+	}
+	if count > 0 {
+		docs := make([]*documents.Document, count)
+		for i := 0; i < count; i++ {
+			docs[i] = &documents.Document{
+				ID:      fmt.Sprintf("d%d", i),
+				RelPath: fmt.Sprintf("f%d.go", i),
+				Words:   []string{"w"},
+			}
+		}
+		if err := st.SaveNewDocuments(wsId, docs); err != nil {
+			st.CloseAndWait()
+			q.Stop()
+			db.Close()
+			t.Fatalf("st.SaveNewDocuments: %v", err)
+		}
+	}
+	cleanup = func() {
+		st.CloseAndWait()
+		q.Stop()
+		db.Close()
+	}
+	return st, cleanup
+}
 
 func TestWorkspaceMethods(t *testing.T) {
 	// Create a test workspace
@@ -41,9 +91,12 @@ func TestWorkspaceMethods(t *testing.T) {
 		t.Errorf("AddIndexingFiles failed, got %d, want 3", status.IndexedFiles)
 	}
 
-	// Test GetTotalFiles with CountByWorkspaceFunc set
-	CountByWorkspaceFunc = func(wsId int) int { return 42 }
-	defer func() { CountByWorkspaceFunc = nil }()
+	// Test GetTotalFiles by injecting a real store with 42 documents.
+	st42, cleanSt42 := newTestStoreWithCount(t, ws.Id, 42)
+	defer cleanSt42()
+	old := docStoreInst
+	SetDocStore(st42)
+	defer func() { SetDocStore(old) }()
 	totalFiles := ws.GetTotalFiles()
 	if totalFiles != 42 {
 		t.Errorf("GetTotalFiles failed, got %d, want 42", totalFiles)
@@ -77,13 +130,11 @@ func TestWorkspaceMethods(t *testing.T) {
 func TestGetTotalFiles_WithFunc(t *testing.T) {
 	ws := &Workspace{Id: 7, Path: "/test"}
 
-	CountByWorkspaceFunc = func(wsId int) int {
-		if wsId == 7 {
-			return 100
-		}
-		return 0
-	}
-	defer func() { CountByWorkspaceFunc = nil }()
+	st, cleanup := newTestStoreWithCount(t, 7, 100)
+	defer cleanup()
+	old := docStoreInst
+	SetDocStore(st)
+	defer func() { SetDocStore(old) }()
 
 	total := ws.GetTotalFiles()
 	if total != 100 {
@@ -94,13 +145,13 @@ func TestGetTotalFiles_WithFunc(t *testing.T) {
 func TestGetTotalFiles_WithoutFunc(t *testing.T) {
 	ws := &Workspace{Id: 1, Path: "/test"}
 
-	old := CountByWorkspaceFunc
-	CountByWorkspaceFunc = nil
-	defer func() { CountByWorkspaceFunc = old }()
+	old := docStoreInst
+	SetDocStore(nil)
+	defer func() { SetDocStore(old) }()
 
 	total := ws.GetTotalFiles()
 	if total != 0 {
-		t.Errorf("GetTotalFiles = %d, want 0 when CountByWorkspaceFunc is nil", total)
+		t.Errorf("GetTotalFiles = %d, want 0 when docStoreInst is nil", total)
 	}
 }
 
@@ -111,8 +162,11 @@ func TestGetTotalFiles_Concurrency(t *testing.T) {
 		UseGlobalFilters: true,
 	}
 
-	CountByWorkspaceFunc = func(wsId int) int { return 42 }
-	defer func() { CountByWorkspaceFunc = nil }()
+	st, cleanup := newTestStoreWithCount(t, 98, 42)
+	defer cleanup()
+	old := docStoreInst
+	SetDocStore(st)
+	defer func() { SetDocStore(old) }()
 
 	// Test concurrent access to GetTotalFiles
 	var wg sync.WaitGroup
@@ -359,33 +413,63 @@ func TestSave_Deleted(t *testing.T) {
 	}
 }
 
-func TestSave_DbPutError(t *testing.T) {
-	// Set up a temporary directory and open a real DB.
-	tempDir, err := os.MkdirTemp("", "haystack-test-save-*")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
+// TestSave_CatalogPutError verifies that Save returns an error when the
+// underlying catalog.Save fails (closed database).
+func TestSave_CatalogPutError(t *testing.T) {
+	tempDir := t.TempDir()
 	conf.Get().Global.DataPath = tempDir
 
 	db, err := storage.Open(filepath.Join(tempDir, "data"), 0)
 	if err != nil {
-		t.Fatalf("Failed to open storage: %v", err)
+		t.Fatalf("storage.Open: %v", err)
 	}
 
-	// Initialize the internal package with this DB.
-	internal.Init(db)
+	q := queue.NewMpsc("test-save-q")
+	q.Start()
+
+	// Use nil invertedindex so there are no background goroutines that require
+	// the DB to stay open after we close it.
+	st, err := documents.New(db, q, nil, documents.Options{})
+	if err != nil {
+		q.Stop()
+		db.Close()
+		t.Fatalf("documents.New: %v", err)
+	}
+
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		st.CloseAndWait()
+		q.Stop()
+		db.Close()
+		t.Fatalf("collection.New: %v", err)
+	}
+
+	oldCat := catalog
+	catalog = cat
+	defer func() { catalog = oldCat }()
+
+	// Create a workspace record so catalog has id=1 in its in-memory index.
+	col, err := cat.Create("/test/save-dbput")
+	if err != nil {
+		st.CloseAndWait()
+		q.Stop()
+		db.Close()
+		t.Fatalf("cat.Create: %v", err)
+	}
+	meta := col.Meta()
 
 	ws := &Workspace{
-		Id:               1,
-		Path:             "/test/save-dbput",
-		UseGlobalFilters: true,
-		CreatedAt:        time.Now(),
-		LastAccessed:     time.Now(),
+		Id:           meta.ID,
+		Path:         "/test/save-dbput",
+		CreatedAt:    time.Now(),
+		LastAccessed: time.Now(),
 	}
 
-	// Close the DB so that db.Put() returns an error.
+	// Drain the queue and stop all background workers before closing the DB.
+	st.CloseAndWait()
+	q.Stop()
+
+	// Now close the DB so that db.Put() returns an error on the next Save.
 	db.Close()
 
 	err = ws.Save()

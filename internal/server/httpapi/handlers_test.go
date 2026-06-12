@@ -14,15 +14,18 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/internal/server/indexer"
+	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/queue"
 	mcpGoServer "github.com/mark3labs/mcp-go/server"
 	"github.com/stretchr/testify/assert"
 )
@@ -58,12 +61,32 @@ func TestMain(m *testing.M) {
 	mpsc := queue.NewMpsc("test-handler-queue")
 	mpsc.Start()
 
-	invertedindex.Init(db, mpsc)
-	documents.Init(db, mpsc)
-	symbols.Init(db, mpsc)
-	idtable.Init(db)
+	idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
+	if err != nil {
+		panic("Failed to init inverted index: " + err.Error())
+	}
+	st, err := documents.New(db, mpsc, idx, documents.Options{})
+	if err != nil {
+		panic("Failed to init documents: " + err.Error())
+	}
+	indexer.SetDocStore(st)
+	workspace.SetDocStore(st)
+	symbols.Init(db, mpsc, idx)
+	// Inject the inverted index into the searcher so search handlers work.
+	searcher.Run(&runningWg, idx, st)
 
-	err = workspace.Init(db)
+	alloc, err := idtable.New(db, idtable.Options{})
+	if err != nil {
+		panic("Failed to init idtable: " + err.Error())
+	}
+	indexer.SetIdAllocator(alloc)
+
+	workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck
+	cat, err := collection.New(db, st, collection.Options{})
+	if err != nil {
+		panic("Failed to init collection catalog: " + err.Error())
+	}
+	err = workspace.Init(cat)
 	if err != nil {
 		panic("Failed to init workspace: " + err.Error())
 	}
@@ -78,8 +101,10 @@ func TestMain(m *testing.M) {
 	testEnv.workspacePath = wsPath
 	testEnv.cleanup = func() {
 		symbols.CloseAndWait()
-		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
+		st.CloseAndWait()
+		workspace.SetDocStore(nil)
+		indexer.SetDocStore(nil)
+		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()
 		os.RemoveAll(tempDir)

@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/engine"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,12 +40,12 @@ func TestSortDocuments_EditorEmpty(t *testing.T) {
 // --- searchInContent: scanner error path ---
 
 func TestSearchInContent_ScannerError(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
-	err := engine.Compile("hello", false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+	err := eng.Compile("hello", false)
 	assert.NoError(t, err)
 
 	totalHits := 0
-	_, err = searchInContent("test.txt", &errorReader{}, engine, 0, nil, &totalHits)
+	_, err = searchInContent("test.txt", &errorReader{}, eng, 0, nil, &totalHits)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error scanning content")
 }
@@ -96,7 +97,7 @@ func TestFuzzyMatchWithScore_FilePathFuzzyFilename(t *testing.T) {
 // --- Compile edge cases ---
 
 func TestCompile_OnlyANDTokensSkipped(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 4, 4, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 4, MaxKeywordDistance: 4})
 	err := eng.Compile("AND AND", false)
 	assert.Error(t, err)
 }
@@ -104,7 +105,7 @@ func TestCompile_OnlyANDTokensSkipped(t *testing.T) {
 // --- IsLineMatch with multiple OR clauses ---
 
 func TestIsLineMatch_MultipleOrClauses_SecondMatches(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	err := eng.Compile("nonexistent | hello", false)
 	assert.NoError(t, err)
 
@@ -113,7 +114,7 @@ func TestIsLineMatch_MultipleOrClauses_SecondMatches(t *testing.T) {
 }
 
 func TestIsLineMatch_MultipleOrClauses_NoneMatch(t *testing.T) {
-	eng := NewSimpleContentSearchEngine(nil, 24, 32, false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	err := eng.Compile("alpha | beta", false)
 	assert.NoError(t, err)
 
@@ -124,12 +125,12 @@ func TestIsLineMatch_MultipleOrClauses_NoneMatch(t *testing.T) {
 // --- searchInContent edge cases ---
 
 func TestSearchInContent_ContextClampedEnd(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
-	engine.Compile("last", false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+	eng.Compile("last", false) //nolint:errcheck
 
 	content := "line1\nline2\nline3\nlast"
 	totalHits := 0
-	result, err := searchInContent("test.txt", strings.NewReader(content), engine, 3, nil, &totalHits)
+	result, err := searchInContent("test.txt", strings.NewReader(content), eng, 3, nil, &totalHits)
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(result.Lines))
 	assert.Equal(t, 3, len(result.Lines[0].Before))
@@ -137,8 +138,8 @@ func TestSearchInContent_ContextClampedEnd(t *testing.T) {
 }
 
 func TestSearchInContent_MaxResultsHitMidFile(t *testing.T) {
-	engine := NewSimpleContentSearchEngine(nil, 24, 32, false)
-	engine.Compile("item", false)
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+	eng.Compile("item", false) //nolint:errcheck
 
 	var lines []string
 	for i := 0; i < 20; i++ {
@@ -148,7 +149,7 @@ func TestSearchInContent_MaxResultsHitMidFile(t *testing.T) {
 
 	limit := &types.SearchLimit{MaxResults: 3, MaxResultsPerFile: 100}
 	totalHits := 0
-	result, err := searchInContent("test.txt", strings.NewReader(content), engine, 0, limit, &totalHits)
+	result, err := searchInContent("test.txt", strings.NewReader(content), eng, 0, limit, &totalHits)
 	assert.NoError(t, err)
 	assert.Equal(t, 3, len(result.Lines))
 }
@@ -156,9 +157,8 @@ func TestSearchInContent_MaxResultsHitMidFile(t *testing.T) {
 // --- CollectDocuments unit tests ---
 
 func TestCollectDocuments_NoOrClauses(t *testing.T) {
-	eng := &SimpleContentSearchEngine{
-		OrClauses: []*SimpleContentSearchEngineAndClause{},
-	}
+	// An engine with no compiled query has no or-clauses.
+	eng := engine.New(nil, nil, 0, engine.Options{})
 	result, err := eng.CollectDocuments()
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
@@ -166,12 +166,13 @@ func TestCollectDocuments_NoOrClauses(t *testing.T) {
 }
 
 func TestAndClauseCollectDocuments_NoKeywordTerms(t *testing.T) {
-	clause := &SimpleContentSearchEngineAndClause{
-		AndTerms: []*SimpleContentSearchEngineTerm{
-			{Pattern: "test", Keywords: []string{}},
-		},
-	}
-	result, err := clause.CollectDocuments(0)
+	// A compiled engine whose term has no keywords returns empty DocIds.
+	// Use a term that tokenises to nothing (pure stopword-like short token).
+	eng := engine.New(nil, nil, 0, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
+	// The token "u" should produce empty keywords per the tokenizer.
+	eng.Compile("u", false) //nolint:errcheck
+
+	result, err := eng.CollectDocuments()
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, 0, len(result.DocIds))
@@ -180,17 +181,17 @@ func TestAndClauseCollectDocuments_NoKeywordTerms(t *testing.T) {
 // --- TokenizeWithQuotes edge cases ---
 
 func TestTokenizeWithQuotes_EscapedQuoteAtEnd(t *testing.T) {
-	tokens := TokenizeWithQuotes(`hello\"`)
+	tokens := engine.TokenizeWithQuotes(`hello\"`)
 	assert.Equal(t, 1, len(tokens))
 	assert.Contains(t, tokens[0], `\"`)
 }
 
 func TestTokenizeWithQuotes_PipeNoSpaces(t *testing.T) {
-	tokens := TokenizeWithQuotes("a|b")
+	tokens := engine.TokenizeWithQuotes("a|b")
 	assert.Equal(t, []string{"a", "|", "b"}, tokens)
 }
 
 func TestTokenizeWithQuotes_OnlyQuoted(t *testing.T) {
-	tokens := TokenizeWithQuotes(`"hello world"`)
+	tokens := engine.TokenizeWithQuotes(`"hello world"`)
 	assert.Equal(t, []string{`"hello world"`}, tokens)
 }

@@ -8,12 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/shared/types"
+	"github.com/codetrek/haystack/searchcore/documents"
 
 	"github.com/AntoineAugusti/wordsegmentation"
 	"github.com/AntoineAugusti/wordsegmentation/corpus"
@@ -65,7 +64,7 @@ func isFileChanged(workspace *workspace.Workspace, doc *documents.Document) bool
 }
 
 func getFunctionFileMatch(workspace *workspace.Workspace, queryFunctionWords []string, docId string) (map[string][]types.SymbolsFileMatch, error) {
-	doc, err := documents.GetDocument(workspace.Id, docId, false)
+	doc, err := stInst.GetDocument(workspace.Id, docId, false)
 	if err != nil || doc == nil {
 		return nil, err
 	}
@@ -120,7 +119,11 @@ func fuzzySearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbols
 	// Split query with space
 	// words := strings.Fields(req.Query)
 	words := wordsegmentation.Segment(englishCorpus, req.Query)
-	r := invertedindex.Search(swt.InvertedId, words[0], -1, func(k string) bool {
+	if idxInst == nil {
+		log.Printf("[Searcher] fuzzySearchSymbols: inverted index not initialised")
+		return result, nil
+	}
+	r := idxInst.Search(swt.InvertedId, words[0], -1, func(k string) bool {
 		for _, word := range words {
 			if !strings.Contains(k, word) {
 				return false
@@ -174,7 +177,11 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 		return result, err
 	}
 
-	r := invertedindex.GetDocs(st.InvertedId, req.Query)
+	if idxInst == nil {
+		log.Printf("[Searcher] searchSymbols: inverted index not initialised")
+		return result, nil
+	}
+	r := idxInst.GetDocs(st.InvertedId, req.Query)
 	log.Printf("Query: %s, invertedId:%d len docids(%d)", req.Query, st.InvertedId, len(r.DocIds))
 
 	// Group results by symbol name
@@ -182,7 +189,7 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 
 	for docId := range r.DocIds {
 		// Get document info for file path
-		doc, err := documents.GetDocument(workspace.Id, docId, false)
+		doc, err := stInst.GetDocument(workspace.Id, docId, false)
 		if err != nil || doc == nil {
 			continue
 		}

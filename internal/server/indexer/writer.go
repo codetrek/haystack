@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/documents"
 	"github.com/codetrek/haystack/internal/core/workspace"
+	"github.com/codetrek/haystack/searchcore/documents"
 )
 
 type WriteDoc struct {
@@ -69,6 +69,10 @@ func (w *Writer) run(wg *sync.WaitGroup) {
 }
 
 func (w *Writer) processDocs(docs []*WriteDoc) {
+	mu.Lock()
+	st := stInst
+	mu.Unlock()
+
 	newDocs := make(map[int][]*documents.Document)
 	existingDocs := make(map[int][]*documents.Document)
 
@@ -87,11 +91,11 @@ func (w *Writer) processDocs(docs []*WriteDoc) {
 	}
 
 	for workspaceID, docs := range newDocs {
-		documents.SaveNewDocuments(workspaceID, docs)
+		st.SaveNewDocuments(workspaceID, docs)
 	}
 
 	for workspaceID, docs := range existingDocs {
-		documents.UpdateDocuments(workspaceID, docs)
+		st.UpdateDocuments(workspaceID, docs)
 	}
 }
 

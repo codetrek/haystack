@@ -7,9 +7,8 @@ import (
 	"unicode"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
-	"github.com/codetrek/haystack/internal/core/invertedindex/tokenizer"
-	"github.com/codetrek/haystack/internal/core/pebble"
+	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/tokenizer"
 )
 
 type Function struct {
@@ -25,7 +24,7 @@ type DocFunction struct {
 
 const MaxBatchSize = 512
 
-var NewBatch = func(db pebble.DB) pebble.Batch {
+var NewBatch = func(db kv.Store) kv.Batch {
 	return db.NewBatch(MaxBatchSize)
 }
 
@@ -93,7 +92,7 @@ func getUniqueFunctionNames(functions []Function) []string {
 	return result
 }
 
-func saveDocFunctions(batch pebble.Batch, workspaceid int, doc *DocFunction) {
+func saveDocFunctions(batch kv.Batch, workspaceid int, doc *DocFunction) {
 	if len(doc.Functions) == 0 {
 		batch.Delete(EncodeDocFunctionsKey(workspaceid, doc.ID))
 	} else {
@@ -198,14 +197,14 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, 
 			wordsInOldFuncNames = append(wordsInOldFuncNames, strings.ToLower(word))
 		}
 	}
-	invertedindex.Update(sw.InvertedId, docId, wordsInNewFuncNames, wordsInOldFuncNames)
+	idxInst.Update(sw.InvertedId, docId, wordsInNewFuncNames, wordsInOldFuncNames)
 
 	s, err := GetSymbolTable(workspaceid)
 	if err != nil {
 		log.Println("[Symbols] Error: failed to get symbol table:", err)
 		return
 	}
-	invertedindex.Update(s.InvertedId, docId, newFuncNames, oldFuncNames)
+	idxInst.Update(s.InvertedId, docId, newFuncNames, oldFuncNames)
 }
 
 func DeleteDocument(workspaceId int, docId string) error {
@@ -229,7 +228,7 @@ func DeleteDocument(workspaceId int, docId string) error {
 			log.Println("[Symbols] Error: failed to get existing functions for document:", docId, err)
 			return err
 		}
-		invertedindex.Update(s.InvertedId, docId, []string{}, getUniqueFunctionNames(oldFunctions))
+		idxInst.Update(s.InvertedId, docId, []string{}, getUniqueFunctionNames(oldFunctions))
 
 		batch := NewBatch(db)
 		batch.Delete(EncodeDocFunctionsKey(workspaceId, docId))

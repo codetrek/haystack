@@ -10,16 +10,17 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/queue"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"
@@ -45,10 +46,12 @@ func setupMCPTestEnv(t *testing.T) {
 		// Configure
 		conf.Get().Global.DataPath = filepath.Join(tempDir, "mcp_test_data")
 		conf.Get().Server.CacheSize = 8 * 1024 * 1024
-		invertedindex.FlushTicker = 50 * time.Millisecond
-		invertedindex.FlushWaitTimeout = 1 * time.Microsecond
-		invertedindex.FlushWaitBatchSize = 10
-		invertedindex.FlushCooldown = 50 * time.Millisecond
+		iiOpts := invertedindex.Options{
+			FlushTicker:        50 * time.Millisecond,
+			FlushWaitTimeout:   1 * time.Microsecond,
+			FlushWaitBatchSize: 10,
+			FlushCooldown:      50 * time.Millisecond,
+		}
 
 		// Create test files
 		testFiles := map[string]string{
@@ -101,24 +104,36 @@ This is a test project.`,
 		mpsc := queue.NewMpsc("MCPTestDBQueue")
 		mpsc.Start()
 
-		if !assert.NoError(t, idtable.Init(db)) {
+		idx, err := invertedindex.New(indexdb, mpsc, iiOpts)
+		if !assert.NoError(t, err) {
 			return
 		}
-		if !assert.NoError(t, invertedindex.Init(indexdb, mpsc)) {
+		st, stErr := documents.New(db, mpsc, idx, documents.Options{})
+		if !assert.NoError(t, stErr) {
 			return
 		}
-		if !assert.NoError(t, documents.Init(db, mpsc)) {
+		indexer.SetDocStore(st)
+		workspace.SetDocStore(st)
+		workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck
+		cat, catErr := collection.New(db, st, collection.Options{})
+		if !assert.NoError(t, catErr) {
 			return
 		}
-		if !assert.NoError(t, workspace.Init(db)) {
+		if !assert.NoError(t, workspace.Init(cat)) {
 			return
 		}
-		if !assert.NoError(t, symbols.Init(db, mpsc)) {
+		if !assert.NoError(t, symbols.Init(db, mpsc, idx)) {
 			return
 		}
 
+		alloc, allocErr := idtable.New(db, idtable.Options{})
+		if !assert.NoError(t, allocErr) {
+			return
+		}
+		indexer.SetIdAllocator(alloc)
+
 		indexer.Run(wg)
-		searcher.Run(wg)
+		searcher.Run(wg, idx, st)
 
 		// Create and index workspace
 		_, err = indexer.CreateWorkspace(testWorkspacePath, true, nil)
@@ -141,11 +156,13 @@ This is a test project.`,
 		testCleanup = func() {
 			running.Shutdown()
 			wg.Wait()
-			documents.CloseAndWait()
-			invertedindex.CloseAndWait()
+			st.CloseAndWait()
+			workspace.SetDocStore(nil)
+			indexer.SetDocStore(nil)
+			idx.CloseAndWait()
 			symbols.CloseAndWait()
 			mpsc.Stop()
-			idtable.Close()
+			alloc.Close()
 			db.Close()
 			indexdb.Close()
 		}

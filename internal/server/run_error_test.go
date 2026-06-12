@@ -7,35 +7,42 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/pebble"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 var errFake = errors.New("fake init error")
 
-// noopInitDB is a no-op Init replacement for pebble.DB + *queue.Mpsc.
-func noopInitDB(_ pebble.DB, _ *queue.Mpsc) error { return nil }
+// noopInitII is a no-op invertedindexInit replacement: returns a nil Index with no error.
+func noopInitII(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) { return nil, nil }
 
-// noopInitDBOnly is a no-op Init replacement for pebble.DB only.
-func noopInitDBOnly(_ pebble.DB) error { return nil }
+// noopDocNew is a no-op documentsNew replacement.
+func noopDocNew(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.Store, error) {
+	return nil, nil
+}
+
+// noopInitCat is a no-op Init replacement for *collection.Catalog.
+func noopInitCat(_ *collection.Catalog) error { return nil }
 
 // saveAndMockInits saves the four Init function variables, replaces them all
 // with no-ops, and returns a restore function.
 func saveAndMockInits() func() {
 	origII := invertedindexInit
-	origDoc := documentsInit
+	origDoc := documentsNew
 	origWS := workspaceInit
 	origSym := symbolsInit
 
-	invertedindexInit = noopInitDB
-	documentsInit = noopInitDB
-	workspaceInit = noopInitDBOnly
-	symbolsInit = noopInitDB
+	invertedindexInit = noopInitII
+	documentsNew = noopDocNew
+	workspaceInit = noopInitCat
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error { return nil }
 
 	return func() {
 		invertedindexInit = origII
-		documentsInit = origDoc
+		documentsNew = origDoc
 		workspaceInit = origWS
 		symbolsInit = origSym
 	}
@@ -47,15 +54,14 @@ func setupRunEnv(t *testing.T) {
 	tempDir := t.TempDir()
 	conf.Get().Global.DataPath = tempDir
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024
-	idtable.Close() // ensure clean state so run() can init idtable
 }
 
 func TestRun_InvertedIndexInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	invertedindexInit = func(_ pebble.DB, _ *queue.Mpsc) error {
-		return errFake
+	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) {
+		return nil, errFake
 	}
 
 	setupRunEnv(t)
@@ -63,30 +69,28 @@ func TestRun_InvertedIndexInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing inverted index")
-	idtable.Close()
 }
 
 func TestRun_DocumentsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	documentsInit = func(_ pebble.DB, _ *queue.Mpsc) error {
-		return errFake
+	documentsNew = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.Store, error) {
+		return nil, errFake
 	}
 
 	setupRunEnv(t)
 
 	err := run()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error initializing storage")
-	idtable.Close()
+	assert.Contains(t, err.Error(), "error initializing documents store")
 }
 
 func TestRun_WorkspaceInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	workspaceInit = func(_ pebble.DB) error {
+	workspaceInit = func(_ *collection.Catalog) error {
 		return errFake
 	}
 
@@ -95,14 +99,13 @@ func TestRun_WorkspaceInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing workspace")
-	idtable.Close()
 }
 
 func TestRun_SymbolsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	symbolsInit = func(_ pebble.DB, _ *queue.Mpsc) error {
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error {
 		return errFake
 	}
 
@@ -111,5 +114,4 @@ func TestRun_SymbolsInitError(t *testing.T) {
 	err := run()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "error initializing symbols")
-	idtable.Close()
 }

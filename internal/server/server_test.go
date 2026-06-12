@@ -16,9 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/documents"
-	"github.com/codetrek/haystack/internal/core/idtable"
-	"github.com/codetrek/haystack/internal/core/invertedindex"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
@@ -27,7 +24,11 @@ import (
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/internal/utils/queue"
+	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 const (
@@ -38,6 +39,10 @@ const (
 var (
 	testWorkspacePath string
 	testServerURL     string
+
+	// testInvertedIndexOptions holds the fast-flush options used by the test
+	// server. Set in setupTestEnvironment, consumed in startTestServer.
+	testInvertedIndexOptions invertedindex.Options
 )
 
 func TestServerEndToEnd(t *testing.T) {
@@ -75,10 +80,12 @@ func setupTestEnvironment(t *testing.T) {
 	conf.Get().Global.DataPath = filepath.Join(tempDir, testDataPath)
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024 // 8MB for tests
 
-	invertedindex.FlushTicker = 50 * time.Millisecond
-	invertedindex.FlushWaitTimeout = 1 * time.Microsecond
-	invertedindex.FlushWaitBatchSize = 10
-	invertedindex.FlushCooldown = 50 * time.Millisecond
+	testInvertedIndexOptions = invertedindex.Options{
+		FlushTicker:        50 * time.Millisecond,
+		FlushWaitTimeout:   1 * time.Microsecond,
+		FlushWaitBatchSize: 10,
+		FlushCooldown:      50 * time.Millisecond,
+	}
 }
 
 // waitForServerReady polls the health endpoint until the server responds.
@@ -206,23 +213,31 @@ func startTestServer(t *testing.T) func() {
 	mpsc := queue.NewMpsc("TestDBQueue")
 	mpsc.Start()
 
-	err = idtable.Init(db)
+	alloc, err := idtable.New(db, idtable.Options{})
+	assert.NoError(t, err)
+	indexer.SetIdAllocator(alloc)
+
+	idx, err := invertedindex.New(indexdb, mpsc, testInvertedIndexOptions)
 	assert.NoError(t, err)
 
-	err = invertedindex.Init(indexdb, mpsc)
+	st, err := documents.New(db, mpsc, idx, documents.Options{})
+	assert.NoError(t, err)
+	indexer.SetDocStore(st)
+	workspace.SetDocStore(st)
+
+	workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck — non-fatal in test
+
+	cat, err := collection.New(db, st, collection.Options{})
 	assert.NoError(t, err)
 
-	err = documents.Init(db, mpsc)
+	err = workspace.Init(cat)
 	assert.NoError(t, err)
 
-	err = workspace.Init(db)
-	assert.NoError(t, err)
-
-	err = symbols.Init(db, mpsc)
+	err = symbols.Init(db, mpsc, idx)
 	assert.NoError(t, err)
 
 	indexer.Run(wg)
-	searcher.Run(wg)
+	searcher.Run(wg, idx, st)
 
 	go httpapi.StartServer(wg, fmt.Sprintf("127.0.0.1:%d", testPort), "")
 
@@ -233,12 +248,14 @@ func startTestServer(t *testing.T) func() {
 	return func() {
 		running.Shutdown()
 		wg.Wait()
-		documents.CloseAndWait()
-		invertedindex.CloseAndWait()
+		st.CloseAndWait()
+		idx.CloseAndWait()
 		mpsc.Stop()
-		idtable.Close()
+		alloc.Close()
 		db.Close()
 		indexdb.Close()
+		workspace.SetDocStore(nil)
+		indexer.SetDocStore(nil)
 	}
 }
 
