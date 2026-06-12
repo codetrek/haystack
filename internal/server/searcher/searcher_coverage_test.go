@@ -1919,7 +1919,7 @@ func TestFullIntegration(t *testing.T) {
 
 	// --- Term.CollectDocuments: error path (invalid workspace) ---
 	t.Run("TermCollectDocuments error workspace", func(t *testing.T) {
-		// Use collectionID=-999 so GetWorkspace fails; engine should return empty result.
+		// Use collectionID=-999 so GetCollection fails; engine should return empty result.
 		eng := engine.New(idxInst, stInst, -999, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 		err := eng.Compile("anything", false)
 		assert.NoError(t, err)

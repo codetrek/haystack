@@ -14,14 +14,15 @@ import (
 	"github.com/codetrek/haystack/searchcore/queue"
 )
 
-// Workspace holds per-collection metadata persisted in the key-value store.
-// It is returned by GetWorkspace and exposes the workspace's identifiers and
-// description as JSON-tagged fields.
-type Workspace struct {
-	WorkspaceId int        `json:"workspace_id"`
-	InvertedId  int        `json:"inverted_id"`
-	Desc        string     `json:"desc"`
-	CreateAt    *time.Time `json:"create_at"`
+// CollectionInfo holds per-collection metadata persisted in the key-value store.
+// It is returned by GetCollection and exposes the collection's identifiers and
+// description as JSON-tagged fields. The json tags are stable on-disk keys and
+// must not change.
+type CollectionInfo struct {
+	CollectionID int        `json:"workspace_id"`
+	InvertedId   int        `json:"inverted_id"`
+	Desc         string     `json:"desc"`
+	CreateAt     *time.Time `json:"create_at"`
 }
 
 // Options holds tunables for Store. Zero values select production defaults.
@@ -35,9 +36,9 @@ type Workspace struct {
 // Changing any KeyType* field after data has been written is a breaking
 // on-disk change.
 type Options struct {
-	// KeyTypeDocWorkspace is the on-disk prefix byte for workspace metadata keys.
-	// Zero selects DefaultKeyTypeDocWorkspace (10).
-	KeyTypeDocWorkspace byte
+	// KeyTypeDocCollection is the on-disk prefix byte for collection metadata keys.
+	// Zero selects DefaultKeyTypeDocCollection (10).
+	KeyTypeDocCollection byte
 
 	// KeyTypeDocWords is the on-disk prefix byte for document words keys.
 	// Zero selects DefaultKeyTypeDocWords (11).
@@ -61,17 +62,17 @@ type Store struct {
 	idx *invertedindex.Index
 
 	// resolved on-disk key-type bytes (set in New from opts with defaults applied)
-	keyTypeDocWorkspace byte
-	keyTypeDocWords     byte
-	keyTypeDocMeta      byte
-	keyTypeDocPath      byte
+	keyTypeDocCollection byte
+	keyTypeDocWords      byte
+	keyTypeDocMeta       byte
+	keyTypeDocPath       byte
 
-	workspacesMu      sync.Mutex
-	workspaces        map[int]*Workspace
-	deletedWorkspaces map[int]struct{}
+	collectionsMu      sync.Mutex
+	collections        map[int]*CollectionInfo
+	deletedCollections map[int]struct{}
 
 	docCountMu sync.RWMutex
-	docCount   map[int]int // workspaceId -> document count
+	docCount   map[int]int // collectionID -> document count
 }
 
 // New creates a new Store backed by the given kv.Store and queue.Queue.
@@ -80,8 +81,8 @@ type Store struct {
 // sync with the kv.Store.
 func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) (*Store, error) {
 	// Apply key-type defaults (zero means "use default").
-	if opts.KeyTypeDocWorkspace == 0 {
-		opts.KeyTypeDocWorkspace = DefaultKeyTypeDocWorkspace
+	if opts.KeyTypeDocCollection == 0 {
+		opts.KeyTypeDocCollection = DefaultKeyTypeDocCollection
 	}
 	if opts.KeyTypeDocWords == 0 {
 		opts.KeyTypeDocWords = DefaultKeyTypeDocWords
@@ -94,46 +95,46 @@ func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) 
 	}
 
 	s := &Store{
-		db:                  store,
-		q:                   q,
-		idx:                 idx,
-		keyTypeDocWorkspace: opts.KeyTypeDocWorkspace,
-		keyTypeDocWords:     opts.KeyTypeDocWords,
-		keyTypeDocMeta:      opts.KeyTypeDocMeta,
-		keyTypeDocPath:      opts.KeyTypeDocPath,
-		workspaces:          make(map[int]*Workspace),
-		deletedWorkspaces:   make(map[int]struct{}),
-		docCount:            make(map[int]int),
+		db:                   store,
+		q:                    q,
+		idx:                  idx,
+		keyTypeDocCollection: opts.KeyTypeDocCollection,
+		keyTypeDocWords:      opts.KeyTypeDocWords,
+		keyTypeDocMeta:       opts.KeyTypeDocMeta,
+		keyTypeDocPath:       opts.KeyTypeDocPath,
+		collections:          make(map[int]*CollectionInfo),
+		deletedCollections:   make(map[int]struct{}),
+		docCount:             make(map[int]int),
 	}
 	log.Println("[Documents] Initialized")
 	return s, nil
 }
 
-func (s *Store) isWorkspaceDeleted(workspaceId int) bool {
-	s.workspacesMu.Lock()
-	defer s.workspacesMu.Unlock()
+func (s *Store) isCollectionDeleted(collectionID int) bool {
+	s.collectionsMu.Lock()
+	defer s.collectionsMu.Unlock()
 
-	_, ok := s.deletedWorkspaces[workspaceId]
+	_, ok := s.deletedCollections[collectionID]
 	return ok
 }
 
-func (s *Store) markWorkspaceDeleted(workspaceId int) {
-	s.workspacesMu.Lock()
-	defer s.workspacesMu.Unlock()
+func (s *Store) markCollectionDeleted(collectionID int) {
+	s.collectionsMu.Lock()
+	defer s.collectionsMu.Unlock()
 
-	s.deletedWorkspaces[workspaceId] = struct{}{}
+	s.deletedCollections[collectionID] = struct{}{}
 }
 
 // CloseAndWait flushes any pending work through the queue and releases
-// in-memory workspace state. The caller must not use the Store after this
+// in-memory collection state. The caller must not use the Store after this
 // returns.
 func (s *Store) CloseAndWait() {
 	s.q.RunTask(&queue.NopeTask{})
 
-	s.workspacesMu.Lock()
-	s.workspaces = nil
-	s.deletedWorkspaces = nil
-	s.workspacesMu.Unlock()
+	s.collectionsMu.Lock()
+	s.collections = nil
+	s.deletedCollections = nil
+	s.collectionsMu.Unlock()
 
 	s.docCountMu.Lock()
 	s.docCount = nil
@@ -142,27 +143,27 @@ func (s *Store) CloseAndWait() {
 	log.Println("[Documents] Closed")
 }
 
-// Create initialises a new workspace in the store, allocating an inverted-index
+// Create initialises a new collection in the store, allocating an inverted-index
 // table for it and seeding the in-memory document counter.
-func (s *Store) Create(workspaceId int, desc string) error {
-	inverted, err := s.indexCreateTable(fmt.Sprintf("workspace:%d,desc:%s", workspaceId, desc))
+func (s *Store) Create(collectionID int, desc string) error {
+	inverted, err := s.indexCreateTable(fmt.Sprintf("workspace:%d,desc:%s", collectionID, desc))
 	if err != nil {
 		return fmt.Errorf("failed to create inverted index table: %w", err)
 	}
 
-	ft := Workspace{
-		WorkspaceId: workspaceId,
-		InvertedId:  inverted,
-		Desc:        desc,
+	ft := CollectionInfo{
+		CollectionID: collectionID,
+		InvertedId:   inverted,
+		Desc:         desc,
 	}
 
-	err = s.db.Put(s.encodeMetaKey(workspaceId), encodeFTMetaValue(ft))
+	err = s.db.Put(s.encodeMetaKey(collectionID), encodeFTMetaValue(ft))
 	if err != nil {
 		return err
 	}
 
 	// Initialize the in-memory document count by scanning the DB once
-	prefix := s.encodeDocumentMetaKey(workspaceId, "")
+	prefix := s.encodeDocumentMetaKey(collectionID, "")
 	count := 0
 	s.db.Scan(prefix, func(key, value []byte) bool {
 		count++
@@ -170,75 +171,75 @@ func (s *Store) Create(workspaceId int, desc string) error {
 	})
 
 	s.docCountMu.Lock()
-	s.docCount[workspaceId] = count
+	s.docCount[collectionID] = count
 	s.docCountMu.Unlock()
 
 	return nil
 }
 
-// Delete deletes a workspace and all of its documents and keywords.
-func (s *Store) Delete(workspaceId int) error {
+// Delete deletes a collection and all of its documents and keywords.
+func (s *Store) Delete(collectionID int) error {
 	return s.q.RunFunc(func() error {
-		ft, err := s.GetWorkspace(workspaceId)
+		ft, err := s.GetCollection(collectionID)
 		if err != nil {
-			return fmt.Errorf("failed to get workspace: %w", err)
+			return fmt.Errorf("failed to get collection: %w", err)
 		}
-		s.markWorkspaceDeleted(workspaceId)
+		s.markCollectionDeleted(collectionID)
 
 		s.indexDeleteTable(ft.InvertedId)
 
 		batch := s.db.NewBatch(0)
-		batch.DeletePrefix(s.encodeDocumentMetaKey(workspaceId, ""))
-		batch.DeletePrefix(s.encodeDocumentWordsKey(workspaceId, ""))
+		batch.DeletePrefix(s.encodeDocumentMetaKey(collectionID, ""))
+		batch.DeletePrefix(s.encodeDocumentWordsKey(collectionID, ""))
 
 		err = batch.Commit()
 		if err != nil {
 			return err
 		}
 
-		// Clean up in-memory document count for this workspace
+		// Clean up in-memory document count for this collection
 		s.docCountMu.Lock()
-		delete(s.docCount, workspaceId)
+		delete(s.docCount, collectionID)
 		s.docCountMu.Unlock()
 
 		return nil
 	})
 }
 
-// CountByWorkspace returns the number of documents for a given workspace ID
+// CountByCollection returns the number of documents for a given collection ID
 // using an in-memory counter maintained by document mutations. O(1).
-func (s *Store) CountByWorkspace(workspaceId int) int {
+func (s *Store) CountByCollection(collectionID int) int {
 	s.docCountMu.RLock()
 	defer s.docCountMu.RUnlock()
-	return s.docCount[workspaceId]
+	return s.docCount[collectionID]
 }
 
-// GetWorkspace retrieves the workspace information for a given workspace ID.
+// GetCollection retrieves the collection information for a given collection ID.
 // Results are cached in memory after the first lookup.
-func (s *Store) GetWorkspace(workspaceid int) (*Workspace, error) {
-	s.workspacesMu.Lock()
-	defer s.workspacesMu.Unlock()
-	if f, ok := s.workspaces[workspaceid]; ok {
+func (s *Store) GetCollection(collectionID int) (*CollectionInfo, error) {
+	s.collectionsMu.Lock()
+	defer s.collectionsMu.Unlock()
+	if f, ok := s.collections[collectionID]; ok {
 		return f, nil
 	}
 
-	meta, err := s.db.Get(s.encodeMetaKey(workspaceid))
+	meta, err := s.db.Get(s.encodeMetaKey(collectionID))
 	if err != nil {
-		return nil, fmt.Errorf("failed to get workspace meta, workspace: %d, error: %w", workspaceid, err)
+		return nil, fmt.Errorf("failed to get collection meta, collection: %d, error: %w", collectionID, err)
 	}
 
 	f, err := decodeFTMetaValue(meta)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode workspace meta, workspace: %d, error: %w", workspaceid, err)
+		return nil, fmt.Errorf("failed to decode collection meta, collection: %d, error: %w", collectionID, err)
 	}
 
-	s.workspaces[workspaceid] = f
+	s.collections[collectionID] = f
 
 	return f, nil
 }
 
 // indexCreateTable is the seam that isolates the inverted-index notification
-// for workspace creation. A future second index type is an additive change here.
+// for collection creation. A future second index type is an additive change here.
 func (s *Store) indexCreateTable(name string) (int, error) {
 	if s.idx == nil {
 		return 0, nil
@@ -246,7 +247,7 @@ func (s *Store) indexCreateTable(name string) (int, error) {
 	return s.idx.CreateTable(name)
 }
 
-// indexDeleteTable is the seam for workspace deletion notification.
+// indexDeleteTable is the seam for collection deletion notification.
 func (s *Store) indexDeleteTable(tableId int) {
 	if s.idx == nil {
 		return

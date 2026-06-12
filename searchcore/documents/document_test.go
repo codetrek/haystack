@@ -271,8 +271,8 @@ func TestSaveNewDocuments_DeletedWorkspaceRejected(t *testing.T) {
 
 	mustCreateWorkspace(t, env.St, 1)
 
-	// Mark workspace as deleted
-	env.St.markWorkspaceDeleted(1)
+	// Mark collection as deleted
+	env.St.markCollectionDeleted(1)
 
 	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
 	err := env.St.SaveNewDocuments(1, []*Document{doc})
@@ -347,7 +347,7 @@ func TestUpdateDocuments_DeletedWorkspaceRejected(t *testing.T) {
 	defer env.teardown()
 
 	mustCreateWorkspace(t, env.St, 1)
-	env.St.markWorkspaceDeleted(1)
+	env.St.markCollectionDeleted(1)
 
 	doc := &Document{ID: "d1", RelPath: "x.go", Words: []string{"x"}}
 	err := env.St.UpdateDocuments(1, []*Document{doc})
@@ -455,7 +455,7 @@ func TestDeleteDocument_NonExistentWorkspaceReturnsError(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	// Do NOT create workspace 999 — GetWorkspace should fail
+	// Do NOT create collection 999 — GetCollection should fail
 	err := env.St.DeleteDocument(999, "d1")
 	assert.Error(t, err, "deleting from a non-existent workspace should return error")
 }

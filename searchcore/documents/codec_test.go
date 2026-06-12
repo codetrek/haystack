@@ -9,25 +9,25 @@ import (
 // newTestStore returns a minimal *Store with default key-type bytes for codec tests.
 func newTestStore() *Store {
 	return &Store{
-		keyTypeDocWorkspace: DefaultKeyTypeDocWorkspace,
-		keyTypeDocWords:     DefaultKeyTypeDocWords,
-		keyTypeDocMeta:      DefaultKeyTypeDocMeta,
-		keyTypeDocPath:      DefaultKeyTypeDocPath,
+		keyTypeDocCollection: DefaultKeyTypeDocCollection,
+		keyTypeDocWords:      DefaultKeyTypeDocWords,
+		keyTypeDocMeta:       DefaultKeyTypeDocMeta,
+		keyTypeDocPath:       DefaultKeyTypeDocPath,
 	}
 }
 
 // ---------------------------------------------------------------------------
-// parseWorkspaceId
+// parseCollectionID
 // ---------------------------------------------------------------------------
 
-func TestParseWorkspaceId_Valid(t *testing.T) {
-	assert.Equal(t, 42, parseWorkspaceId("42"))
-	assert.Equal(t, 0, parseWorkspaceId("0"))
+func TestParseCollectionID_Valid(t *testing.T) {
+	assert.Equal(t, 42, parseCollectionID("42"))
+	assert.Equal(t, 0, parseCollectionID("0"))
 }
 
-func TestParseWorkspaceId_Invalid(t *testing.T) {
-	assert.Equal(t, invalidWorkspaceId, parseWorkspaceId("abc"))
-	assert.Equal(t, invalidWorkspaceId, parseWorkspaceId(""))
+func TestParseCollectionID_Invalid(t *testing.T) {
+	assert.Equal(t, invalidCollectionID, parseCollectionID("abc"))
+	assert.Equal(t, invalidCollectionID, parseCollectionID(""))
 }
 
 // ---------------------------------------------------------------------------
@@ -46,7 +46,7 @@ func TestDecodeDocumentPathKey_WrongType(t *testing.T) {
 	s := newTestStore()
 	// key with wrong type byte
 	wsid, docid := s.decodeDocumentPathKey("X5|docABC")
-	assert.Equal(t, invalidWorkspaceId, wsid)
+	assert.Equal(t, invalidCollectionID, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -55,7 +55,7 @@ func TestDecodeDocumentPathKey_NoPipe(t *testing.T) {
 	key := []byte{DefaultKeyTypeDocPath}
 	key = append(key, []byte("nopipe")...)
 	wsid, docid := s.decodeDocumentPathKey(string(key))
-	assert.Equal(t, invalidWorkspaceId, wsid)
+	assert.Equal(t, invalidCollectionID, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -74,7 +74,7 @@ func TestDocumentMetaKey_RoundTrip(t *testing.T) {
 func TestDecodeDocumentMetaKey_WrongType(t *testing.T) {
 	s := newTestStore()
 	wsid, docid := s.decodeDocumentMetaKey("Z10|meta123")
-	assert.Equal(t, invalidWorkspaceId, wsid)
+	assert.Equal(t, invalidCollectionID, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -83,7 +83,7 @@ func TestDecodeDocumentMetaKey_NoPipe(t *testing.T) {
 	key := []byte{DefaultKeyTypeDocMeta}
 	key = append(key, []byte("nopipe")...)
 	wsid, docid := s.decodeDocumentMetaKey(string(key))
-	assert.Equal(t, invalidWorkspaceId, wsid)
+	assert.Equal(t, invalidCollectionID, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -135,7 +135,7 @@ func TestDocumentWordsKey_RoundTrip(t *testing.T) {
 func TestDecodeDocumentWordsKey_WrongType(t *testing.T) {
 	s := newTestStore()
 	wsid, docid := s.decodeDocumentWordsKey("Q7|wdoc")
-	assert.Equal(t, invalidWorkspaceId, wsid)
+	assert.Equal(t, invalidCollectionID, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -144,7 +144,7 @@ func TestDecodeDocumentWordsKey_NoPipe(t *testing.T) {
 	key := []byte{DefaultKeyTypeDocWords}
 	key = append(key, []byte("nopipe")...)
 	wsid, docid := s.decodeDocumentWordsKey(string(key))
-	assert.Equal(t, invalidWorkspaceId, wsid)
+	assert.Equal(t, invalidCollectionID, wsid)
 	assert.Empty(t, docid)
 }
 
@@ -178,7 +178,7 @@ func TestDocumentWordsValue_SingleWord(t *testing.T) {
 func TestMetaKey_TypeByte(t *testing.T) {
 	s := newTestStore()
 	key := s.encodeMetaKey(3)
-	assert.True(t, isKeyType(string(key), DefaultKeyTypeDocWorkspace))
+	assert.True(t, isKeyType(string(key), DefaultKeyTypeDocCollection))
 }
 
 // ---------------------------------------------------------------------------
@@ -186,17 +186,17 @@ func TestMetaKey_TypeByte(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFTMetaValue_RoundTrip(t *testing.T) {
-	ws := Workspace{
-		WorkspaceId: 5,
-		InvertedId:  10,
-		Desc:        "my workspace",
+	ws := CollectionInfo{
+		CollectionID: 5,
+		InvertedId:   10,
+		Desc:         "my collection",
 	}
 	encoded := encodeFTMetaValue(ws)
 	decoded, err := decodeFTMetaValue(encoded)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, ws.WorkspaceId, decoded.WorkspaceId)
+	assert.Equal(t, ws.CollectionID, decoded.CollectionID)
 	assert.Equal(t, ws.InvertedId, decoded.InvertedId)
 	assert.Equal(t, ws.Desc, decoded.Desc)
 }

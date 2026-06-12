@@ -131,7 +131,7 @@ func TestCreate_DuplicateName(t *testing.T) {
 }
 
 // TestCreate_DocTableCreated verifies that documents.Create was called
-// (CountByWorkspace returns 0, not an error — meaning the workspace exists).
+// (CountByCollection returns 0, not an error — meaning the collection exists).
 func TestCreate_DocTableCreated(t *testing.T) {
 	env := setupFull(t)
 	defer env.teardown()
@@ -139,7 +139,7 @@ func TestCreate_DocTableCreated(t *testing.T) {
 	col, err := env.catalog.Create("/workspace/beta")
 	require.NoError(t, err)
 
-	// CountByWorkspace returns 0 for a brand-new workspace (not an error).
+	// CountByCollection returns 0 for a brand-new collection (not an error).
 	count := col.Count()
 	assert.Equal(t, 0, count)
 }

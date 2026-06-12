@@ -13,13 +13,13 @@ import (
 // Byte 0 (NUL) is reserved as the zero-value sentinel meaning "use default";
 // it cannot be selected as a custom prefix.
 const (
-	DefaultKeyTypeDocWorkspace = byte(10)
-	DefaultKeyTypeDocWords     = byte(11)
-	DefaultKeyTypeDocMeta      = byte(12)
-	DefaultKeyTypeDocPath      = byte(13)
+	DefaultKeyTypeDocCollection = byte(10)
+	DefaultKeyTypeDocWords      = byte(11)
+	DefaultKeyTypeDocMeta       = byte(12)
+	DefaultKeyTypeDocPath       = byte(13)
 
-	// invalidWorkspaceId is returned by parse/decode functions when parsing fails.
-	invalidWorkspaceId = -1
+	// invalidCollectionID is returned by parse/decode functions when parsing fails.
+	invalidCollectionID = -1
 )
 
 // isKeyType reports whether key starts with the given keyType byte.
@@ -30,52 +30,52 @@ func isKeyType(key string, keyType byte) bool {
 	return key[0] == keyType
 }
 
-// parseWorkspaceId parses a decimal workspace ID string.
-// Returns invalidWorkspaceId if the string is not a valid integer.
-func parseWorkspaceId(key string) int {
+// parseCollectionID parses a decimal collection ID string.
+// Returns invalidCollectionID if the string is not a valid integer.
+func parseCollectionID(key string) int {
 	v, err := strconv.Atoi(key)
 	if err != nil {
-		return invalidWorkspaceId
+		return invalidCollectionID
 	}
 	return v
 }
 
 // encodeDocumentPathKey encodes the key for a document path entry.
-func (s *Store) encodeDocumentPathKey(workspaceid int, docid string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocPath, workspaceid, docid))
+func (s *Store) encodeDocumentPathKey(collectionID int, docid string) []byte {
+	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocPath, collectionID, docid))
 }
 
-// decodeDocumentPathKey decodes a document path key, returning (workspaceId, docid).
-// Returns (invalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
+// decodeDocumentPathKey decodes a document path key, returning (collectionID, docid).
+// Returns (invalidCollectionID, "") if the key is malformed or has the wrong type byte.
 func (s *Store) decodeDocumentPathKey(key string) (int, string) {
 	if !isKeyType(key, s.keyTypeDocPath) {
-		return invalidWorkspaceId, ""
+		return invalidCollectionID, ""
 	}
 	key = key[1:]
 	parts := strings.SplitN(key, "|", 2)
 	if len(parts) != 2 {
-		return invalidWorkspaceId, ""
+		return invalidCollectionID, ""
 	}
-	return parseWorkspaceId(parts[0]), parts[1]
+	return parseCollectionID(parts[0]), parts[1]
 }
 
 // encodeDocumentMetaKey encodes the key for a document metadata entry.
-func (s *Store) encodeDocumentMetaKey(workspaceid int, docid string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocMeta, workspaceid, docid))
+func (s *Store) encodeDocumentMetaKey(collectionID int, docid string) []byte {
+	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocMeta, collectionID, docid))
 }
 
-// decodeDocumentMetaKey decodes a document metadata key, returning (workspaceId, docid).
-// Returns (invalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
+// decodeDocumentMetaKey decodes a document metadata key, returning (collectionID, docid).
+// Returns (invalidCollectionID, "") if the key is malformed or has the wrong type byte.
 func (s *Store) decodeDocumentMetaKey(key string) (int, string) {
 	if !isKeyType(key, s.keyTypeDocMeta) {
-		return invalidWorkspaceId, ""
+		return invalidCollectionID, ""
 	}
 	key = key[1:]
 	parts := strings.SplitN(key, "|", 2)
 	if len(parts) != 2 {
-		return invalidWorkspaceId, ""
+		return invalidCollectionID, ""
 	}
-	return parseWorkspaceId(parts[0]), parts[1]
+	return parseCollectionID(parts[0]), parts[1]
 }
 
 // encodeDocumentMetaValue serialises a Document as JSON.
@@ -93,22 +93,22 @@ func decodeDocumentMetaValue(data []byte) (*Document, error) {
 }
 
 // encodeDocumentWordsKey encodes the key for a document words entry.
-func (s *Store) encodeDocumentWordsKey(workspaceid int, docid string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocWords, workspaceid, docid))
+func (s *Store) encodeDocumentWordsKey(collectionID int, docid string) []byte {
+	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocWords, collectionID, docid))
 }
 
-// decodeDocumentWordsKey decodes a document words key, returning (workspaceId, docid).
-// Returns (invalidWorkspaceId, "") if the key is malformed or has the wrong type byte.
+// decodeDocumentWordsKey decodes a document words key, returning (collectionID, docid).
+// Returns (invalidCollectionID, "") if the key is malformed or has the wrong type byte.
 func (s *Store) decodeDocumentWordsKey(key string) (int, string) {
 	if !isKeyType(key, s.keyTypeDocWords) {
-		return invalidWorkspaceId, ""
+		return invalidCollectionID, ""
 	}
 	key = key[1:]
 	parts := strings.SplitN(key, "|", 2)
 	if len(parts) != 2 {
-		return invalidWorkspaceId, ""
+		return invalidCollectionID, ""
 	}
-	return parseWorkspaceId(parts[0]), parts[1]
+	return parseCollectionID(parts[0]), parts[1]
 }
 
 // encodeDocumentWordsValue encodes a slice of keywords as a pipe-separated byte slice.
@@ -124,23 +124,23 @@ func decodeDocumentWordsValue(data string) []string {
 	return strings.Split(data, "|")
 }
 
-// encodeMetaKey encodes the key for a workspace metadata entry.
-func (s *Store) encodeMetaKey(workspaceid int) []byte {
-	return []byte(fmt.Sprintf("%c%d", s.keyTypeDocWorkspace, workspaceid))
+// encodeMetaKey encodes the key for a collection metadata entry.
+func (s *Store) encodeMetaKey(collectionID int) []byte {
+	return []byte(fmt.Sprintf("%c%d", s.keyTypeDocCollection, collectionID))
 }
 
-// encodeFTMetaValue serialises a workspace record as JSON.
-// Workspace has only JSON-safe fields, so Marshal cannot fail.
-func encodeFTMetaValue(info Workspace) []byte {
+// encodeFTMetaValue serialises a collection record as JSON.
+// CollectionInfo has only JSON-safe fields, so Marshal cannot fail.
+func encodeFTMetaValue(info CollectionInfo) []byte {
 	content, _ := json.Marshal(info)
 	return content
 }
 
-// decodeFTMetaValue deserialises a workspace record from JSON.
-func decodeFTMetaValue(data []byte) (*Workspace, error) {
-	ft := Workspace{}
+// decodeFTMetaValue deserialises a collection record from JSON.
+func decodeFTMetaValue(data []byte) (*CollectionInfo, error) {
+	ft := CollectionInfo{}
 	if err := json.Unmarshal(data, &ft); err != nil {
-		return &Workspace{}, err
+		return &CollectionInfo{}, err
 	}
 	return &ft, nil
 }

@@ -6,11 +6,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestParseWorkspaceId(t *testing.T) {
-	assert.Equal(t, 42, parseWorkspaceId("42"))
-	assert.Equal(t, 0, parseWorkspaceId("0"))
-	assert.Equal(t, invalidWorkspaceId, parseWorkspaceId("bad"))
-	assert.Equal(t, invalidWorkspaceId, parseWorkspaceId(""))
+func TestParseCollectionID(t *testing.T) {
+	assert.Equal(t, 42, parseCollectionID("42"))
+	assert.Equal(t, 0, parseCollectionID("0"))
+	assert.Equal(t, invalidCollectionID, parseCollectionID("bad"))
+	assert.Equal(t, invalidCollectionID, parseCollectionID(""))
 }
 
 func TestEncodeDecodeDocumentPathKey(t *testing.T) {
@@ -24,7 +24,7 @@ func TestEncodeDecodeDocumentPathKey(t *testing.T) {
 func TestDecodeDocumentPathKey_Invalid(t *testing.T) {
 	s := newTestStore()
 	wsId, docId := s.decodeDocumentPathKey("invalid")
-	assert.Equal(t, invalidWorkspaceId, wsId)
+	assert.Equal(t, invalidCollectionID, wsId)
 	assert.Equal(t, "", docId)
 }
 
@@ -39,7 +39,7 @@ func TestEncodeDecodeDocumentMetaKey(t *testing.T) {
 func TestDecodeDocumentMetaKey_Invalid(t *testing.T) {
 	s := newTestStore()
 	wsId, docId := s.decodeDocumentMetaKey("bad")
-	assert.Equal(t, invalidWorkspaceId, wsId)
+	assert.Equal(t, invalidCollectionID, wsId)
 	assert.Equal(t, "", docId)
 }
 
@@ -78,7 +78,7 @@ func TestEncodeDecodeDocumentWordsKey(t *testing.T) {
 func TestDecodeDocumentWordsKey_Invalid(t *testing.T) {
 	s := newTestStore()
 	wsId, docId := s.decodeDocumentWordsKey("bad")
-	assert.Equal(t, invalidWorkspaceId, wsId)
+	assert.Equal(t, invalidCollectionID, wsId)
 	assert.Equal(t, "", docId)
 }
 
@@ -97,18 +97,18 @@ func TestDecodeDocumentWordsValue_EmptyString(t *testing.T) {
 func TestEncodeMetaKey(t *testing.T) {
 	s := newTestStore()
 	key := s.encodeMetaKey(10)
-	assert.True(t, isKeyType(string(key), DefaultKeyTypeDocWorkspace))
+	assert.True(t, isKeyType(string(key), DefaultKeyTypeDocCollection))
 }
 
 func TestEncodeDecodeFTMetaValue(t *testing.T) {
-	ws := Workspace{
-		WorkspaceId: 42,
-		InvertedId:  99,
+	ws := CollectionInfo{
+		CollectionID: 42,
+		InvertedId:   99,
 	}
 	encoded := encodeFTMetaValue(ws)
 	decoded, err := decodeFTMetaValue(encoded)
 	assert.NoError(t, err)
-	assert.Equal(t, 42, decoded.WorkspaceId)
+	assert.Equal(t, 42, decoded.CollectionID)
 	assert.Equal(t, 99, decoded.InvertedId)
 }
 

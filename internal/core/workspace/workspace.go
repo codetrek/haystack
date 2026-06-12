@@ -75,7 +75,7 @@ func (w *Workspace) GetTotalFiles() int {
 	defer w.mutex.Unlock()
 
 	if docStoreInst != nil {
-		return docStoreInst.CountByWorkspace(w.Id)
+		return docStoreInst.CountByCollection(w.Id)
 	}
 	return 0
 }

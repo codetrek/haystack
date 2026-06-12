@@ -133,39 +133,39 @@ func TestCreate_DbPutError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Create + GetWorkspace (cache behaviour)
+// Create + GetCollection (cache behaviour)
 // ---------------------------------------------------------------------------
 
-func TestCreateAndGetWorkspace(t *testing.T) {
+func TestCreateAndGetCollection(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
 	mustCreateWorkspace(t, env.St, 42)
 
-	ws, err := env.St.GetWorkspace(42)
+	ws, err := env.St.GetCollection(42)
 	if !assert.NoError(t, err) {
 		return
 	}
 	if !assert.NotNil(t, ws) {
 		return
 	}
-	assert.Equal(t, 42, ws.WorkspaceId)
+	assert.Equal(t, 42, ws.CollectionID)
 	assert.Equal(t, "test-workspace", ws.Desc)
 
 	// Second call should come from cache
-	ws2, err := env.St.GetWorkspace(42)
+	ws2, err := env.St.GetCollection(42)
 	if !assert.NoError(t, err) {
 		return
 	}
-	assert.Equal(t, ws, ws2, "second GetWorkspace should return cached value")
+	assert.Equal(t, ws, ws2, "second GetCollection should return cached value")
 }
 
-func TestGetWorkspace_NonExistent(t *testing.T) {
+func TestGetCollection_NonExistent(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	_, err := env.St.GetWorkspace(999)
-	assert.Error(t, err, "non-existent workspace should return error")
+	_, err := env.St.GetCollection(999)
+	assert.Error(t, err, "non-existent collection should return error")
 }
 
 // ---------------------------------------------------------------------------
@@ -204,8 +204,8 @@ func TestDelete_MarksWorkspaceDeleted(t *testing.T) {
 		return
 	}
 
-	// Workspace should be marked as deleted
-	assert.True(t, env.St.isWorkspaceDeleted(1))
+	// Collection should be marked as deleted
+	assert.True(t, env.St.isCollectionDeleted(1))
 
 	// New saves to the deleted workspace should fail
 	doc2 := &Document{ID: "d2", RelPath: "y.go", Words: []string{"y"}}
@@ -214,15 +214,15 @@ func TestDelete_MarksWorkspaceDeleted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// isWorkspaceDeleted / markWorkspaceDeleted
+// isCollectionDeleted / markCollectionDeleted
 // ---------------------------------------------------------------------------
 
-func TestIsWorkspaceDeleted(t *testing.T) {
+func TestIsCollectionDeleted(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
-	assert.False(t, env.St.isWorkspaceDeleted(99))
+	assert.False(t, env.St.isCollectionDeleted(99))
 
-	env.St.markWorkspaceDeleted(99)
-	assert.True(t, env.St.isWorkspaceDeleted(99))
+	env.St.markCollectionDeleted(99)
+	assert.True(t, env.St.isCollectionDeleted(99))
 }

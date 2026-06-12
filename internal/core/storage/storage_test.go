@@ -154,7 +154,7 @@ func TestKeyTypeConstants(t *testing.T) {
 		{"collection.DefaultKeyTypeIncrId", collection.DefaultKeyTypeIncrId},
 		{"collection.DefaultKeyTypeRecord", collection.DefaultKeyTypeRecord},
 		// documents (10-13)
-		{"documents.DefaultKeyTypeDocWorkspace", documents.DefaultKeyTypeDocWorkspace},
+		{"documents.DefaultKeyTypeDocCollection", documents.DefaultKeyTypeDocCollection},
 		{"documents.DefaultKeyTypeDocWords", documents.DefaultKeyTypeDocWords},
 		{"documents.DefaultKeyTypeDocMeta", documents.DefaultKeyTypeDocMeta},
 		{"documents.DefaultKeyTypeDocPath", documents.DefaultKeyTypeDocPath},

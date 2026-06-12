@@ -147,7 +147,7 @@ func (t *term) collectDocuments(collectionID int) invertedindex.SearchResult {
 		return invertedindex.SearchResult{}
 	}
 
-	col, err := t.engine.docs.GetWorkspace(collectionID)
+	col, err := t.engine.docs.GetCollection(collectionID)
 	if err != nil {
 		log.Printf("[Engine] collectDocuments: failed to get collection: %v", err)
 		return invertedindex.SearchResult{}

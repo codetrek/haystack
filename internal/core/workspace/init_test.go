@@ -793,7 +793,7 @@ func TestGetAll_WithIndexingProgress(t *testing.T) {
 		t.Fatalf("Create failed: %v", err)
 	}
 
-	// Pre-populate 99 documents in the real store so CountByWorkspace returns 99.
+	// Pre-populate 99 documents in the real store so CountByCollection returns 99.
 	docs := make([]*documents.Document, 99)
 	for i := 0; i < 99; i++ {
 		docs[i] = &documents.Document{

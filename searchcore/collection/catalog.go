@@ -362,9 +362,9 @@ func (c *Collection) GetDocument(docID string, includeWords bool) (*documents.Do
 }
 
 // Count returns the number of documents in this collection.
-// It delegates to documents.Store.CountByWorkspace scoped to this collection's id.
+// It delegates to documents.Store.CountByCollection scoped to this collection's id.
 func (c *Collection) Count() int {
-	return c.catalog.docs.CountByWorkspace(c.id)
+	return c.catalog.docs.CountByCollection(c.id)
 }
 
 // ScanFiles iterates over all document path entries in this collection, calling
