@@ -2096,6 +2096,144 @@ func TestFullIntegration(t *testing.T) {
 		assert.True(t, len(results) > 0, "expected results for unsaved Chinese content")
 	})
 
+	// =================================================================
+	// nil-guard branch coverage: idxInst == nil for both symbol search
+	// functions.  We save the current idxInst, set it to nil, call the
+	// function, then restore before teardown.
+	// =================================================================
+
+	// --- searchSymbols: idxInst == nil guard (line 180-183) ---
+	// GetSymbolTable succeeds (sharedWS has a valid table), then the nil
+	// guard triggers and returns an empty result without error.
+	t.Run("searchSymbols nil idxInst", func(t *testing.T) {
+		saved := idxInst
+		idxInst = nil
+		defer func() { idxInst = saved }()
+
+		req := &types.SearchSymbolsRequest{
+			Query: "anySymbol",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "anySymbol", result.Query)
+		assert.Equal(t, 0, len(result.Symbols))
+	})
+
+	// --- fuzzySearchSymbols: idxInst == nil guard (line 122-125) ---
+	// GetSymbolWordsTable succeeds (sharedWS has a valid table), then the
+	// nil guard triggers and returns an empty result without error.
+	t.Run("fuzzySearchSymbols nil idxInst", func(t *testing.T) {
+		saved := idxInst
+		idxInst = nil
+		defer func() { idxInst = saved }()
+
+		req := &types.SearchSymbolsRequest{
+			Query: "anySymbol",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := fuzzySearchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "anySymbol", result.Query)
+		assert.Equal(t, 0, len(result.Symbols))
+	})
+
+	// --- searchSymbols: GetSymbolTable error path ---
+	// Using a workspace whose ID has no symbol table in the DB causes
+	// GetSymbolTable to return an error, exercising the early-return
+	// error path (return result, err) before the idxInst nil check.
+	t.Run("searchSymbols GetSymbolTable error", func(t *testing.T) {
+		badWS := &workspace.Workspace{Id: -55555}
+		req := &types.SearchSymbolsRequest{
+			Query: "anything",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(badWS, req)
+		assert.Error(t, err, "invalid workspace should return error from GetSymbolTable")
+		assert.Equal(t, "anything", result.Query)
+		assert.Equal(t, 0, len(result.Symbols))
+	})
+
+	// --- searchSymbols: isFileChanged false → continue branch ---
+	// Create a workspace with a JS file (ctags produces kind="function" for
+	// JS), index it, poll until the symbol inverted index has flushed the
+	// symbol, then overwrite the JS file with different content so that
+	// isFileChanged detects a hash mismatch and returns false.
+	// searchSymbols finds the doc ID in the symbol inverted index but
+	// skips it via continue.
+	t.Run("searchSymbols file changed continue branch", func(t *testing.T) {
+		jsDir := t.TempDir()
+		origContent := "function delJsFunc() { return 1; }\nfunction anotherDelFunc() { return 2; }\n"
+		full := filepath.Join(jsDir, "handler.js")
+		os.WriteFile(full, []byte(origContent), 0644)
+
+		jsWS, err := workspace.Create(jsDir)
+		if err != nil {
+			t.Fatalf("workspace.Create: %v", err)
+		}
+		indexer.Sync(jsWS, false)
+		// Wait for full sync
+		dlSync := time.Now().Add(10 * time.Second)
+		for time.Now().Before(dlSync) {
+			if !jsWS.GetLastFullSync().IsZero() {
+				break
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+		// Poll until the symbol inverted index has flushed "delJsFunc" —
+		// this confirms both the symbol parser AND the inverted index write
+		// are complete, so a searchSymbols query will return a non-empty DocIds.
+		var jsDocId string
+		dlSym := time.Now().Add(30 * time.Second)
+		for time.Now().Before(dlSym) {
+			stInst.ScanFiles(jsWS.Id, func(id, relPath string) bool {
+				if relPath == "handler.js" {
+					jsDocId = id
+					return false
+				}
+				return true
+			})
+			if jsDocId != "" {
+				symTable, stErr := symbols.GetSymbolTable(jsWS.Id)
+				if stErr == nil {
+					r := idxInst.GetDocs(symTable.InvertedId, "delJsFunc")
+					if len(r.DocIds) > 0 {
+						break
+					}
+				}
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		// Overwrite the file with different content; the doc store still holds
+		// the old hash so isFileChanged will detect a mismatch and return false.
+		os.WriteFile(full, []byte(origContent+"// modified\n"), 0644)
+
+		req := &types.SearchSymbolsRequest{
+			Query: "delJsFunc",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(jsWS, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "delJsFunc", result.Query)
+		// File hash changed, isFileChanged returns false → continue; result is empty
+		assert.Equal(t, 0, len(result.Symbols))
+	})
+
+	// --- searchSymbols: funcs.js symbol lookup (additional loop coverage) ---
+	// Query an exact symbol name that was indexed in funcs.js (present on
+	// disk with correct hash) so GetDocument returns a non-nil doc AND
+	// isFileChanged returns true, letting GetDocFunctions run.
+	t.Run("searchSymbols funcs.js symbol lookup", func(t *testing.T) {
+		req := &types.SearchSymbolsRequest{
+			Query: "myHandler",
+			Limit: &types.SearchLimit{MaxResults: 10, MaxResultsPerFile: 10},
+		}
+		result, err := searchSymbols(sharedWS, req)
+		assert.NoError(t, err)
+		assert.Equal(t, "myHandler", result.Query)
+		assert.NotNil(t, result.Symbols)
+	})
+
 	// --- Teardown ---
 	running.Shutdown()
 	shutdownWg.Wait()
