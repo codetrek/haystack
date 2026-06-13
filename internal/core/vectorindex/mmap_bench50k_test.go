@@ -48,7 +48,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 			}
 			defer store.Close()
 
-			idx := NewHNSWIndex(store, EuclideanDistance)
+			idx := NewHNSWIndex(store, WithEuclideanDistance())
 
 			t.Logf("Inserting %d vectors: batch_size=%d, sync per batch...", nBase, bs)
 			start := time.Now()
@@ -124,7 +124,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 		}
 		defer store.Close()
 
-		idx := NewHNSWIndex(store, EuclideanDistance)
+		idx := NewHNSWIndex(store, WithEuclideanDistance())
 
 		t.Log("Inserting 50K vectors: deferred sync (single bulk)...")
 		if err := store.SetSyncMode(SyncDeferred); err != nil {

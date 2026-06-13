@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,56 +17,100 @@ import (
 
 func TestWithM(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithM(8))
+	idx := NewHNSWIndex(store, WithM(8))
 	assert.Equal(t, 8, idx.M)
 	assert.Equal(t, 16, idx.Mmax0, "Mmax0 should be 2*M")
 }
 
 func TestWithMBoundary(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithM(1))
+	idx := NewHNSWIndex(store, WithM(1))
 	assert.Equal(t, 1, idx.M)
 	assert.Equal(t, 2, idx.Mmax0)
 }
 
 func TestWithEfConstruction(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithEfConstruction(500))
+	idx := NewHNSWIndex(store, WithEfConstruction(500))
 	assert.Equal(t, 500, idx.efConstruction)
 }
 
 func TestWithEfConstructionDefault(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 	assert.Equal(t, DefaultEfConstruction, idx.efConstruction)
 }
 
 func TestWithEfSearch(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithEfSearch(128))
+	idx := NewHNSWIndex(store, WithEfSearch(128))
 	assert.Equal(t, 128, idx.efSearch)
 }
 
 func TestWithEfSearchDefault(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 	assert.Equal(t, DefaultEfSearch, idx.efSearch)
 }
 
 func TestMultipleOptions(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithM(32), WithEfConstruction(400), WithEfSearch(256))
+	idx := NewHNSWIndex(store, WithM(32), WithEfConstruction(400), WithEfSearch(256))
 	assert.Equal(t, 32, idx.M)
 	assert.Equal(t, 64, idx.Mmax0)
 	assert.Equal(t, 400, idx.efConstruction)
 	assert.Equal(t, 256, idx.efSearch)
 }
 
+// The metric options must set the distance function and the norm-cache flag
+// together, so the two can never disagree. The default (no metric option) is
+// cosine, and when several metric options are given the last one wins.
+func TestDistanceMetricOptions(t *testing.T) {
+	store := NewMemNodeStore()
+
+	cases := []struct {
+		name     string
+		opts     []Option
+		wantFn   DistanceFunc
+		isCosine bool
+	}{
+		{"default", nil, CosineDistance, true},
+		{"cosine", []Option{WithCosineDistance()}, CosineDistance, true},
+		{"euclidean", []Option{WithEuclideanDistance()}, EuclideanDistance, false},
+		{"dotproduct", []Option{WithDotProductDistance()}, DotProductDistance, false},
+		// Last metric option wins; the flag stays consistent with it.
+		{"last-wins", []Option{WithCosineDistance(), WithEuclideanDistance()}, EuclideanDistance, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idx := NewHNSWIndex(store, tc.opts...)
+			assert.Equal(t, tc.isCosine, idx.isCosine)
+			assert.Equal(t,
+				reflect.ValueOf(tc.wantFn).Pointer(),
+				reflect.ValueOf(idx.distance).Pointer(),
+				"distance func mismatch")
+		})
+	}
+}
+
+// WithDistanceFunc installs a custom metric and disables the norm-cache fast
+// path (which is only valid for cosine).
+func TestWithDistanceFunc(t *testing.T) {
+	store := NewMemNodeStore()
+	custom := func(a, b []float32) float32 { return 0 }
+	idx := NewHNSWIndex(store, WithDistanceFunc(custom))
+
+	assert.False(t, idx.isCosine, "custom metric must not use the cosine fast path")
+	assert.Equal(t,
+		reflect.ValueOf(custom).Pointer(),
+		reflect.ValueOf(idx.distance).Pointer())
+}
+
 // --- InsertBatch tests ---
 
 func TestInsertBatchMemStore(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	items := []InsertItem{
 		{DocId: "doc-0", Vector: []float32{1, 0, 0}},
@@ -88,7 +133,7 @@ func TestInsertBatchMemStore(t *testing.T) {
 
 func TestInsertBatchEmpty(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(store, WithCosineDistance())
 
 	err := idx.InsertBatch(nil)
 	requireNoError(t, err)
@@ -100,7 +145,7 @@ func TestInsertBatchEmpty(t *testing.T) {
 
 func TestInsertBatchSingle(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	err := idx.InsertBatch([]InsertItem{
 		{DocId: "only", Vector: []float32{1, 2, 3}},
@@ -314,7 +359,7 @@ func TestLoadVectorsTruncatedData(t *testing.T) {
 
 func TestInsertBatchWithCustomOptions(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance,
+	idx := NewHNSWIndex(store,
 		WithCosineDistance(),
 		WithM(4),
 		WithEfConstruction(50),
@@ -387,7 +432,7 @@ func TestEncodeDecodeUint64Roundtrip(t *testing.T) {
 
 func TestHNSWWithMemStoreInsertAndSearch(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	requireNoError(t, idx.Insert("doc-0", []float32{1, 0, 0}))
 	requireNoError(t, idx.Insert("doc-1", []float32{0, 1, 0}))

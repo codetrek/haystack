@@ -25,7 +25,7 @@ func TestIntegrationResultConsistency(t *testing.T) {
 	queries := randomVectors(rng, numQueries, dim)
 
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
+	memIdx := NewHNSWIndex(memStore, WithCosineDistance(), WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 	for i, v := range vecs {
 		requireNoError(t, memIdx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -43,7 +43,7 @@ func TestIntegrationResultConsistency(t *testing.T) {
 // MemNodeStore.
 func TestIntegrationCRUD(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(store, WithCosineDistance())
 
 	// Insert 3 known vectors.
 	requireNoError(t, idx.Insert("alpha", []float32{1, 0, 0}))
