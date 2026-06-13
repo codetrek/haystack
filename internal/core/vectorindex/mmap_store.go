@@ -47,10 +47,10 @@ type MmapStore struct {
 	graphL0    []byte // graph_l0.dat mmap
 	graphUpper []byte // graph_upper.dat mmap
 
-	vecFile   *os.File
-	nodeFile  *os.File
-	l0File    *os.File
-	upperFile *os.File
+	vecFile   osFile
+	nodeFile  osFile
+	l0File    osFile
+	upperFile osFile
 
 	// WAL and batch support
 	wal                *WAL
@@ -62,7 +62,7 @@ type MmapStore struct {
 	// ID mapping (doc ↔ node)
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
-	idmapFile *os.File // idmap.dat append handle
+	idmapFile osFile // idmap.dat append handle
 
 	syncMode SyncMode
 
@@ -280,7 +280,7 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 func (s *MmapStore) mmapAll() error {
 	type fileInfo struct {
 		name string
-		file **os.File
+		file *osFile
 		data *[]byte
 		cap  *uint64
 	}
@@ -293,9 +293,9 @@ func (s *MmapStore) mmapAll() error {
 	}
 
 	// Track opened files and mappings for cleanup on error.
-	var openedFiles []*os.File
+	var openedFiles []osFile
 	var mappedRegions [][]byte
-	cleanup := func() { // nocov: error cleanup path — requires partial mmap failure to trigger
+	cleanup := func() {
 		for _, m := range mappedRegions {
 			mmapFree(m)
 		}
@@ -306,7 +306,7 @@ func (s *MmapStore) mmapAll() error {
 
 	for _, fi := range files {
 		path := filepath.Join(s.dir, fi.name)
-		f, err := os.OpenFile(path, os.O_RDWR, 0644)
+		f, err := fsOpenFile(path, os.O_RDWR, 0644)
 		if err != nil {
 			cleanup()
 			return fmt.Errorf("open %s: %w", fi.name, err)
@@ -340,7 +340,7 @@ func (s *MmapStore) mmapAll() error {
 }
 
 // closeMmaps unmaps and closes all data files (cleanup helper).
-func (s *MmapStore) closeMmaps() { // nocov: cleanup helper — called from Close/error paths
+func (s *MmapStore) closeMmaps() {
 	mmapFree(s.vectors)
 	mmapFree(s.nodes)
 	mmapFree(s.graphL0)
@@ -362,7 +362,7 @@ func (s *MmapStore) closeMmaps() { // nocov: cleanup helper — called from Clos
 // loadIdmap reads idmap.dat and populates docToNode/nodeToDoc maps.
 func (s *MmapStore) loadIdmap() error {
 	path := filepath.Join(s.dir, "idmap.dat")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := fsOpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
