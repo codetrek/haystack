@@ -7,29 +7,38 @@ import (
 	"unsafe"
 )
 
-// GetVector returns a copy of the vector for the given node ID.
+// GetVector returns a copy of the vector for the given node ID. The returned
+// slice is owned by the caller and is safe to retain and mutate.
 func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
+	ref, err := s.GetVectorRef(id)
+	if err != nil {
+		return nil, err
+	}
+	vec := make([]float32, len(ref))
+	copy(vec, ref)
+	return vec, nil
+}
+
+// GetVectorRef returns a zero-copy view of the vector backed directly by the
+// mmap region. Per the NodeStore contract the caller MUST NOT mutate the slice
+// or retain it across a store mutation (which may remap the region). This
+// avoids a per-call allocation on the hot distance-computation path; the HNSW
+// index serializes inserts (which grow/remap) against searches via its own
+// RWMutex, so refs stay valid for the duration of their use.
+func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
 	s.muVec.RLock()
 	defer s.muVec.RUnlock()
 
 	if id >= s.vecCapacity {
-		return nil, fmt.Errorf("MmapStore.GetVector: id %d out of range (cap %d)", id, s.vecCapacity)
+		return nil, fmt.Errorf("MmapStore.GetVectorRef: id %d out of range (cap %d)", id, s.vecCapacity)
 	}
 
 	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
 	if offset%4 != 0 {
-		return nil, fmt.Errorf("MmapStore.GetVector: unaligned offset %d for id %d", offset, id)
+		return nil, fmt.Errorf("MmapStore.GetVectorRef: unaligned offset %d for id %d", offset, id)
 	}
 	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
-	src := unsafe.Slice(ptr, s.dim)
-	vec := make([]float32, s.dim)
-	copy(vec, src)
-	return vec, nil
-}
-
-// GetVectorRef returns a copied vector for the given node ID.
-func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
-	return s.GetVector(id)
+	return unsafe.Slice(ptr, s.dim), nil
 }
 
 // GetNeighbors returns the neighbor list for the given node and layer.
