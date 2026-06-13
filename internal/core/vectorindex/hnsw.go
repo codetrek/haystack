@@ -1,7 +1,6 @@
 package vectorindex
 
 import (
-	"container/heap"
 	"fmt"
 	"math"
 	"math/rand"
@@ -550,14 +549,14 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 
 	// candidates: min-heap (closest first)
 	cands := &minDistHeap{}
-	heap.Push(cands, distItem{id: entryId, dist: entryDist})
+	cands.push(distItem{id: entryId, dist: entryDist})
 
 	// result: max-heap bounded by ef (farthest first at top)
 	results := &maxDistHeap{}
-	heap.Push(results, distItem{id: entryId, dist: entryDist})
+	results.push(distItem{id: entryId, dist: entryDist})
 
 	for cands.Len() > 0 {
-		c := heap.Pop(cands).(distItem)
+		c := cands.pop()
 
 		// If closest candidate is farther than the farthest result, stop.
 		farthest := (*results)[0] // top of max-heap = farthest
@@ -583,10 +582,10 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 
 			farthest = (*results)[0]
 			if results.Len() < ef || nbDist < farthest.dist {
-				heap.Push(cands, distItem{id: nbId, dist: nbDist})
-				heap.Push(results, distItem{id: nbId, dist: nbDist})
+				cands.push(distItem{id: nbId, dist: nbDist})
+				results.push(distItem{id: nbId, dist: nbDist})
 				if results.Len() > ef {
-					heap.Pop(results) // remove the farthest
+					results.pop() // remove the farthest
 				}
 			}
 		}
@@ -796,34 +795,111 @@ func (v *visitedSet) mark(id uint64) {
 	v.versions[id] = v.epoch
 }
 
-// minDistHeap is a min-heap (closest first).
+// minDistHeap is a min-heap (closest first). It provides typed push/pop helpers
+// instead of going through container/heap, whose Push(interface{}) / Pop()
+// interface{} signatures box every distItem onto the heap — that boxing
+// dominated searchLayer's allocation profile. The up/down sift logic mirrors
+// container/heap exactly, so ordering (including tie-breaking) is identical.
 type minDistHeap []distItem
 
-func (h minDistHeap) Len() int            { return len(h) }
-func (h minDistHeap) Less(i, j int) bool  { return h[i].dist < h[j].dist }
-func (h minDistHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *minDistHeap) Push(x interface{}) { *h = append(*h, x.(distItem)) }
-func (h *minDistHeap) Pop() interface{} {
-	old := *h
-	n := len(old)
-	item := old[n-1]
-	*h = old[:n-1]
-	return item
+func (h minDistHeap) Len() int           { return len(h) }
+func (h minDistHeap) less(i, j int) bool { return h[i].dist < h[j].dist }
+
+func (h *minDistHeap) push(it distItem) {
+	*h = append(*h, it)
+	h.up(len(*h) - 1)
 }
 
-// maxDistHeap is a max-heap (farthest first).
+func (h *minDistHeap) pop() distItem {
+	old := *h
+	n := len(old) - 1
+	old[0], old[n] = old[n], old[0]
+	h.down(0, n)
+	it := old[n]
+	*h = old[:n]
+	return it
+}
+
+func (h minDistHeap) up(j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || !h.less(j, i) {
+			break
+		}
+		h[i], h[j] = h[j], h[i]
+		j = i
+	}
+}
+
+func (h minDistHeap) down(i0, n int) {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.less(j2, j1) {
+			j = j2 // prefer the smaller child
+		}
+		if !h.less(j, i) {
+			break
+		}
+		h[i], h[j] = h[j], h[i]
+		i = j
+	}
+}
+
+// maxDistHeap is a max-heap (farthest first). See minDistHeap for why it avoids
+// container/heap.
 type maxDistHeap []distItem
 
-func (h maxDistHeap) Len() int            { return len(h) }
-func (h maxDistHeap) Less(i, j int) bool  { return h[i].dist > h[j].dist }
-func (h maxDistHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *maxDistHeap) Push(x interface{}) { *h = append(*h, x.(distItem)) }
-func (h *maxDistHeap) Pop() interface{} {
+func (h maxDistHeap) Len() int           { return len(h) }
+func (h maxDistHeap) less(i, j int) bool { return h[i].dist > h[j].dist }
+
+func (h *maxDistHeap) push(it distItem) {
+	*h = append(*h, it)
+	h.up(len(*h) - 1)
+}
+
+func (h *maxDistHeap) pop() distItem {
 	old := *h
-	n := len(old)
-	item := old[n-1]
-	*h = old[:n-1]
-	return item
+	n := len(old) - 1
+	old[0], old[n] = old[n], old[0]
+	h.down(0, n)
+	it := old[n]
+	*h = old[:n]
+	return it
+}
+
+func (h maxDistHeap) up(j int) {
+	for {
+		i := (j - 1) / 2 // parent
+		if i == j || !h.less(j, i) {
+			break
+		}
+		h[i], h[j] = h[j], h[i]
+		j = i
+	}
+}
+
+func (h maxDistHeap) down(i0, n int) {
+	i := i0
+	for {
+		j1 := 2*i + 1
+		if j1 >= n || j1 < 0 {
+			break
+		}
+		j := j1
+		if j2 := j1 + 1; j2 < n && h.less(j2, j1) {
+			j = j2 // prefer the larger child
+		}
+		if !h.less(j, i) {
+			break
+		}
+		h[i], h[j] = h[j], h[i]
+		i = j
+	}
 }
 
 // sortDistItems sorts distItems by distance ascending.
