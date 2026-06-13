@@ -34,7 +34,7 @@ const maxWalPayloadSize = 64 << 20
 
 // WAL is an append-only write-ahead log with CRC32 integrity checks.
 type WAL struct {
-	file *os.File
+	file osFile
 	lsn  uint64
 	mu   sync.Mutex
 	buf  *bufio.Writer
@@ -44,7 +44,7 @@ type WAL struct {
 // It scans the file to determine the current LSN.
 func OpenWAL(dir string) (*WAL, error) {
 	path := filepath.Join(dir, "wal.bin")
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := fsOpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("WAL: open: %w", err)
 	}

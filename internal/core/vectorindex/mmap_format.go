@@ -3,14 +3,20 @@ package vectorindex
 import (
 	"encoding/binary"
 	"fmt"
-	"os"
 	"path/filepath"
 	"unsafe"
 )
 
 func init() {
-	var x uint32 = 0x01020304
-	if *(*byte)(unsafe.Pointer(&x)) != 0x04 {
+	checkEndianProbe(0x01020304)
+}
+
+// checkEndianProbe panics unless probe's lowest-address byte is 0x04. init calls
+// it with the constant 0x01020304, so it panics exactly on big-endian platforms
+// (which the unsafe mmap reinterpretation in this package does not support).
+// Parameterizing the probe keeps the panic branch reachable from tests.
+func checkEndianProbe(probe uint32) {
+	if *(*byte)(unsafe.Pointer(&probe)) != 0x04 {
 		panic("mmap store requires little-endian platform")
 	}
 }
@@ -123,26 +129,26 @@ func writeMetaHeader(dir string, h *MetaHeader) error {
 	tmp := filepath.Join(dir, "meta.bin.tmp")
 	final := filepath.Join(dir, "meta.bin")
 
-	f, err := os.Create(tmp)
+	f, err := fsCreate(tmp)
 	if err != nil {
 		return fmt.Errorf("writeMetaHeader: create tmp: %w", err)
 	}
 
 	if err := binary.Write(f, binary.LittleEndian, h); err != nil {
 		f.Close()
-		os.Remove(tmp)
+		fsRemove(tmp)
 		return fmt.Errorf("writeMetaHeader: write: %w", err)
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		os.Remove(tmp)
+		fsRemove(tmp)
 		return fmt.Errorf("writeMetaHeader: sync: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		fsRemove(tmp)
 		return fmt.Errorf("writeMetaHeader: close: %w", err)
 	}
-	if err := os.Rename(tmp, final); err != nil {
+	if err := fsRename(tmp, final); err != nil {
 		return fmt.Errorf("writeMetaHeader: rename: %w", err)
 	}
 	return nil
@@ -151,7 +157,7 @@ func writeMetaHeader(dir string, h *MetaHeader) error {
 // readMetaHeader reads a MetaHeader from dir/meta.bin.
 func readMetaHeader(dir string) (*MetaHeader, error) {
 	path := filepath.Join(dir, "meta.bin")
-	f, err := os.Open(path)
+	f, err := fsOpen(path)
 	if err != nil {
 		return nil, fmt.Errorf("readMetaHeader: %w", err)
 	}
@@ -170,7 +176,7 @@ func readMetaHeader(dir string) (*MetaHeader, error) {
 // writeDataFileHeader writes a page-aligned header for a data file.
 // The header struct is written at offset 0, and the file is padded to pageSize.
 func writeDataFileHeader(path string, magic [4]byte, headerData any, totalSize int64) error {
-	f, err := os.Create(path)
+	f, err := fsCreate(path)
 	if err != nil {
 		return err
 	}

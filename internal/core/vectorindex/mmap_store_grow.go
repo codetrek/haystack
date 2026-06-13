@@ -3,7 +3,6 @@ package vectorindex
 import (
 	"encoding/binary"
 	"fmt"
-	"os"
 )
 
 // fileType identifies which mmap'd file to grow.
@@ -150,7 +149,7 @@ func (s *MmapStore) growUpper(requiredCap uint64) error {
 }
 
 // remapFile is the common grow logic: munmap → ftruncate → update header capacity → re-mmap.
-func (s *MmapStore) remapFile(f *os.File, data *[]byte, cap *uint64, newCap uint64, slotSize int, capHeaderOffset int) error {
+func (s *MmapStore) remapFile(f osFile, data *[]byte, cap *uint64, newCap uint64, slotSize int, capHeaderOffset int) error {
 	if err := mmapFree(*data); err != nil {
 		return fmt.Errorf("grow: munmap: %w", err)
 	}

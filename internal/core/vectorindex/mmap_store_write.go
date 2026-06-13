@@ -434,7 +434,7 @@ func (s *MmapStore) checkpointLocked() error {
 func (s *MmapStore) compactIdmap() error {
 	path := filepath.Join(s.dir, "idmap.dat")
 	tmp := path + ".tmp"
-	f, err := os.Create(tmp)
+	f, err := fsCreate(tmp)
 	if err != nil {
 		return err
 	}
@@ -464,7 +464,7 @@ func (s *MmapStore) compactIdmap() error {
 		if _, err := f.Write(entry); err != nil {
 			s.muDoc.RUnlock()
 			f.Close()
-			os.Remove(tmp)
+			fsRemove(tmp)
 			return err
 		}
 	}
@@ -484,13 +484,13 @@ func (s *MmapStore) compactIdmap() error {
 		return fmt.Errorf("MmapStore.compactIdmap: close old idmap: %w", err)
 	}
 
-	if err := os.Rename(tmp, path); err != nil {
+	if err := fsRename(tmp, path); err != nil {
 		s.muDoc.Unlock()
 		return err
 	}
 
 	// Reopen idmap for append.
-	nf, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
+	nf, err := fsOpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
 	if err != nil {
 		s.muDoc.Unlock()
 		return err
