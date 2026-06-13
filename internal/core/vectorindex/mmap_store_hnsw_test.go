@@ -233,6 +233,21 @@ func TestMmapHNSW_Upsert(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // mmapHNSWSearchResults runs search and returns results for comparison.
+// insertAllBatch builds an index from vecs via a single InsertBatch using doc
+// IDs "doc-%d". For MmapStore this collapses ~N per-insert WAL syncs into one,
+// which is far faster than a serial Insert loop while producing an identical
+// graph (same insertion order → same random levels → same topology).
+func insertAllBatch(t *testing.T, idx *HNSWIndex, vecs [][]float32) {
+	t.Helper()
+	items := make([]InsertItem, len(vecs))
+	for i, v := range vecs {
+		items[i] = InsertItem{DocId: fmt.Sprintf("doc-%d", i), Vector: v}
+	}
+	if err := idx.InsertBatch(items); err != nil {
+		t.Fatalf("InsertBatch (%d items): %v", len(vecs), err)
+	}
+}
+
 func mmapHNSWSearchResults(t *testing.T, idx *HNSWIndex, queries [][]float32, k int) [][]SearchResult {
 	t.Helper()
 	results := make([][]SearchResult, len(queries))
@@ -548,11 +563,7 @@ func TestMmapHNSW_UpperGraph_MultiLayer(t *testing.T) {
 
 	rng := rand.New(rand.NewSource(99))
 	vecs := randomVectors(rng, n, dim)
-	for i, v := range vecs {
-		if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
-			t.Fatalf("Insert doc-%d: %v", i, err)
-		}
-	}
+	insertAllBatch(t, idx, vecs)
 
 	// Verify entry point exists and has level > 0 (with 2000 nodes this is very likely).
 	epID, maxLevel, err := store.GetEntryPoint()
@@ -660,11 +671,7 @@ func TestMmapHNSW_UpperGraph_PersistenceReopen(t *testing.T) {
 			WithEfConstruction(200),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
-		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
-				t.Fatalf("Insert doc-%d: %v", i, err)
-			}
-		}
+		insertAllBatch(t, idx, vecs)
 
 		preResults = mmapHNSWSearchResults(t, idx, queries, k)
 		preEP, preMaxLevel, err = store.GetEntryPoint()
@@ -750,11 +757,7 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 			WithEfConstruction(200),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
-		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
-				t.Fatalf("Insert doc-%d: %v", i, err)
-			}
-		}
+		insertAllBatch(t, idx, vecs)
 
 		preResults = mmapHNSWSearchResults(t, idx, queries, k)
 
@@ -903,11 +906,7 @@ func TestMmapHNSW_RecallAt10(t *testing.T) {
 	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
 		WithEfConstruction(200), WithEfSearch(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
-	for i, v := range baseVecs {
-		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
-			t.Fatalf("MmapStore insert %d: %v", i, err)
-		}
-	}
+	insertAllBatch(t, mmapIdx, baseVecs)
 
 	var mmapRecallSum float64
 	mmapMapping := buildNodeToBaseIdxMap(mmapStore, n, "doc-%d")
