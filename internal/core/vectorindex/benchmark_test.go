@@ -881,14 +881,9 @@ func BenchmarkMmapStoreGetVector(b *testing.B) {
 	}
 
 	dir := b.TempDir()
-	err := ExportMemStoreToMmap(store, 1000, 128, dir)
+	ms, err := exportMemStoreToMmap(store, dir, 128, 16)
 	if err != nil {
 		b.Fatalf("export: %v", err)
-	}
-
-	ms, err := OpenMmapStore(dir, 128)
-	if err != nil {
-		b.Fatalf("open: %v", err)
 	}
 	defer ms.Close()
 

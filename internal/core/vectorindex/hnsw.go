@@ -543,7 +543,10 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 		return nil, err
 	}
 
-	visited := map[uint64]bool{entryId: true}
+	visited := visitedPool.Get().(*visitedSet)
+	visited.begin()
+	defer visitedPool.Put(visited)
+	visited.mark(entryId)
 
 	// candidates: min-heap (closest first)
 	cands := &minDistHeap{}
@@ -568,10 +571,10 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 		}
 
 		for _, nbId := range neighbors {
-			if visited[nbId] {
+			if visited.seen(nbId) {
 				continue
 			}
-			visited[nbId] = true
+			visited.mark(nbId)
 
 			nbDist, err := h.nodeDistCalc(nbId, query, queryNorm)
 			if err != nil {
@@ -611,84 +614,88 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	// Sort candidates by distance to query.
 	sortDistItems(candidates)
 
-	// Build vector cache from store if not provided.
-	if vecCache == nil {
-		vecCache = make(map[uint64][]float32, len(candidates))
-		for _, c := range candidates {
-			v, err := h.store.GetVectorRef(c.id)
-			if err == nil {
-				vecCache[c.id] = v
-			}
+	// Resolve each candidate's vector (and norm) once into position-indexed
+	// slices. The diversity loop below is O(candidates*selected); reading from
+	// these slices instead of id-keyed maps removes the map hashing that
+	// dominated the insert CPU profile. vecs[i]/norms[i] correspond to the
+	// just-sorted candidates[i]. A nil vecs[i] means the vector was
+	// unavailable; norms[i] < 0 means the norm was unavailable (mirroring the
+	// previous "missing from cache" checks).
+	n := len(candidates)
+	vecs := make([][]float32, n)
+	for i, c := range candidates {
+		if vecCache != nil {
+			vecs[i] = vecCache[c.id]
+		} else if v, err := h.store.GetVectorRef(c.id); err == nil {
+			vecs[i] = v
 		}
 	}
-
-	// Pre-load norms for cosine distance optimization.
-	var normCache map[uint64]float32
+	var norms []float32
 	if h.isCosine {
-		normCache = make(map[uint64]float32, len(candidates))
-		for _, c := range candidates {
-			if n, err := h.store.GetNorm(c.id); err == nil {
-				normCache[c.id] = n
+		norms = make([]float32, n)
+		for i, c := range candidates {
+			if nrm, err := h.store.GetNorm(c.id); err == nil {
+				norms[i] = nrm
+			} else {
+				norms[i] = -1 // sentinel: norm unavailable
 			}
 		}
 	}
 
-	selected := make([]distItem, 0, m)
-	for _, c := range candidates {
+	selected := make([]int, 0, m) // indices into candidates/vecs/norms
+	for i := range candidates {
 		if len(selected) >= m {
 			break
 		}
-		// Check if c is closer to query than to any already-selected neighbor.
-		good := true
-		cVec, ok := vecCache[c.id]
-		if !ok {
+		cVec := vecs[i]
+		if cVec == nil {
 			continue
 		}
-		for _, s := range selected {
-			sVec, ok := vecCache[s.id]
-			if !ok {
+		// Check if c is closer to query than to any already-selected neighbor.
+		good := true
+		for _, sIdx := range selected {
+			sVec := vecs[sIdx]
+			if sVec == nil {
 				continue
 			}
 			var dist float32
-			if h.isCosine {
-				cNorm, cOk := normCache[c.id]
-				sNorm, sOk := normCache[s.id]
-				if cOk && sOk {
-					dist = CosineDistanceWithNorms(cVec, sVec, cNorm, sNorm)
-				} else {
-					dist = h.distance(cVec, sVec)
-				}
+			if h.isCosine && norms[i] >= 0 && norms[sIdx] >= 0 {
+				dist = CosineDistanceWithNorms(cVec, sVec, norms[i], norms[sIdx])
 			} else {
 				dist = h.distance(cVec, sVec)
 			}
-			if dist < c.dist {
+			if dist < candidates[i].dist {
 				good = false
 				break
 			}
 		}
 		if good {
-			selected = append(selected, c)
+			selected = append(selected, i)
 		}
 	}
 
 	// If we didn't get enough from heuristic, fill from remaining by distance.
 	if len(selected) < m {
-		selectedSet := make(map[uint64]bool, len(selected))
-		for _, s := range selected {
-			selectedSet[s.id] = true
+		inSel := make([]bool, n)
+		for _, idx := range selected {
+			inSel[idx] = true
 		}
-		for _, c := range candidates {
+		for i := range candidates {
 			if len(selected) >= m {
 				break
 			}
-			if !selectedSet[c.id] {
-				selected = append(selected, c)
-				selectedSet[c.id] = true
+			if !inSel[i] {
+				selected = append(selected, i)
+				inSel[i] = true
 			}
 		}
 	}
 
-	return selected
+	out := make([]distItem, len(selected))
+	for j, idx := range selected {
+		out[j] = candidates[idx]
+	}
+	return out
 }
 
 // nodeDistance computes distance between a stored node and a query vector.
@@ -739,6 +746,54 @@ func removeId(ids []uint64, target uint64) []uint64 {
 type distItem struct {
 	id   uint64
 	dist float32
+}
+
+// visitedSet is a reusable, allocation-free set of node IDs based on version
+// stamping: an ID counts as visited iff versions[id] == epoch. Resetting the
+// set is O(1) (bump the epoch) instead of clearing a map, and node IDs are
+// dense 0-based so a flat slice indexes them directly. This replaces the
+// per-call map[uint64]bool that dominated searchLayer's CPU profile.
+//
+// Buffers are pooled (visitedPool) rather than stored on HNSWIndex because
+// searchLayer runs concurrently under RLock; each call borrows its own set.
+type visitedSet struct {
+	versions []uint32
+	epoch    uint32
+}
+
+var visitedPool = sync.Pool{New: func() any { return &visitedSet{} }}
+
+// begin prepares the set for a fresh search by advancing the epoch, which
+// logically clears all prior marks. On epoch overflow it zeroes the backing
+// array so stale stamps cannot alias the wrapped-around epoch.
+func (v *visitedSet) begin() {
+	if v.epoch == math.MaxUint32 {
+		for i := range v.versions {
+			v.versions[i] = 0
+		}
+		v.epoch = 0
+	}
+	v.epoch++
+}
+
+// seen reports whether id was marked during the current epoch.
+func (v *visitedSet) seen(id uint64) bool {
+	return id < uint64(len(v.versions)) && v.versions[id] == v.epoch
+}
+
+// mark records id as visited in the current epoch, growing the backing array
+// (with doubling to amortize) when id is out of range.
+func (v *visitedSet) mark(id uint64) {
+	if id >= uint64(len(v.versions)) {
+		newLen := id + 1
+		if double := uint64(len(v.versions)) * 2; double > newLen {
+			newLen = double
+		}
+		grown := make([]uint32, newLen)
+		copy(grown, v.versions)
+		v.versions = grown
+	}
+	v.versions[id] = v.epoch
 }
 
 // minDistHeap is a min-heap (closest first).

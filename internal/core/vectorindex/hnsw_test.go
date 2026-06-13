@@ -351,6 +351,40 @@ func TestHNSWRecallSmall(t *testing.T) {
 	assert.Equal(t, 1.0, avgRecall, "Expected perfect recall for 100 vectors")
 }
 
+// TestVisitedSet exercises the version-stamped visited set used by searchLayer,
+// including the array-grow path and the epoch-overflow wraparound that zeroes
+// the backing array (which normal search workloads never reach).
+func TestVisitedSet(t *testing.T) {
+	v := &visitedSet{}
+
+	// First epoch: an id is unseen until marked.
+	v.begin()
+	assert.False(t, v.seen(3), "id should be unseen before marking")
+	v.mark(3)
+	assert.True(t, v.seen(3), "id should be seen after marking")
+	assert.False(t, v.seen(1000), "unmarked out-of-range id should be unseen")
+
+	// A new epoch logically clears all prior marks in O(1).
+	v.begin()
+	assert.False(t, v.seen(3), "mark from previous epoch should be cleared")
+
+	// mark grows the backing array to fit a large out-of-range id.
+	v.mark(5000)
+	assert.True(t, v.seen(5000), "id should be seen after grow+mark")
+
+	// Epoch overflow: force the wraparound branch in begin(), which must zero
+	// the backing array so a stale stamp equal to the pre-wrap epoch cannot
+	// alias the reset epoch.
+	v.mark(7)
+	v.epoch = math.MaxUint32
+	v.versions[7] = math.MaxUint32 // stale stamp matching the pre-wrap epoch
+	v.begin()                      // wraps: zero array, epoch -> 0 -> 1
+	assert.Equal(t, uint32(1), v.epoch, "epoch should reset to 1 after overflow")
+	assert.False(t, v.seen(7), "stale stamp must not survive the wraparound")
+	v.mark(7)
+	assert.True(t, v.seen(7), "id should be seen after re-marking post-wraparound")
+}
+
 func TestHNSWRecallLarger(t *testing.T) {
 	// 1000 vectors, 128 dimensions.
 	rng := rand.New(rand.NewSource(54321))
