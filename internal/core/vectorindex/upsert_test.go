@@ -11,7 +11,7 @@ import (
 
 func TestHNSWUpsertEntryPoint(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 
 	// Insert single node — becomes entry point
 	err := idx.Insert("doc1", []float32{1, 0, 0})
@@ -38,7 +38,7 @@ func TestHNSWUpsertEntryPoint(t *testing.T) {
 
 func TestHNSWInsertBatchDuplicateDocId(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 
 	items := []InsertItem{
 		{DocId: "doc1", Vector: []float32{1, 0, 0}},
@@ -62,7 +62,7 @@ func TestHNSWInsertBatchDuplicateDocId(t *testing.T) {
 
 func TestHNSWInsertBatchPartialFailure(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	// Insert initial data
 	err := idx.Insert("existing", []float32{1, 0, 0})

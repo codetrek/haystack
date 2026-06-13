@@ -224,7 +224,7 @@ func BenchmarkHNSW_MemStore_50K_Insert(b *testing.B) {
 
 	for n := 0; n < b.N; n++ {
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+		idx := NewHNSWIndex(store, WithCosineDistance(),
 			WithRand(rand.New(rand.NewSource(42))))
 
 		start := time.Now()
@@ -258,7 +258,7 @@ func BenchmarkHNSW_MmapStore_50K_Insert(b *testing.B) {
 		}
 
 		start := time.Now()
-		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(),
+		idx := NewHNSWIndex(store, WithCosineDistance(),
 			WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
@@ -302,7 +302,7 @@ func BenchmarkHNSW_Search_MemStore_vs_MmapStore(b *testing.B) {
 
 	// Build MemStore index.
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+	memIdx := NewHNSWIndex(memStore, WithCosineDistance(),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range vecs {
 		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
@@ -318,7 +318,7 @@ func BenchmarkHNSW_Search_MemStore_vs_MmapStore(b *testing.B) {
 	}
 	defer mmapStore.Close()
 
-	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+	mmapIdx := NewHNSWIndex(mmapStore, WithCosineDistance(),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range vecs {
 		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
@@ -391,7 +391,7 @@ func TestRecallAt10_SIFT(t *testing.T) {
 
 	// Test MemStore recall.
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, CosineDistance, WithCosineDistance(),
+	memIdx := NewHNSWIndex(memStore, WithCosineDistance(),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range baseVecs {
 		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
@@ -420,7 +420,7 @@ func TestRecallAt10_SIFT(t *testing.T) {
 	}
 	defer mmapStore.Close()
 
-	mmapIdx := NewHNSWIndex(mmapStore, CosineDistance, WithCosineDistance(),
+	mmapIdx := NewHNSWIndex(mmapStore, WithCosineDistance(),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range baseVecs {
 		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {

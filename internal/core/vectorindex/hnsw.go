@@ -59,20 +59,58 @@ func WithRand(r *rand.Rand) Option {
 	return func(h *HNSWIndex) { h.rng = r }
 }
 
-// WithCosineDistance marks the index as using cosine distance, enabling
-// precomputed norm optimizations. Pass this option when using CosineDistance
-// as the distance function.
+// The distance metric is selected with one of the With*Distance options below.
+// Each sets both h.distance and h.isCosine together, so the metric and the
+// norm-cache fast path can never disagree — there is no separate distance
+// argument to fall out of sync. nodeDistCalc selects the norm-cache fast path
+// purely off isCosine; if isCosine were true under a non-cosine metric,
+// searchLayer/nodeDistCalc would use cosine-with-norms while the shrink/delete
+// paths used h.distance, i.e. two metrics on one graph. When no metric option
+// is passed, the index defaults to cosine (see NewHNSWIndex).
+
+// WithCosineDistance selects cosine distance and enables precomputed-norm
+// optimizations. This is also the default when no metric option is given.
 func WithCosineDistance() Option {
 	return func(h *HNSWIndex) {
+		h.distance = CosineDistance
 		h.isCosine = true
 	}
 }
 
-// NewHNSWIndex creates a new HNSW index.
-func NewHNSWIndex(store NodeStore, distance DistanceFunc, opts ...Option) *HNSWIndex {
+// WithEuclideanDistance selects L2 (Euclidean) distance.
+func WithEuclideanDistance() Option {
+	return func(h *HNSWIndex) {
+		h.distance = EuclideanDistance
+		h.isCosine = false
+	}
+}
+
+// WithDotProductDistance selects dot-product distance (1 - dot), intended for
+// pre-normalized vectors.
+func WithDotProductDistance() Option {
+	return func(h *HNSWIndex) {
+		h.distance = DotProductDistance
+		h.isCosine = false
+	}
+}
+
+// WithDistanceFunc selects a custom distance metric. The norm-cache fast path
+// is disabled, as it is only valid for cosine distance.
+func WithDistanceFunc(fn DistanceFunc) Option {
+	return func(h *HNSWIndex) {
+		h.distance = fn
+		h.isCosine = false
+	}
+}
+
+// NewHNSWIndex creates a new HNSW index. The distance metric is chosen with a
+// With*Distance option; when none is given the index defaults to cosine
+// distance with norm caching.
+func NewHNSWIndex(store NodeStore, opts ...Option) *HNSWIndex {
 	h := &HNSWIndex{
 		store:          store,
-		distance:       distance,
+		distance:       CosineDistance,
+		isCosine:       true,
 		M:              DefaultM,
 		Mmax0:          DefaultMmax0,
 		efConstruction: DefaultEfConstruction,

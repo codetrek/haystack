@@ -288,7 +288,7 @@ func bruteForceKNN(query []float32, vecs [][]float32, k int, dist DistanceFunc) 
 
 func TestHNSWEmptyIndex(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(store, WithCosineDistance())
 
 	results, err := idx.Search([]float32{1, 2, 3}, 10)
 	requireNoError(t, err)
@@ -297,7 +297,7 @@ func TestHNSWEmptyIndex(t *testing.T) {
 
 func TestHNSWSingleVector(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(store, WithCosineDistance())
 
 	requireNoError(t, idx.Insert("doc-1", []float32{1, 0, 0}))
 
@@ -320,7 +320,7 @@ func TestHNSWRecallSmall(t *testing.T) {
 	queries := randomVectors(rng, numQueries, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	for i, v := range vecs {
 		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -397,7 +397,7 @@ func TestHNSWRecallLarger(t *testing.T) {
 	queries := randomVectors(rng, numQueries, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	for i, v := range vecs {
 		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -436,7 +436,7 @@ func TestHNSWNeighborLimits(t *testing.T) {
 	vecs := randomVectors(rng, n, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(88))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(88))))
 
 	for i, v := range vecs {
 		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -464,7 +464,7 @@ func TestHNSWNeighborLimits(t *testing.T) {
 
 func TestHNSWEntryPointUpdate(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(1))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(1))))
 
 	// Insert many vectors; track the max level seen.
 	maxLevelSeen := 0
@@ -509,7 +509,7 @@ func TestHNSWDelete(t *testing.T) {
 
 	vecs := randomVectors(rng, n, dim)
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(100))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(100))))
 
 	for i, v := range vecs {
 		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
@@ -544,7 +544,7 @@ func TestHNSWDelete(t *testing.T) {
 
 func TestHNSWWithEuclideanDistance(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, EuclideanDistance, WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithEuclideanDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	requireNoError(t, idx.Insert("a", []float32{0, 0}))
 	requireNoError(t, idx.Insert("b", []float32{1, 0}))
@@ -561,7 +561,7 @@ func TestHNSWWithEuclideanDistance(t *testing.T) {
 
 func TestHNSWWithDotProductDistance(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, DotProductDistance, WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithDotProductDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	// Normalized vectors.
 	sqrt2 := float32(1.0 / math.Sqrt(2))
@@ -581,7 +581,7 @@ func TestHNSWWithDotProductDistance(t *testing.T) {
 
 func TestHNSWDeleteEntryPoint(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	requireNoError(t, idx.Insert("doc-0", []float32{1, 0}))
 	requireNoError(t, idx.Insert("doc-1", []float32{0, 1}))
@@ -608,7 +608,7 @@ func TestHNSWDeleteEntryPoint(t *testing.T) {
 
 func TestHNSWDeleteAllVectors(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	requireNoError(t, idx.Insert("doc-0", []float32{1, 0}))
 	requireNoError(t, idx.Insert("doc-1", []float32{0, 1}))
@@ -624,7 +624,7 @@ func TestHNSWDeleteAllVectors(t *testing.T) {
 
 func TestHNSWSearchKGreaterThanN(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 	requireNoError(t, idx.Insert("doc-0", []float32{1, 0, 0}))
 	requireNoError(t, idx.Insert("doc-1", []float32{0, 1, 0}))
@@ -637,7 +637,7 @@ func TestHNSWSearchKGreaterThanN(t *testing.T) {
 
 func TestHNSWInsertUpsert(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 
 	// Insert a vector
 	err := idx.Insert("doc1", []float32{1, 0, 0})
@@ -661,7 +661,7 @@ func TestHNSWInsertUpsert(t *testing.T) {
 
 func TestHNSWInsertUpsertMultiple(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 
 	// Insert 5 vectors
 	for i := 0; i < 5; i++ {

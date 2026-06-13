@@ -165,7 +165,7 @@ var _ NodeStore = (*errorStore)(nil)
 
 func TestInsertNextNodeIdError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	es.NextNodeIdErr = fmt.Errorf("injected: NextNodeId")
 	err := idx.Insert("doc1", []float32{1, 0})
@@ -175,7 +175,7 @@ func TestInsertNextNodeIdError(t *testing.T) {
 
 func TestInsertPutNodeError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	es.PutNodeErr = fmt.Errorf("injected: PutNode")
 	err := idx.Insert("doc1", []float32{1, 0})
@@ -185,7 +185,7 @@ func TestInsertPutNodeError(t *testing.T) {
 
 func TestInsertSetNodeMappingError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	es.SetNodeMappingErr = fmt.Errorf("injected: SetNodeMapping")
 	err := idx.Insert("doc1", []float32{1, 0})
@@ -195,7 +195,7 @@ func TestInsertSetNodeMappingError(t *testing.T) {
 
 func TestInsertSetNeighborsError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	es.SetNeighborsErr = fmt.Errorf("injected: SetNeighbors")
 	err := idx.Insert("doc1", []float32{1, 0})
@@ -208,7 +208,7 @@ func TestInsertSetNeighborsError(t *testing.T) {
 // point to the new node and returns.
 func TestInsertStaleEntryPointRecovers(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	// Insert a first node so the index has an entry point.
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
@@ -225,7 +225,7 @@ func TestInsertStaleEntryPointRecovers(t *testing.T) {
 // Same branch, but SetEntryPoint itself fails during the recovery.
 func TestInsertStaleEntryPointSetEntryPointError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 
@@ -239,7 +239,7 @@ func TestInsertStaleEntryPointSetEntryPointError(t *testing.T) {
 // First-node insert path where SetEntryPoint fails.
 func TestInsertFirstNodeSetEntryPointError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	es.SetEntryPointErr = fmt.Errorf("injected: SetEntryPoint")
 	err := idx.Insert("doc1", []float32{1, 0})
@@ -253,7 +253,7 @@ func TestInsertFirstNodeSetEntryPointError(t *testing.T) {
 
 func TestSearchGetEntryPointError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	// Empty index — GetEntryPoint returns error. Search returns nil, nil.
 	results, err := idx.Search([]float32{1, 0}, 5)
@@ -263,7 +263,7 @@ func TestSearchGetEntryPointError(t *testing.T) {
 
 func TestSearchStaleEntryPoint(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 
@@ -280,7 +280,7 @@ func TestSearchStaleEntryPoint(t *testing.T) {
 
 func TestDeleteGetNodeIdError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	es.GetNodeIdErr = fmt.Errorf("injected: GetNodeId")
 	err := idx.Delete("doc1")
@@ -290,7 +290,7 @@ func TestDeleteGetNodeIdError(t *testing.T) {
 
 func TestDeleteGetNodeLevelError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 
@@ -302,7 +302,7 @@ func TestDeleteGetNodeLevelError(t *testing.T) {
 
 func TestDeleteGetNeighborsError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 
@@ -314,7 +314,7 @@ func TestDeleteGetNeighborsError(t *testing.T) {
 
 func TestDeleteDeleteNodeError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 
@@ -326,7 +326,7 @@ func TestDeleteDeleteNodeError(t *testing.T) {
 
 func TestDeleteDeleteNodeMappingError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 
@@ -338,7 +338,7 @@ func TestDeleteDeleteNodeMappingError(t *testing.T) {
 
 func TestDeleteSetNeighborsError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	// Insert enough nodes so that Delete has neighbors to reconnect.
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0, 0}))
@@ -357,7 +357,7 @@ func TestDeleteSetNeighborsError(t *testing.T) {
 
 func TestNodeDistanceWithNormFallback(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(es, WithCosineDistance())
 
 	requireNoError(t, es.inner.PutNode(1, 0, []float32{1, 0}))
 	requireNoError(t, es.inner.SetNorm(1, vek32.Norm([]float32{1, 0})))
@@ -376,7 +376,7 @@ func TestNodeDistanceWithNormFallback(t *testing.T) {
 
 func TestInsertWithCosineDistanceMultiNode(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(es, WithCosineDistance())
 
 	// Insert several nodes to exercise phase-1 greedy traversal and
 	// phase-2 neighbor selection with cosine + norm caching.
@@ -397,7 +397,7 @@ func TestInsertWithCosineDistanceMultiNode(t *testing.T) {
 
 func TestInsertBatchPropagatesError(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	items := []InsertItem{
 		{DocId: "a", Vector: []float32{1, 0}},
@@ -413,7 +413,7 @@ func TestInsertBatchPropagatesError(t *testing.T) {
 // Delete a doc that was never inserted — should be a no-op.
 func TestDeleteNonExistentDoc(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance)
+	idx := NewHNSWIndex(es)
 
 	err := idx.Delete("never-inserted")
 	requireNoError(t, err)
@@ -423,7 +423,7 @@ func TestDeleteNonExistentDoc(t *testing.T) {
 // via GetEntryPoint error after the index was previously populated.
 func TestInsertAfterDeleteAll(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, CosineDistance, WithCosineDistance())
+	idx := NewHNSWIndex(es, WithCosineDistance())
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 	requireNoError(t, idx.Insert("doc2", []float32{0, 1}))

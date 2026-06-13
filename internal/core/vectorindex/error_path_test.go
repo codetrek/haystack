@@ -15,7 +15,7 @@ import (
 
 func TestRandomLevelDistribution(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithM(16), WithRand(rand.New(rand.NewSource(12345))))
+	idx := NewHNSWIndex(store, WithM(16), WithRand(rand.New(rand.NewSource(12345))))
 
 	const iterations = 10_000
 	counts := make(map[int]int)
@@ -46,7 +46,7 @@ func (zeroSource) Seed(int64)   {}
 // Test the r == 0 guard in randomLevel by injecting a source that returns 0.
 func TestRandomLevelZeroGuard(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithM(16), WithRand(rand.New(zeroSource{})))
+	idx := NewHNSWIndex(store, WithM(16), WithRand(rand.New(zeroSource{})))
 
 	level := idx.randomLevel()
 	assert.GreaterOrEqual(t, level, 0, "level from r=0 must be non-negative")
@@ -59,7 +59,7 @@ func TestRandomLevelZeroGuard(t *testing.T) {
 
 func TestNodeDistanceGetVectorRefError(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 
 	// Node 999 does not exist — GetVectorRef returns an error.
 	_, err := idx.nodeDistance(999, []float32{1.0, 2.0})
@@ -68,7 +68,7 @@ func TestNodeDistanceGetVectorRefError(t *testing.T) {
 
 func TestNodeDistanceSuccess(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance)
+	idx := NewHNSWIndex(store)
 
 	requireNoError(t, store.PutNode(1, 0, []float32{1.0, 0.0}))
 
@@ -84,7 +84,7 @@ func TestNodeDistanceSuccess(t *testing.T) {
 func TestRandomLevelDifferentM(t *testing.T) {
 	for _, m := range []int{4, 8, 32, 64} {
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithM(m),
+		idx := NewHNSWIndex(store, WithM(m),
 			WithRand(rand.New(rand.NewSource(42))))
 
 		for i := 0; i < 500; i++ {

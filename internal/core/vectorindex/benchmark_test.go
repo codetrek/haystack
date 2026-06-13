@@ -57,7 +57,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 	t.Logf("Loaded %d vectors, %d queries, %d ground truth sets", len(vectors), len(queries), len(groundTruth))
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance,
+	idx := NewHNSWIndex(store,
 		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
@@ -152,7 +152,7 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 	}
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance,
+	idx := NewHNSWIndex(store,
 		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
@@ -238,7 +238,7 @@ func BenchmarkHNSWInsert(b *testing.B) {
 	vecs := randomVectors(rng, b.N, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -261,7 +261,7 @@ func BenchmarkHNSWSearch(b *testing.B) {
 	vecs := randomVectors(rng, n, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
+	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(99))))
 
 	for i, v := range vecs {
 		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -296,7 +296,7 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 	vecs := randomVectors(rng, n, dim)
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, CosineDistance,
+	idx := NewHNSWIndex(store,
 		WithCosineDistance(),
 		WithEfConstruction(200),
 		WithEfSearch(128),
@@ -342,7 +342,7 @@ func TestEdgeCases(t *testing.T) {
 		vecs := randomVectors(rng, n, dim)
 
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+		idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
 			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -358,7 +358,7 @@ func TestEdgeCases(t *testing.T) {
 
 	t.Run("empty_graph_search", func(t *testing.T) {
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance())
+		idx := NewHNSWIndex(store, WithCosineDistance())
 
 		query := make([]float32, 128)
 		for i := range query {
@@ -383,7 +383,7 @@ func TestEdgeCases(t *testing.T) {
 		vecs := randomVectors(rng, n, dim)
 
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+		idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
 			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
@@ -462,7 +462,7 @@ func TestBenchmarkParametric(t *testing.T) {
 		}
 
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance)
+		idx := NewHNSWIndex(store)
 
 		t.Run(fmt.Sprintf("N=%d/insert", n), func(t *testing.T) {
 			start := time.Now()
@@ -565,7 +565,7 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 
 	for _, efc := range efConstructionValues {
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithEfConstruction(efc))
+		idx := NewHNSWIndex(store, WithEfConstruction(efc))
 
 		t.Run(fmt.Sprintf("efC=%d/insert", efc), func(t *testing.T) {
 			start := time.Now()
@@ -665,7 +665,7 @@ func TestBenchmarkMCompare(t *testing.T) {
 
 	for _, m := range mValues {
 		store := NewMemNodeStore()
-		idx := NewHNSWIndex(store, CosineDistance, WithM(m))
+		idx := NewHNSWIndex(store, WithM(m))
 
 		t.Run(fmt.Sprintf("M=%d/insert", m), func(t *testing.T) {
 			start := time.Now()
@@ -809,7 +809,7 @@ func TestBenchmarkSIFT(t *testing.T) {
 	efSearchValues := []int{128, 200, 400}
 
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, EuclideanDistance)
+	idx := NewHNSWIndex(store, WithEuclideanDistance())
 
 	t.Run("insert", func(t *testing.T) {
 		start := time.Now()
