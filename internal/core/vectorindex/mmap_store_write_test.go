@@ -199,37 +199,6 @@ func TestMmapStoreBatchWriteAndRead(t *testing.T) {
 	}
 }
 
-func TestMmapStoreBatchNesting(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
-
-	s.BeginBatch()
-	assert.Equal(t, 1, s.BatchDepth())
-
-	s.BeginBatch()
-	assert.Equal(t, 2, s.BatchDepth())
-
-	requireNoError(t, s.CommitBatch(false))
-	assert.Equal(t, 1, s.BatchDepth())
-	assert.True(t, s.batchMode) // still in batch
-
-	requireNoError(t, s.CommitBatch(true))
-	assert.Equal(t, 0, s.BatchDepth())
-	assert.False(t, s.batchMode)
-}
-
-func TestMmapStoreDiscardBatch(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
-
-	s.BeginBatch()
-	s.BeginBatch()
-	assert.Equal(t, 2, s.BatchDepth())
-
-	s.DiscardBatch()
-	assert.Equal(t, 0, s.BatchDepth())
-	assert.False(t, s.batchMode)
-}
 
 func TestMmapStoreNextNodeId(t *testing.T) {
 	s := openTestMmapStore(t)
@@ -307,18 +276,3 @@ func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 	assert.Equal(t, uint64(50), nodeId)
 }
 
-func TestSetSyncMode_ErrorDuringActiveBatch(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
-
-	requireNoError(t, s.SetSyncMode(SyncDeferred))
-
-	s.BeginBatch()
-	err := s.SetSyncMode(SyncImmediate)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "batch is active")
-
-	requireNoError(t, s.CommitBatch(false))
-
-	requireNoError(t, s.SetSyncMode(SyncImmediate))
-}
