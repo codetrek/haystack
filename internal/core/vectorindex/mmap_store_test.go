@@ -223,6 +223,35 @@ func TestTxnAbortFaultsAndDiscardsOnReopen(t *testing.T) {
 	}
 }
 
+func TestTxnAbortDiscardedAfterGracefulClose(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.txnAbort(fmt.Errorf("boom"))
+	// Graceful Close (NOT a crash) must NOT persist the aborted txn.
+	_ = s.Close()
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if s2.meta.NodeCount != 0 {
+		t.Fatalf("NodeCount = %d, want 0 (aborted txn must not survive graceful Close)", s2.meta.NodeCount)
+	}
+	if s2.meta.NextNodeId != 0 {
+		t.Fatalf("NextNodeId = %d, want 0", s2.meta.NextNodeId)
+	}
+}
+
 func TestTxnBeginRejectsNested(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})

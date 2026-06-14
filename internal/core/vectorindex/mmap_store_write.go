@@ -258,6 +258,10 @@ func (s *MmapStore) DeleteNodeMapping(docId string) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	s.muDoc.Lock()
 	defer s.muDoc.Unlock()
 
@@ -413,6 +417,7 @@ func (s *MmapStore) txnCommit() error {
 	if !s.inTxn {
 		return fmt.Errorf("MmapStore.txnCommit: no open transaction")
 	}
+	s.inTxn = false // the transaction is ending regardless of success/failure
 	if _, err := s.wal.Append(WalTxnCommit, nil, true); err != nil {
 		return s.fault(fmt.Errorf("MmapStore.txnCommit: WAL append: %w", err))
 	}
@@ -422,7 +427,6 @@ func (s *MmapStore) txnCommit() error {
 	if err := s.syncAll(); err != nil {
 		return s.fault(fmt.Errorf("MmapStore.txnCommit: msync: %w", err))
 	}
-	s.inTxn = false
 	if s.opsSinceCheckpoint >= s.checkpointInterval {
 		return s.checkpointLocked()
 	}

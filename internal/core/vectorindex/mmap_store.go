@@ -209,7 +209,11 @@ func (s *MmapStore) Close() error {
 	}
 
 	// 1. Checkpoint: msync + writeMeta + WAL truncate + idmap compact.
-	setErr(s.checkpointLocked())
+	// A faulted store has uncommitted in-place writes; checkpointing here would
+	// persist them and truncate the WAL, defeating crash-recovery discard. Skip it.
+	if s.faulted == nil {
+		setErr(s.checkpointLocked())
+	}
 
 	// 2. Close WAL.
 	if s.wal != nil {
