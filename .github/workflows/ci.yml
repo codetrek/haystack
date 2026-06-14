@@ -56,15 +56,4 @@ jobs:
 
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
-        shell: bash
-        run: |
-          echo "RESULT OS=${{ runner.os }}"
-          FAULT='Error|Fault|Crash|Kill9|Recovery|Replay|WAL|Checkpoint|Idmap|Remap|Grow|OutOfRange|Endian'
-          echo "=== total time: fault subset (noise re-check vs prior run) ==="
-          t0=$(date +%s); go test -count=1 -run "$FAULT" ./internal/core/vectorindex/ >/dev/null 2>&1; t1=$(date +%s)
-          echo "RESULT RUN_ONLY_FAULT=$((t1-t0))s"
-          echo "=== per-test timing (verbose), fault subset — sorted desc ==="
-          go test -v -count=1 -run "$FAULT" ./internal/core/vectorindex/ 2>&1 \
-            | grep -E '^--- (PASS|FAIL):' \
-            | sed -E 's/^--- (PASS|FAIL): (Test[A-Za-z0-9_]+) \(([0-9.]+)s\)/PERTEST \3 \2/' \
-            | sort -rn | head -40
+        run: go test -timeout 15m ./internal/core/vectorindex/...
