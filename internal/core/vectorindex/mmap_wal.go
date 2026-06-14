@@ -21,6 +21,8 @@ const (
 	WalSetNeighbors WalRecordType = 3
 	WalSetEntry     WalRecordType = 4
 	WalSetNorm      WalRecordType = 5
+	WalTxnBegin     WalRecordType = 6 // transaction start marker (empty payload)
+	WalTxnCommit    WalRecordType = 7 // transaction commit marker (empty payload)
 )
 
 // WAL record disk layout: LSN(8) + Length(4) + Type(1) + Payload(var) + CRC32(4)

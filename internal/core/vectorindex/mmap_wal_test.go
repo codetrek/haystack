@@ -296,6 +296,22 @@ func TestWALReplayGrowsDuringReplay(t *testing.T) {
 	assert.Greater(t, s2.vecCapacity, uint64(1500))
 }
 
+func TestWalTxnMarkerConstants(t *testing.T) {
+	// Markers must be distinct from the five data record types and from
+	// each other; replay switches on these exact values.
+	got := map[WalRecordType]string{
+		WalInsert: "insert", WalDelete: "delete", WalSetNeighbors: "neighbors",
+		WalSetEntry: "entry", WalSetNorm: "norm",
+		WalTxnBegin: "begin", WalTxnCommit: "commit",
+	}
+	if len(got) != 7 {
+		t.Fatalf("record type values collide: %v", got)
+	}
+	if WalTxnBegin != 6 || WalTxnCommit != 7 {
+		t.Fatalf("marker values: begin=%d commit=%d, want 6 and 7", WalTxnBegin, WalTxnCommit)
+	}
+}
+
 func TestWALContinueLSNAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	w, err := OpenWAL(dir)
