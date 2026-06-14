@@ -69,3 +69,10 @@ jobs:
           rm -f vitest.log
           exit "$status"
 
+      - name: Test searchcore (separate module)
+        # searchcore has its own go.mod, so `go test ./...` in the repo root does
+        # not reach it. Run its tests on all platforms (pebblekv is file-based).
+        # Coverage gating is deferred until searchcore coverage reaches the bar.
+        working-directory: searchcore
+        run: go test -timeout 10m ./...
+
