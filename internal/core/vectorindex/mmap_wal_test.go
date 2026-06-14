@@ -408,6 +408,73 @@ func TestReplayLegacyUnframedRecordsApply(t *testing.T) {
 	}
 }
 
+func TestReplayTwoConsecutiveCommittedTxns(t *testing.T) {
+	// Primary production sequence: back-to-back framed transactions. The replay
+	// state machine must reset between them so BOTH commits apply.
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 1, 1, 1}, 0, "doc-0"))
+	appendRaw(t, s, WalTxnCommit, nil)
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(1, 0, []float32{2, 2, 2, 2}, 0, "doc-1"))
+	appendRaw(t, s, WalTxnCommit, nil)
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	v0, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("first committed insert must be visible: %v", err)
+	}
+	if v0[0] != 1 {
+		t.Fatalf("vec0 = %v, want [1 1 1 1]", v0)
+	}
+	v1, err := s2.GetVector(1)
+	if err != nil {
+		t.Fatalf("second committed insert must be visible: %v", err)
+	}
+	if v1[0] != 2 {
+		t.Fatalf("vec1 = %v, want [2 2 2 2]", v1)
+	}
+	if s2.meta.NodeCount != 2 {
+		t.Fatalf("NodeCount = %d, want 2", s2.meta.NodeCount)
+	}
+}
+
+func TestReplayStrayCommitIgnored(t *testing.T) {
+	// A lone WalTxnCommit with no preceding BEGIN must not panic or corrupt
+	// state. A following legacy unframed insert still applies normally.
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnCommit, nil) // stray commit, no open txn
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{7, 7, 7, 7}, 0, "doc-0"))
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("legacy insert after stray commit must apply: %v", err)
+	}
+	if vec[0] != 7 {
+		t.Fatalf("vec = %v, want [7 7 7 7]", vec)
+	}
+	if s2.meta.NodeCount != 1 {
+		t.Fatalf("NodeCount = %d, want 1 (stray commit must not add a node)", s2.meta.NodeCount)
+	}
+}
+
 func TestWALContinueLSNAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	w, err := OpenWAL(dir)

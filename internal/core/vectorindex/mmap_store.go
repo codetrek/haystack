@@ -523,6 +523,11 @@ func (s *MmapStore) replayWAL() error {
 	// unterminated trailing transaction (BEGIN with no COMMIT) is discarded.
 	// Un-framed records (no open transaction) apply immediately — this keeps
 	// pre-redesign WAL files and single-record streams working.
+	//
+	// Nested BEGIN contract: a WalTxnBegin while a transaction is already open
+	// discards the prior (un-committed) buffer and restarts — consistent with
+	// "uncommitted ⇒ discarded". The write side never emits nested BEGINs
+	// (Phase 2's txnBegin rejects nesting); this is purely defensive on replay.
 	type pending struct {
 		typ     WalRecordType
 		payload []byte
@@ -551,7 +556,9 @@ func (s *MmapStore) replayWAL() error {
 			return nil
 		default:
 			if inTxn {
-				// Copy payload: Replay reuses the backing array across records.
+				// Defensive copy: Replay currently allocates a fresh payload per
+				// record, but we don't depend on that — own the slice so a future
+				// Replay change cannot silently alias buffered payloads.
 				cp := make([]byte, len(payload))
 				copy(cp, payload)
 				buf = append(buf, pending{typ, cp})
