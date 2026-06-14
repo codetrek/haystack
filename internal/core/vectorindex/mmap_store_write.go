@@ -30,7 +30,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	docId := s.nodeToDoc[id]
 
 	// WAL — record the stored form so replay writes it back verbatim.
-	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, stored, norm, docId), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, stored, norm, docId), s.deferSync()); err != nil {
 		return fmt.Errorf("MmapStore.PutNode: WAL: %w", err)
 	}
 	if s.crashAfterWALWrite != nil {
@@ -53,7 +53,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	for i, v := range stored {
 		binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
 	}
-	if !s.batchMode {
+	if !s.deferSync() {
 		mmapSync(s.vectors)
 	}
 
@@ -75,7 +75,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], upperSlotVal)
 
-	if !s.batchMode {
+	if !s.deferSync() {
 		mmapSync(s.nodes)
 	}
 
@@ -100,7 +100,7 @@ func (s *MmapStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error
 		return s.faulted
 	}
 
-	if _, err := s.wal.Append(WalSetNeighbors, EncodeSetNeighbors(id, layer, neighbors), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalSetNeighbors, EncodeSetNeighbors(id, layer, neighbors), s.deferSync()); err != nil {
 		return fmt.Errorf("MmapStore.SetNeighbors: WAL: %w", err)
 	}
 
@@ -131,7 +131,7 @@ func (s *MmapStore) setNeighborsL0(id uint64, neighbors []uint64) error {
 		binary.LittleEndian.PutUint64(s.graphL0[offset+4+int64(i*8):], neighbors[i])
 	}
 
-	if !s.batchMode {
+	if !s.deferSync() {
 		mmapSync(s.graphL0)
 	}
 	return nil
@@ -168,7 +168,7 @@ func (s *MmapStore) setNeighborsUpper(id uint64, layer int, neighbors []uint64) 
 		binary.LittleEndian.PutUint64(s.graphUpper[layerOffset+4+int64(i*8):], neighbors[i])
 	}
 
-	if !s.batchMode {
+	if !s.deferSync() {
 		mmapSync(s.graphUpper)
 	}
 	return nil
@@ -183,7 +183,7 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 		return s.faulted
 	}
 
-	if _, err := s.wal.Append(WalSetNorm, EncodeSetNorm(id, norm), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalSetNorm, EncodeSetNorm(id, norm), s.deferSync()); err != nil {
 		return fmt.Errorf("MmapStore.SetNorm: WAL: %w", err)
 	}
 
@@ -193,7 +193,7 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
 
-	if !s.batchMode {
+	if !s.deferSync() {
 		mmapSync(s.nodes)
 	}
 	return s.maybeCheckpoint()
@@ -208,7 +208,7 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 		return s.faulted
 	}
 
-	if _, err := s.wal.Append(WalSetEntry, EncodeSetEntry(id, maxLayer), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalSetEntry, EncodeSetEntry(id, maxLayer), s.deferSync()); err != nil {
 		return fmt.Errorf("MmapStore.SetEntryPoint: WAL: %w", err)
 	}
 
@@ -280,7 +280,7 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 	// Look up docId for WAL record.
 	docId := s.nodeToDoc[id]
 
-	if _, err := s.wal.Append(WalDelete, EncodeDelete(id, docId), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalDelete, EncodeDelete(id, docId), s.deferSync()); err != nil {
 		return fmt.Errorf("MmapStore.DeleteNode: WAL: %w", err)
 	}
 
@@ -422,7 +422,7 @@ func (s *MmapStore) Sync() error {
 // if the threshold is reached. Caller must hold muWrite.
 func (s *MmapStore) maybeCheckpoint() error {
 	s.opsSinceCheckpoint++
-	if !s.batchMode && s.opsSinceCheckpoint >= s.checkpointInterval {
+	if !s.deferSync() && s.opsSinceCheckpoint >= s.checkpointInterval {
 		return s.checkpointLocked()
 	}
 	return nil
