@@ -79,9 +79,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	inner := vi.NewMemNodeStore()
+	inner := vi.NewMemNodeStore(vi.Euclidean)
 	cs := &countingStore{NodeStore: inner}
-	idx := vi.NewHNSWIndex(cs, vi.WithEuclideanDistance())
+	idx := vi.NewHNSWIndex(cs)
 
 	samplePoints := map[int]bool{
 		1000: true, 2000: true, 3000: true, 5000: true,

@@ -6,10 +6,17 @@ import (
 )
 
 // NodeStore defines the persistence interface for HNSW graph nodes.
+//
+// Vectors are stored in the form dictated by the store's Metric: cosine stores
+// unit vectors (so distance reduces to 1 - dot), the raw metrics store vectors
+// unchanged. GetVectorRef returns the *stored* form (ready for metric.distance);
+// GetVector returns the original vector (cosine restores via the stored norm).
 type NodeStore interface {
+	// Metric returns the immutable distance metric this store was created with.
+	Metric() Metric
 	GetVector(id uint64) ([]float32, error)
-	// GetVectorRef returns the vector without copying. The caller MUST NOT
-	// modify the returned slice. Use GetVector when a mutable copy is needed.
+	// GetVectorRef returns the stored vector form without copying. The caller
+	// MUST NOT modify the returned slice. Use GetVector for the original vector.
 	GetVectorRef(id uint64) ([]float32, error)
 	PutNode(id uint64, level int, vector []float32) error
 	DeleteNode(id uint64) error

@@ -9,7 +9,7 @@ import (
 
 func TestMmapStoreGrowOnInsert(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s.Close()
 
@@ -27,7 +27,7 @@ func TestMmapStoreGrowOnInsert(t *testing.T) {
 
 func TestMmapStoreGrowMultiple(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s.Close()
 
@@ -43,7 +43,7 @@ func TestMmapStoreGrowMultiple(t *testing.T) {
 
 func TestMmapStoreGrowPreservesOldData(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s.Close()
 
@@ -68,7 +68,7 @@ func TestMmapStoreGrowPreservesOldData(t *testing.T) {
 
 func TestMmapStoreGrowConcurrent(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s.Close()
 

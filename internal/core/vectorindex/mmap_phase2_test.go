@@ -28,12 +28,13 @@ func TestMmapStorePutNodeWritesMmapContents(t *testing.T) {
 		assert.Equal(t, v, got, "vector[%d]", i)
 	}
 
-	// Read raw node bytes: level=0, flags=0, norm=sqrt(1+4+9+16)=sqrt(30).
+	// Read raw node bytes: level=0, occupied flag set. The store is DotProduct
+	// (a raw metric), so no norm is stored — occupancy is marked by the flag.
 	nodeOff := pageSize + 0*nodeSlotSize
-	assert.Equal(t, uint8(0), s.nodes[nodeOff])   // level
-	assert.Equal(t, uint8(0), s.nodes[nodeOff+1]) // flags (not deleted)
+	assert.Equal(t, uint8(0), s.nodes[nodeOff])                  // level
+	assert.Equal(t, uint8(nodeFlagOccupied), s.nodes[nodeOff+1]) // flags: occupied, not deleted
 	norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[nodeOff+4:]))
-	assert.InDelta(t, float32(math.Sqrt(30)), norm, 0.01)
+	assert.Equal(t, float32(0), norm) // raw metric: no norm persisted
 }
 
 func TestMmapStorePutNodeWithUpperLevel(t *testing.T) {
@@ -87,7 +88,7 @@ func TestMmapStoreSetNeighborsUpperMultipleLayers(t *testing.T) {
 
 func TestMmapStoreGrowUpperGraph(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s.Close()
 
@@ -110,7 +111,7 @@ func TestMmapStoreGrowUpperGraph(t *testing.T) {
 
 func TestMmapStoreCloseReopenPersistence(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -172,7 +173,7 @@ func TestMmapStoreCloseReopenPersistence(t *testing.T) {
 
 func TestMmapStoreLoadIdmap(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	// Write multiple mappings, close, reopen — all should be present.
 	s, err := OpenMmapStore(dir, opts)
@@ -197,7 +198,7 @@ func TestMmapStoreLoadIdmap(t *testing.T) {
 
 func TestMmapStoreLoadIdmapCorrupt(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -248,7 +249,7 @@ func TestMmapStoreSyncAll(t *testing.T) {
 
 func TestMmapStoreDeleteNodeAndReopen(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -279,7 +280,7 @@ func TestMmapStoreDeleteNodeAndReopen(t *testing.T) {
 
 func TestMmapStoreRebuildNodeCount(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -306,7 +307,7 @@ func TestMmapStoreRebuildNodeCount(t *testing.T) {
 
 func TestMmapStoreCommitBatchSyncs(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)

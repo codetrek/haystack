@@ -2,7 +2,6 @@ package vectorindex
 
 import (
 	"fmt"
-	"math"
 	"testing"
 )
 
@@ -14,7 +13,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	const dim = 32
 
 	// Phase 1: Write 1000 vectors in batches, then crash (no Close).
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 8, CheckpointInterval: 200})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: 8, CheckpointInterval: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +54,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	simulateCrash(s)
 
 	// Phase 2: Reopen and verify everything recovered.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 8})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: 8})
 	if err != nil {
 		t.Fatalf("reopen after crash: %v", err)
 	}
@@ -92,21 +91,19 @@ func TestKill9Recovery_E2E(t *testing.T) {
 		}
 	}
 
-	// Verify norms for non-deleted nodes are positive.
+	// Verify non-deleted nodes are marked occupied after recovery.
 	for i := 0; i < N; i++ {
 		id := uint64(i)
 		if deletedSet[id] {
 			continue
 		}
 		nodeOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
-		norm := math.Float32frombits(
-			uint32(s2.nodes[nodeOff+4]) |
-				uint32(s2.nodes[nodeOff+5])<<8 |
-				uint32(s2.nodes[nodeOff+6])<<16 |
-				uint32(s2.nodes[nodeOff+7])<<24,
-		)
-		if norm <= 0 {
-			t.Fatalf("node %d norm should be positive, got %f", i, norm)
+		flags := s2.nodes[nodeOff+1]
+		if flags&nodeFlagOccupied == 0 {
+			t.Fatalf("node %d should be marked occupied after recovery", i)
+		}
+		if flags&nodeFlagDeleted != 0 {
+			t.Fatalf("node %d should not be deleted after recovery", i)
 		}
 	}
 

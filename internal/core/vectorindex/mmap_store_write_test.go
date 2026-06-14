@@ -10,7 +10,7 @@ import (
 func openTestMmapStore(t *testing.T) *MmapStore {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	return s
 }
@@ -29,7 +29,11 @@ func TestMmapStorePutNodeAndGetVector(t *testing.T) {
 }
 
 func TestMmapStorePutNodeAndGetNorm(t *testing.T) {
-	s := openTestMmapStore(t)
+	// Only cosine persists a norm (to restore the original scale); the raw
+	// metrics store the vector verbatim and skip the norm computation.
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: 4, M: 4})
+	requireNoError(t, err)
 	defer s.Close()
 
 	vec := []float32{3.0, 4.0, 0.0, 0.0} // norm = 5.0
@@ -38,6 +42,19 @@ func TestMmapStorePutNodeAndGetNorm(t *testing.T) {
 	norm, err := s.GetNorm(0)
 	requireNoError(t, err)
 	assert.InDelta(t, float32(5.0), norm, 0.01)
+}
+
+func TestMmapStorePutNodeRawMetricNoNorm(t *testing.T) {
+	// A raw metric (dot/euclidean) stores the original vector and reports norm 0,
+	// since the norm is never needed to restore or compare it.
+	s := openTestMmapStore(t) // DotProduct
+	defer s.Close()
+
+	requireNoError(t, s.PutNode(0, 0, []float32{3.0, 4.0, 0.0, 0.0}))
+
+	norm, err := s.GetNorm(0)
+	requireNoError(t, err)
+	assert.Equal(t, float32(0), norm)
 }
 
 func TestMmapStorePutNodeWithLevel(t *testing.T) {
@@ -124,7 +141,7 @@ func TestMmapStoreNodeMapping(t *testing.T) {
 
 func TestMmapStoreNodeMappingPersistence(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -233,7 +250,7 @@ func TestMmapStoreNextNodeId(t *testing.T) {
 
 func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -256,7 +273,7 @@ func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 
 func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)

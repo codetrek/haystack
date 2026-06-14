@@ -180,7 +180,7 @@ func TestWALReplayInsertWithUpperLevel(t *testing.T) {
 	// Write a node at level>0, close, reopen → replayWAL must allocate upper
 	// slot and restore vectors/nodes/meta correctly.
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -215,7 +215,7 @@ func TestWALReplayInsertWithUpperLevel(t *testing.T) {
 func TestWALReplaySetNeighborsUpperPath(t *testing.T) {
 	// Exercises the WalSetNeighbors → setNeighborsUpper path in replayWAL.
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -242,7 +242,7 @@ func TestWALReplaySetNeighborsUpperPath(t *testing.T) {
 func TestWALReplaySetNormAndDelete(t *testing.T) {
 	// Exercises WalSetNorm and WalDelete record types in replayWAL.
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -274,7 +274,7 @@ func TestWALReplayGrowsDuringReplay(t *testing.T) {
 	// Insert a node beyond initial capacity, close, reopen.
 	// replayWAL must call ensureCapacity and grow files during replay.
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)

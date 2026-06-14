@@ -10,7 +10,7 @@ import (
 func TestMmapStoreOpenClose(t *testing.T) {
 	dir := t.TempDir()
 
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 128, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 128, M: 16})
 	if err != nil {
 		t.Fatalf("OpenMmapStore: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestMmapStoreOpenClose(t *testing.T) {
 	}
 
 	// Re-open should succeed with same params.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 128, M: 16})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 128, M: 16})
 	if err != nil {
 		t.Fatalf("re-open: %v", err)
 	}
@@ -66,20 +66,20 @@ func TestMmapStoreOpenClose(t *testing.T) {
 func TestMmapStoreOpenMismatch(t *testing.T) {
 	dir := t.TempDir()
 
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 128, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 128, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Close()
 
 	// Dim mismatch.
-	_, err = OpenMmapStore(dir, MmapStoreOptions{Dim: 256, M: 16})
+	_, err = OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 256, M: 16})
 	if err == nil {
 		t.Fatal("expected error for dim mismatch")
 	}
 
 	// M mismatch.
-	_, err = OpenMmapStore(dir, MmapStoreOptions{Dim: 128, M: 32})
+	_, err = OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 128, M: 32})
 	if err == nil {
 		t.Fatal("expected error for M mismatch")
 	}
@@ -88,10 +88,10 @@ func TestMmapStoreOpenMismatch(t *testing.T) {
 func TestMmapStoreInvalidOpts(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 0, M: 16}); err == nil {
+	if _, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 0, M: 16}); err == nil {
 		t.Fatal("expected error for dim=0")
 	}
-	if _, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 128, M: 0}); err == nil {
+	if _, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 128, M: 0}); err == nil {
 		t.Fatal("expected error for M=0")
 	}
 }
@@ -102,7 +102,7 @@ func TestMmapStoreInitBadDir(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		badPath = "NUL\\impossible"
 	}
-	_, err := OpenMmapStore(badPath, MmapStoreOptions{Dim: 4, M: 4})
+	_, err := OpenMmapStore(badPath, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err == nil {
 		t.Fatal("expected error for non-writable path")
 	}
@@ -115,7 +115,7 @@ func TestMmapStoreInitSmallCap(t *testing.T) {
 	// Instead, verify upperCapacity is at least 64 when default cap is 1024 (256/4=256>=64 is fine,
 	// but let's verify the files are correct).
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

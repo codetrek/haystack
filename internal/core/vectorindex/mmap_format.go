@@ -34,7 +34,7 @@ var (
 // pageSize is the header size for mmap data files (page-aligned).
 const pageSize = 4096
 
-// MetaHeader is the on-disk format for meta.bin (exactly 64 bytes).
+// MetaHeader is the on-disk format for meta.bin (exactly 72 bytes).
 // Fields are ordered to avoid implicit padding: uint32 group first, then uint64 group.
 type MetaHeader struct {
 	Magic      [4]byte // "HNSW"
@@ -43,6 +43,8 @@ type MetaHeader struct {
 	M          uint32  // HNSW M parameter
 	MaxLevel   uint32  // current max level
 	EntryLevel uint32  // entry point level
+	Metric     uint32  // distance metric (0=cosine, 1=dot, 2=euclidean)
+	_          uint32  // pad so the uint64 group is 8-byte aligned
 
 	NodeCount        uint64 // active node count (excl. tombstones)
 	TotalSlots       uint64 // allocated slots (incl. tombstones)
@@ -51,8 +53,8 @@ type MetaHeader struct {
 	WalCheckpointLSN uint64 // WAL checkpoint LSN
 }
 
-// Compile-time size check: MetaHeader must be exactly 64 bytes.
-var _ [64]byte = [unsafe.Sizeof(MetaHeader{})]byte{}
+// Compile-time size check: MetaHeader must be exactly 72 bytes.
+var _ [72]byte = [unsafe.Sizeof(MetaHeader{})]byte{}
 
 // VectorsHeader is the on-disk header for vectors.dat (lives in the first pageSize bytes).
 type VectorsHeader struct {
@@ -98,7 +100,10 @@ type NodeSlot struct {
 	_         [4]byte // reserved
 }
 
-const nodeFlagDeleted = 0x01
+const (
+	nodeFlagDeleted  = 0x01 // slot's node was tombstoned by DeleteNode
+	nodeFlagOccupied = 0x02 // slot holds a real node (set on PutNode / WAL replay)
+)
 
 // graphL0SlotSize returns the slot size for a level-0 neighbor list.
 func graphL0SlotSize(mmax0 int) int {

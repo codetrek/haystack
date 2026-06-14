@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -62,55 +61,22 @@ func TestMultipleOptions(t *testing.T) {
 	assert.Equal(t, 256, idx.efSearch)
 }
 
-// The metric options must set the distance function and the norm-cache flag
-// together, so the two can never disagree. The default (no metric option) is
-// cosine, and when several metric options are given the last one wins.
-func TestDistanceMetricOptions(t *testing.T) {
-	store := NewMemNodeStore()
-
-	cases := []struct {
-		name     string
-		opts     []Option
-		wantFn   DistanceFunc
-		isCosine bool
-	}{
-		{"default", nil, CosineDistance, true},
-		{"cosine", []Option{WithCosineDistance()}, CosineDistance, true},
-		{"euclidean", []Option{WithEuclideanDistance()}, EuclideanDistance, false},
-		{"dotproduct", []Option{WithDotProductDistance()}, DotProductDistance, false},
-		// Last metric option wins; the flag stays consistent with it.
-		{"last-wins", []Option{WithCosineDistance(), WithEuclideanDistance()}, EuclideanDistance, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			idx := NewHNSWIndex(store, tc.opts...)
-			assert.Equal(t, tc.isCosine, idx.isCosine)
-			assert.Equal(t,
-				reflect.ValueOf(tc.wantFn).Pointer(),
-				reflect.ValueOf(idx.distance).Pointer(),
-				"distance func mismatch")
+// The index takes its distance metric from the store, so the metric, the
+// on-disk vector form, and the graph can never disagree.
+func TestIndexMetricFromStore(t *testing.T) {
+	for _, m := range []Metric{Cosine, DotProduct, Euclidean} {
+		t.Run(m.String(), func(t *testing.T) {
+			idx := NewHNSWIndex(NewMemNodeStore(m))
+			assert.Equal(t, m, idx.metric)
 		})
 	}
-}
-
-// WithDistanceFunc installs a custom metric and disables the norm-cache fast
-// path (which is only valid for cosine).
-func TestWithDistanceFunc(t *testing.T) {
-	store := NewMemNodeStore()
-	custom := func(a, b []float32) float32 { return 0 }
-	idx := NewHNSWIndex(store, WithDistanceFunc(custom))
-
-	assert.False(t, idx.isCosine, "custom metric must not use the cosine fast path")
-	assert.Equal(t,
-		reflect.ValueOf(custom).Pointer(),
-		reflect.ValueOf(idx.distance).Pointer())
 }
 
 // --- InsertBatch tests ---
 
 func TestInsertBatchMemStore(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 	items := []InsertItem{
 		{DocId: "doc-0", Vector: []float32{1, 0, 0}},
@@ -133,7 +99,7 @@ func TestInsertBatchMemStore(t *testing.T) {
 
 func TestInsertBatchEmpty(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance())
+	idx := NewHNSWIndex(store)
 
 	err := idx.InsertBatch(nil)
 	requireNoError(t, err)
@@ -145,7 +111,7 @@ func TestInsertBatchEmpty(t *testing.T) {
 
 func TestInsertBatchSingle(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 	err := idx.InsertBatch([]InsertItem{
 		{DocId: "only", Vector: []float32{1, 2, 3}},
@@ -182,7 +148,7 @@ func TestMemNodeStoreGetNormNotFound(t *testing.T) {
 }
 
 func TestMemNodeStoreGetVectorRef(t *testing.T) {
-	store := NewMemNodeStore()
+	store := NewMemNodeStore(DotProduct)
 	requireNoError(t, store.PutNode(1, 0, []float32{1.5, 2.5, 3.5}))
 
 	ref, err := store.GetVectorRef(1)
@@ -360,7 +326,6 @@ func TestLoadVectorsTruncatedData(t *testing.T) {
 func TestInsertBatchWithCustomOptions(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store,
-		WithCosineDistance(),
 		WithM(4),
 		WithEfConstruction(50),
 		WithEfSearch(32),
@@ -432,7 +397,7 @@ func TestEncodeDecodeUint64Roundtrip(t *testing.T) {
 
 func TestHNSWWithMemStoreInsertAndSearch(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(42))))
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 	requireNoError(t, idx.Insert("doc-0", []float32{1, 0, 0}))
 	requireNoError(t, idx.Insert("doc-1", []float32{0, 1, 0}))

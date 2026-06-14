@@ -22,9 +22,10 @@ const (
 
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
-	Dim                int // vector dimension (required)
-	M                  int // HNSW M parameter (required)
-	CheckpointInterval int // auto-checkpoint every N WAL appends (0 = default 1000)
+	Dim                int    // vector dimension (required)
+	M                  int    // HNSW M parameter (required)
+	Metric             Metric // distance metric (default Cosine); immutable once created
+	CheckpointInterval int    // auto-checkpoint every N WAL appends (0 = default 1000)
 }
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
@@ -41,6 +42,8 @@ type MmapStoreOptions struct {
 type MmapStore struct {
 	dir  string
 	meta MetaHeader
+
+	metric Metric
 
 	vectors    []byte // vectors.dat mmap
 	nodes      []byte // nodes.dat mmap
@@ -91,6 +94,9 @@ type MmapStore struct {
 	crashBeforeTruncate func() // called before WAL Reset in Checkpoint
 }
 
+// Metric returns the store's immutable distance metric.
+func (s *MmapStore) Metric() Metric { return s.metric }
+
 // OpenMmapStore opens or creates an mmap-backed store in dir.
 func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	if opts.Dim <= 0 {
@@ -106,6 +112,7 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 
 	s := &MmapStore{
 		dir:         dir,
+		metric:      opts.Metric,
 		dim:         opts.Dim,
 		m:           opts.M,
 		mmax0:       opts.M * 2,
@@ -141,6 +148,10 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		if int(h.M) != opts.M {
 			return nil, fmt.Errorf("MmapStore: M mismatch: file=%d, opts=%d", h.M, opts.M)
 		}
+		if Metric(h.Metric) != opts.Metric {
+			return nil, fmt.Errorf("MmapStore: metric mismatch: file=%s, opts=%s", Metric(h.Metric), opts.Metric)
+		}
+		s.metric = Metric(h.Metric)
 		s.meta = *h
 	}
 
@@ -234,6 +245,7 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 		Version:    1,
 		Dim:        uint32(s.dim),
 		M:          uint32(s.m),
+		Metric:     uint32(s.metric),
 		EntryPoint: ^uint64(0), // sentinel: no entry point
 	}
 
@@ -443,10 +455,10 @@ func (s *MmapStore) replayWAL() error {
 				binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
 			}
 
-			// Write node metadata to nodes.dat (level, flags=0, norm).
+			// Write node metadata to nodes.dat (level, flags, norm).
 			nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
 			s.nodes[nodeOff] = uint8(level)
-			s.nodes[nodeOff+1] = 0 // flags: not deleted
+			s.nodes[nodeOff+1] = nodeFlagOccupied // flags: occupied, not deleted
 			s.nodes[nodeOff+2] = 0
 			s.nodes[nodeOff+3] = 0
 			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
@@ -526,16 +538,16 @@ func (s *MmapStore) replayWAL() error {
 }
 
 // rebuildNodeCount scans nodes.dat and counts occupied, non-tombstone slots,
-// replacing the WAL-replayed NodeCount with the authoritative value.
-// An empty (never-written) slot is distinguished by having norm == 0.0;
-// every real node carries a positive pre-computed norm.
+// replacing the WAL-replayed NodeCount with the authoritative value. Occupancy
+// is marked explicitly by nodeFlagOccupied (set on insert and on WAL replay);
+// a never-written slot is all-zero, so the flag is clear. This is independent
+// of the stored norm, which is metric-specific (zero for the raw metrics).
 func (s *MmapStore) rebuildNodeCount() {
 	var count uint64
 	for i := uint64(0); i < s.meta.TotalSlots; i++ {
 		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
 		flags := s.nodes[off+1]
-		norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[off+4:]))
-		if flags&nodeFlagDeleted == 0 && norm != 0 {
+		if flags&nodeFlagDeleted == 0 && flags&nodeFlagOccupied != 0 {
 			count++
 		}
 	}
