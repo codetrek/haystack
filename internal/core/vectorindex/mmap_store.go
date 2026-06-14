@@ -518,13 +518,53 @@ func (s *MmapStore) replayWAL() error {
 	s.batchMode = true
 	defer func() { s.batchMode = prevBatchMode }()
 
+	// Transaction framing: records between WalTxnBegin and its matching
+	// WalTxnCommit are buffered and applied atomically on COMMIT. An
+	// unterminated trailing transaction (BEGIN with no COMMIT) is discarded.
+	// Un-framed records (no open transaction) apply immediately — this keeps
+	// pre-redesign WAL files and single-record streams working.
+	type pending struct {
+		typ     WalRecordType
+		payload []byte
+	}
+	var inTxn bool
+	var buf []pending
+
 	err := s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
-		replayed++
-		return s.applyWALRecord(typ, payload)
+		switch typ {
+		case WalTxnBegin:
+			inTxn = true
+			buf = buf[:0]
+			return nil
+		case WalTxnCommit:
+			if !inTxn {
+				return nil // stray commit — ignore
+			}
+			for _, p := range buf {
+				if err := s.applyWALRecord(p.typ, p.payload); err != nil {
+					return err
+				}
+				replayed++
+			}
+			inTxn = false
+			buf = buf[:0]
+			return nil
+		default:
+			if inTxn {
+				// Copy payload: Replay reuses the backing array across records.
+				cp := make([]byte, len(payload))
+				copy(cp, payload)
+				buf = append(buf, pending{typ, cp})
+				return nil
+			}
+			replayed++
+			return s.applyWALRecord(typ, payload)
+		}
 	})
 	if err != nil {
 		return err
 	}
+	// Unterminated trailing transaction (inTxn still true): buf is dropped.
 	if replayed > 0 {
 		s.rebuildNodeCount()
 		if err := s.syncAll(); err != nil {

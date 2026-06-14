@@ -312,6 +312,102 @@ func TestWalTxnMarkerConstants(t *testing.T) {
 	}
 }
 
+// openStoreForReplay opens a fresh DotProduct store with the given dim/M.
+func openStoreForReplay(t *testing.T, dir string, dim, m int) *MmapStore {
+	t.Helper()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: m, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	return s
+}
+
+// appendRaw appends one WAL record in buffered mode (no fsync), so tests can
+// hand-build txn-framed WAL streams.
+func appendRaw(t *testing.T, s *MmapStore, typ WalRecordType, payload []byte) {
+	t.Helper()
+	if _, err := s.wal.Append(typ, payload, true); err != nil {
+		t.Fatalf("append %d: %v", typ, err)
+	}
+}
+
+func TestReplayCommittedTxnApplies(t *testing.T) {
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 2, 3, 4}, 0, "doc-0"))
+	appendRaw(t, s, WalTxnCommit, nil)
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s) // skip Close, keep WAL on disk
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("committed insert must be visible: %v", err)
+	}
+	if vec[0] != 1 || vec[3] != 4 {
+		t.Fatalf("vec = %v, want [1 2 3 4]", vec)
+	}
+	if s2.meta.NodeCount != 1 {
+		t.Fatalf("NodeCount = %d, want 1", s2.meta.NodeCount)
+	}
+}
+
+func TestReplayUnterminatedTxnDiscarded(t *testing.T) {
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{9, 9, 9, 9}, 0, "doc-0"))
+	// NO WalTxnCommit — simulates a crash mid-commit.
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	// NOTE: GetVector does NOT check the occupied flag (it returns raw mmap
+	// bytes), so "not visible" is asserted via committed meta state, which is
+	// what the index actually relies on: NextNodeId/NodeCount only ever account
+	// for committed nodes, and Search reaches nodes only via those.
+	if s2.meta.NodeCount != 0 {
+		t.Fatalf("NodeCount = %d, want 0 (uncommitted insert must not apply)", s2.meta.NodeCount)
+	}
+	if s2.meta.NextNodeId != 0 {
+		t.Fatalf("NextNodeId = %d, want 0 (uncommitted insert must not advance allocator)", s2.meta.NextNodeId)
+	}
+}
+
+func TestReplayLegacyUnframedRecordsApply(t *testing.T) {
+	// Records with no surrounding BEGIN/COMMIT (pre-redesign WAL) still apply.
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{5, 6, 7, 8}, 0, "doc-0"))
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("legacy unframed insert must apply: %v", err)
+	}
+	if vec[0] != 5 {
+		t.Fatalf("vec = %v, want [5 6 7 8]", vec)
+	}
+}
+
 func TestWALContinueLSNAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	w, err := OpenWAL(dir)
