@@ -175,17 +175,13 @@ func TestMmapStoreBatchWriteAndRead(t *testing.T) {
 	s := openTestMmapStore(t)
 	defer s.Close()
 
-	s.BeginBatch()
-	assert.Equal(t, 1, s.BatchDepth())
-
+	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < 10; i++ {
 		vec := []float32{float32(i), 0, 0, 0}
 		requireNoError(t, s.PutNode(i, 0, vec))
 		requireNoError(t, s.SetNeighbors(i, 0, []uint64{(i + 1) % 10}))
 	}
-
-	requireNoError(t, s.CommitBatch(true))
-	assert.Equal(t, 0, s.BatchDepth())
+	requireNoError(t, s.txnCommit())
 
 	// Verify all data is readable.
 	for i := uint64(0); i < 10; i++ {
@@ -240,23 +236,21 @@ func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 	assert.Equal(t, uint64(5), id)
 }
 
-func TestDeferredSync_InsertSyncReopen(t *testing.T) {
+func TestTxnInsertSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
 
-	requireNoError(t, s.SetSyncMode(SyncDeferred))
-
 	const n = 100
+	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
 		v := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
 		requireNoError(t, s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)))
 		requireNoError(t, s.PutNode(uint64(i), 0, v))
 	}
-
-	requireNoError(t, s.Sync())
+	requireNoError(t, s.txnCommit())
 	requireNoError(t, s.Close())
 
 	s2, err := OpenMmapStore(dir, opts)
@@ -269,7 +263,6 @@ func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 		requireNoError(t, err)
 		assert.Equal(t, v, got, "vector %d mismatch after reopen", i)
 	}
-
 	nodeId, ok, err := s2.GetNodeId("doc-50")
 	requireNoError(t, err)
 	assert.True(t, ok)
