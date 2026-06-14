@@ -22,7 +22,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	}
 
 	// Build vectors and insert with doc mappings.
-	s.BeginBatch()
+	requireNoError(t, s.txnBegin())
 	for i := 0; i < N; i++ {
 		vec := make([]float32, dim)
 		for d := 0; d < dim; d++ {
@@ -35,7 +35,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := s.CommitBatch(true); err != nil {
+	if err := s.txnCommit(); err != nil {
 		t.Fatal(err)
 	}
 

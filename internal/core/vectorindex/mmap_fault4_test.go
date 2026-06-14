@@ -99,40 +99,37 @@ func TestStoreSyncCheckpointError(t *testing.T) {
 	}
 }
 
-// --- CommitBatch branches ---
+// --- txnCommit error branches ---
 
-func TestCommitBatchNestedNoCommit(t *testing.T) {
+func TestTxnCommitNestedRejected(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
-	s.BeginBatch()
-	s.BeginBatch()
-	// depth still > 0: returns without flushing/syncing.
-	if err := s.CommitBatch(true); err != nil {
-		t.Fatal(err)
+	requireNoError(t, s.txnBegin())
+	// A second txnBegin while one is open must fail.
+	if err := s.txnBegin(); err == nil {
+		t.Fatal("expected txnBegin to reject nesting")
 	}
-	if err := s.CommitBatch(true); err != nil {
-		t.Fatal(err)
-	}
+	requireNoError(t, s.txnCommit())
 }
 
-func TestCommitBatchSyncError(t *testing.T) {
+func TestTxnCommitSyncError(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
-	s.BeginBatch()
+	requireNoError(t, s.txnBegin())
 	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
-	if err := s.CommitBatch(true); err == nil {
-		t.Fatal("expected WAL sync error from CommitBatch")
+	if err := s.txnCommit(); err == nil {
+		t.Fatal("expected WAL sync error from txnCommit")
 	}
 }
 
-func TestCommitBatchMsyncError(t *testing.T) {
+func TestTxnCommitMsyncError(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
-	s.BeginBatch()
+	requireNoError(t, s.txnBegin())
 	orig := mmapSync
 	defer func() { mmapSync = orig }()
 	mmapSync = func([]byte) error { return errInjected }
-	if err := s.CommitBatch(true); err == nil {
-		t.Fatal("expected msync error from CommitBatch")
+	if err := s.txnCommit(); err == nil {
+		t.Fatal("expected msync error from txnCommit")
 	}
 }

@@ -141,7 +141,9 @@ func BenchmarkMmapStore50KInsert(b *testing.B) {
 
 		start := time.Now()
 
-		s.BeginBatch()
+		if err := s.txnBegin(); err != nil {
+			b.Fatal(err)
+		}
 		for i := 0; i < numVectors; i++ {
 			id, err := s.NextNodeId()
 			if err != nil {
@@ -170,7 +172,7 @@ func BenchmarkMmapStore50KInsert(b *testing.B) {
 				}
 			}
 		}
-		if err := s.CommitBatch(true); err != nil {
+		if err := s.txnCommit(); err != nil {
 			b.Fatal(err)
 		}
 
