@@ -86,7 +86,7 @@ jobs:
           # Times vectorindex tests under coverage. current = this branch (with
           # the msync fixes); m69 = origin/main (#69, the slow versions). Same VM
           # => runner speed cancels; the difference is the code.
-          run_cov() { go clean -testcache; t0=$(date +%s); go test -covermode=atomic -coverprofile=/tmp/cov.out ./internal/core/vectorindex/ >/dev/null 2>&1 || true; echo "$(($(date +%s)-t0))s"; }
+          run_cov() { go clean -testcache; t0=$(date +%s); go test -coverpkg=./... -covermode=atomic -coverprofile=/tmp/cov.out ./internal/core/vectorindex/ >/dev/null 2>&1 || true; echo "$(($(date +%s)-t0))s"; }
           git fetch -q origin main
           git worktree add -q ../m69 origin/main
           echo "RESULT current_1=$(run_cov)"
