@@ -71,10 +71,6 @@ func (m Metric) restore(stored []float32, norm float32) []float32 {
 	return out
 }
 
-// distance compares two vectors that are already in stored form.
-func (m Metric) distance(a, b []float32) float32 {
-	if m == Euclidean {
-		return vek32.Distance(a, b)
-	}
-	return 1 - vek32.Dot(a, b)
-}
+// distance is defined per-architecture (metric_distance_{arm64,amd64}.go): on
+// amd64 it calls vek32.Dot directly (so -coverpkg=./... adds no extra per-call
+// coverage counter on the hot path); on arm64 it routes through the NEON dot().

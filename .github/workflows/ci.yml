@@ -56,4 +56,16 @@ jobs:
 
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
-        run: go test -timeout 15m ./internal/core/vectorindex/...
+        shell: bash
+        run: |
+          # -v prints each case's execution time. Show only result lines, and
+          # drop the 0.00s cases (noise) — keep all FAILs and the full log on
+          # failure (with assertion detail).
+          set -o pipefail
+          go test -v -timeout 15m ./internal/core/vectorindex/... 2>&1 | tee vitest.log \
+            | grep -E '^(ok|FAIL|--- (PASS|FAIL):|panic:)' | grep -vE '^--- PASS:.*\(0\.00s\)$'
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then echo "===== full test log ====="; cat vitest.log; fi
+          rm -f vitest.log
+          exit "$status"
+

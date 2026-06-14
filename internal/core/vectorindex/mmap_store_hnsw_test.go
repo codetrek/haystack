@@ -507,10 +507,17 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
+		// Build under a batch: defers the per-op msync (the dominant cost on
+		// Windows) without weakening the test — CommitBatch(false) flushes the
+		// WAL but does NOT msync the mmaps, so recovery still has to replay.
+		store.BeginBatch()
 		for i, v := range vecs {
 			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
 				t.Fatalf("Insert doc-%d: %v", i, err)
 			}
+		}
+		if err := store.CommitBatch(false); err != nil {
+			t.Fatalf("CommitBatch: %v", err)
 		}
 
 		preResults = mmapHNSWSearchResults(t, idx, queries, k)
@@ -1027,6 +1034,10 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 		WithEfConstruction(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 
+	// Batch the post-export inserts + deletes: each HNSW op is a PutNode plus
+	// several SetNeighbors, and a per-op msync makes this ~13s on Windows.
+	// Batching defers the sync (one CommitBatch) without changing what's tested.
+	mmapStore.BeginBatch()
 	for i := n; i < n+nExtra; i++ {
 		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), baseVecs[i]); err != nil {
 			t.Fatalf("Post-export insert doc-%d: %v", i, err)
@@ -1037,6 +1048,9 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 		if err := mmapIdx.Delete(fmt.Sprintf("doc-%d", i)); err != nil {
 			t.Fatalf("Post-export delete doc-%d: %v", i, err)
 		}
+	}
+	if err := mmapStore.CommitBatch(true); err != nil {
+		t.Fatalf("CommitBatch: %v", err)
 	}
 
 	for i := 0; i < nDelete; i++ {
