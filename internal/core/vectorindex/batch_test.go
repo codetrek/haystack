@@ -87,3 +87,27 @@ func TestBatchDiscardDropsBuffer(t *testing.T) {
 	requireNoError(t, err)
 	assert.Empty(t, res)
 }
+
+func TestBatchUpsertReplacesCommittedDoc(t *testing.T) {
+	idx := newTestIndex()
+
+	// Commit an initial value.
+	requireNoError(t, idx.Insert("d", []float32{1, 0, 0}))
+
+	// A second batch Puts the same docId with a new vector.
+	b := idx.NewBatch()
+	b.Put("d", []float32{0, 0, 1})
+	requireNoError(t, b.Commit())
+
+	// docId maps to exactly one node, and it is the new vector.
+	res, err := idx.Search([]float32{0, 0, 1}, 2)
+	requireNoError(t, err)
+	requireLen(t, res, 1) // only one node exists for "d"
+	assert.InDelta(t, 0.0, res[0].Distance, 1e-6)
+
+	// The old vector is gone.
+	res2, err := idx.Search([]float32{1, 0, 0}, 1)
+	requireNoError(t, err)
+	requireLen(t, res2, 1)
+	assert.Greater(t, res2[0].Distance, float32(0.5), "old [1,0,0] node must no longer exist")
+}
