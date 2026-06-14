@@ -1107,3 +1107,37 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 	assert.Equal(t, expectedCount, mmapStore.meta.NodeCount,
 		"node count should reflect inserts and deletes")
 }
+
+func TestIndexBatchAbortNoPhantomMapping(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: 8, M: 16, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(11))))
+
+	// Commit one doc.
+	requireNoError(t, idx.Insert("doc-keep", []float32{1, 0, 0, 0, 0, 0, 0, 0}))
+
+	// A batch that will crash before commit (simulate via a fresh batch whose
+	// records we leave uncommitted): drive the store directly to model a crash.
+	requireNoError(t, store.txnBegin())
+	id, _ := store.NextNodeId()
+	requireNoError(t, store.PutNode(id, 0, []float32{0, 1, 0, 0, 0, 0, 0, 0}))
+	requireNoError(t, store.SetNodeMapping("doc-crash", id))
+	// crash WITHOUT txnCommit
+	simulateCrash(store)
+
+	store2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: 8, M: 16})
+	requireNoError(t, err)
+	defer store2.Close()
+	idx2 := NewHNSWIndex(store2, WithRand(rand.New(rand.NewSource(11))))
+
+	if _, ok, _ := store2.GetNodeId("doc-crash"); ok {
+		t.Fatal("uncommitted mapping doc-crash must not survive (D1 closed)")
+	}
+	if _, ok, _ := store2.GetNodeId("doc-keep"); !ok {
+		t.Fatal("previously committed mapping doc-keep must survive")
+	}
+	res, err := idx2.Search([]float32{1, 0, 0, 0, 0, 0, 0, 0}, 1)
+	requireNoError(t, err)
+	requireLen(t, res, 1)
+}
