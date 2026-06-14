@@ -86,16 +86,21 @@ func TestCheckpointCompactError(t *testing.T) {
 	}
 }
 
-// --- store Sync: checkpoint error branch ---
+// --- txnCommit fault: msync error surfaces as faulted store ---
 
 func TestStoreSyncCheckpointError(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
 	orig := mmapSync
 	defer func() { mmapSync = orig }()
 	mmapSync = func([]byte) error { return errInjected }
-	if err := s.Sync(); err == nil {
-		t.Fatal("expected checkpoint error from Sync")
+	if err := s.txnCommit(); err == nil {
+		t.Fatal("expected msync error from txnCommit")
+	}
+	if s.faulted == nil {
+		t.Fatal("store must be faulted after txnCommit msync error")
 	}
 }
 

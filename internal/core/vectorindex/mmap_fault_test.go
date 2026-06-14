@@ -225,12 +225,17 @@ func TestOpenWALScanError(t *testing.T) {
 	}
 }
 
-// --- store Sync WAL flush/sync errors ---
+// --- txnCommit fault: WAL sync error surfaces as faulted store ---
 
 func TestStoreSyncWALErrors(t *testing.T) {
 	s := openTestStore(t)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
 	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
-	if err := s.Sync(); err == nil {
-		t.Fatal("expected WAL sync error from store Sync")
+	if err := s.txnCommit(); err == nil {
+		t.Fatal("expected WAL sync error from txnCommit")
+	}
+	if s.faulted == nil {
+		t.Fatal("store must be faulted after txnCommit WAL sync error")
 	}
 }
