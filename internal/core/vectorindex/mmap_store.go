@@ -25,7 +25,9 @@ type MmapStoreOptions struct {
 // Concurrency model:
 //
 //   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
-//     DeleteNode, SetNodeMapping, NextNodeId) are serialised by muWrite.Lock().
+//     DeleteNode, SetNodeMapping, DeleteNodeMapping, NextNodeId, and the
+//     transaction primitive txnBegin, txnCommit, txnAbort) are serialised by
+//     muWrite.Lock().
 //   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
 //   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
 //   - Grow functions (ensureCapacity / growFile) are called under muWrite

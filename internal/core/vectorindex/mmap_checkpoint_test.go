@@ -38,13 +38,14 @@ func TestCheckpoint_MetaAndWALTruncated(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify meta.bin WalCheckpointLSN = n+2 (n data records + TxnBegin + TxnCommit).
+	// Verify meta.bin WalCheckpointLSN = n+2 (n WalInsert records framed by one
+	// WalTxnBegin + one WalTxnCommit marker; LSNs run 1..n+2).
 	meta, err := readMetaHeader(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if meta.WalCheckpointLSN == 0 {
-		t.Fatalf("WalCheckpointLSN: got %d, want > 0", meta.WalCheckpointLSN)
+	if got, want := meta.WalCheckpointLSN, uint64(n+2); got != want {
+		t.Fatalf("WalCheckpointLSN: got %d, want %d", got, want)
 	}
 
 	// Verify WAL is truncated to 0.
@@ -145,10 +146,11 @@ func TestClose_WALTruncated(t *testing.T) {
 		t.Fatalf("WAL size after Close: got %d, want 0", info.Size())
 	}
 	meta, _ := readMetaHeader(dir)
-	if meta.WalCheckpointLSN == 0 {
-		t.Fatalf("WalCheckpointLSN: got 0, want > 0")
+	// Close runs a final checkpoint, recording the latest LSN: n WalInsert
+	// records framed by one WalTxnBegin + one WalTxnCommit marker => n+2.
+	if got, want := meta.WalCheckpointLSN, uint64(n+2); got != want {
+		t.Fatalf("WalCheckpointLSN: got %d, want %d", got, want)
 	}
-	_ = n
 }
 
 func TestOpen_ReplayThenCheckpoint(t *testing.T) {
