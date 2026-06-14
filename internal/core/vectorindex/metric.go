@@ -34,21 +34,28 @@ func (m Metric) String() string {
 // storesNormalized reports whether vectors are normalized before being stored.
 func (m Metric) storesNormalized() bool { return m == Cosine }
 
-// prepare maps a raw vector to the form stored on disk and returns the raw
-// vector's L2 norm (persisted so GetVector can restore the original). For
-// cosine it returns a new unit-length slice; for the raw metrics it returns the
-// input slice unchanged. A zero vector is stored as-is (norm 0).
+// norm returns the L2 norm to persist for a vector. Only cosine needs it: it
+// stores unit vectors and uses the norm to restore the original scale in
+// GetVector. The raw metrics store the original vector verbatim, so they have
+// no use for a norm and skip the computation, reporting 0.
+func (m Metric) norm(v []float32) float32 {
+	if m != Cosine {
+		return 0
+	}
+	return vek32.Norm(v)
+}
+
+// prepare maps a raw vector to the form stored on disk and returns the norm to
+// persist alongside it. For cosine it returns a new unit-length slice and the
+// original L2 norm (so GetVector can restore the original scale). For the raw
+// metrics it returns the input slice unchanged with norm 0. A zero vector is
+// stored as-is (norm 0).
 func (m Metric) prepare(v []float32) (stored []float32, norm float32) {
-	norm = vek32.Norm(v)
+	norm = m.norm(v)
 	if m != Cosine || norm == 0 {
 		return v, norm
 	}
-	out := make([]float32, len(v))
-	inv := 1.0 / norm
-	for i, x := range v {
-		out[i] = x * inv
-	}
-	return out, norm
+	return vek32.MulNumber(v, 1.0/norm), norm // SIMD scale into a fresh slice
 }
 
 // restore maps a stored vector back to its original raw form. For cosine it

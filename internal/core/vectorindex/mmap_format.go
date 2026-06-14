@@ -100,7 +100,10 @@ type NodeSlot struct {
 	_         [4]byte // reserved
 }
 
-const nodeFlagDeleted = 0x01
+const (
+	nodeFlagDeleted  = 0x01 // slot's node was tombstoned by DeleteNode
+	nodeFlagOccupied = 0x02 // slot holds a real node (set on PutNode / WAL replay)
+)
 
 // graphL0SlotSize returns the slot size for a level-0 neighbor list.
 func graphL0SlotSize(mmax0 int) int {

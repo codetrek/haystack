@@ -28,12 +28,13 @@ func TestMmapStorePutNodeWritesMmapContents(t *testing.T) {
 		assert.Equal(t, v, got, "vector[%d]", i)
 	}
 
-	// Read raw node bytes: level=0, flags=0, norm=sqrt(1+4+9+16)=sqrt(30).
+	// Read raw node bytes: level=0, occupied flag set. The store is DotProduct
+	// (a raw metric), so no norm is stored — occupancy is marked by the flag.
 	nodeOff := pageSize + 0*nodeSlotSize
-	assert.Equal(t, uint8(0), s.nodes[nodeOff])   // level
-	assert.Equal(t, uint8(0), s.nodes[nodeOff+1]) // flags (not deleted)
+	assert.Equal(t, uint8(0), s.nodes[nodeOff])                  // level
+	assert.Equal(t, uint8(nodeFlagOccupied), s.nodes[nodeOff+1]) // flags: occupied, not deleted
 	norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[nodeOff+4:]))
-	assert.InDelta(t, float32(math.Sqrt(30)), norm, 0.01)
+	assert.Equal(t, float32(0), norm) // raw metric: no norm persisted
 }
 
 func TestMmapStorePutNodeWithUpperLevel(t *testing.T) {

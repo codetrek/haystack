@@ -58,10 +58,11 @@ func TestMetricRawStored(t *testing.T) {
 	raw := []float32{3, 0, 4, 0}
 	for _, m := range []Metric{DotProduct, Euclidean} {
 		stored, norm := m.prepare(raw)
-		// Raw metrics store the vector unchanged.
+		// Raw metrics store the vector unchanged and skip the norm computation
+		// (the norm is never used to restore or compare them).
 		approxEqual(t, stored, raw, 0)
-		if math.Abs(float64(norm-5)) > 1e-5 {
-			t.Fatalf("%s norm: got %v want 5", m, norm)
+		if norm != 0 {
+			t.Fatalf("%s norm: got %v want 0", m, norm)
 		}
 		approxEqual(t, m.restore(stored, norm), raw, 0)
 	}
@@ -76,9 +77,26 @@ func TestMetricRawStored(t *testing.T) {
 	}
 }
 
+func TestMetricNorm(t *testing.T) {
+	v := []float32{3, 0, 4, 0} // |v| = 5
+	// Only cosine computes a norm; the raw metrics report 0.
+	if n := Cosine.norm(v); math.Abs(float64(n-5)) > 1e-5 {
+		t.Fatalf("cosine norm: got %v want 5", n)
+	}
+	if n := DotProduct.norm(v); n != 0 {
+		t.Fatalf("dot norm: got %v want 0", n)
+	}
+	if n := Euclidean.norm(v); n != 0 {
+		t.Fatalf("euclidean norm: got %v want 0", n)
+	}
+}
+
 func TestMetricStringAndStoresNormalized(t *testing.T) {
 	if Cosine.String() != "cosine" || DotProduct.String() != "dot" || Euclidean.String() != "euclidean" {
 		t.Fatalf("unexpected String(): %s/%s/%s", Cosine, DotProduct, Euclidean)
+	}
+	if Metric(99).String() != "unknown" {
+		t.Fatalf("unknown metric String(): got %q want %q", Metric(99).String(), "unknown")
 	}
 	if !Cosine.storesNormalized() || DotProduct.storesNormalized() || Euclidean.storesNormalized() {
 		t.Fatal("storesNormalized() should be true only for cosine")

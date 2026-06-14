@@ -455,10 +455,10 @@ func (s *MmapStore) replayWAL() error {
 				binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
 			}
 
-			// Write node metadata to nodes.dat (level, flags=0, norm).
+			// Write node metadata to nodes.dat (level, flags, norm).
 			nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
 			s.nodes[nodeOff] = uint8(level)
-			s.nodes[nodeOff+1] = 0 // flags: not deleted
+			s.nodes[nodeOff+1] = nodeFlagOccupied // flags: occupied, not deleted
 			s.nodes[nodeOff+2] = 0
 			s.nodes[nodeOff+3] = 0
 			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
@@ -538,16 +538,16 @@ func (s *MmapStore) replayWAL() error {
 }
 
 // rebuildNodeCount scans nodes.dat and counts occupied, non-tombstone slots,
-// replacing the WAL-replayed NodeCount with the authoritative value.
-// An empty (never-written) slot is distinguished by having norm == 0.0;
-// every real node carries a positive pre-computed norm.
+// replacing the WAL-replayed NodeCount with the authoritative value. Occupancy
+// is marked explicitly by nodeFlagOccupied (set on insert and on WAL replay);
+// a never-written slot is all-zero, so the flag is clear. This is independent
+// of the stored norm, which is metric-specific (zero for the raw metrics).
 func (s *MmapStore) rebuildNodeCount() {
 	var count uint64
 	for i := uint64(0); i < s.meta.TotalSlots; i++ {
 		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
 		flags := s.nodes[off+1]
-		norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[off+4:]))
-		if flags&nodeFlagDeleted == 0 && norm != 0 {
+		if flags&nodeFlagDeleted == 0 && flags&nodeFlagOccupied != 0 {
 			count++
 		}
 	}

@@ -1,9 +1,7 @@
 package vectorindex
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -876,9 +874,8 @@ func TestCrashPoint_DeleteNodeCrash(t *testing.T) {
 		if nflags&nodeFlagDeleted != 0 {
 			t.Fatalf("node %d should not be deleted", id)
 		}
-		norm := math.Float32frombits(binary.LittleEndian.Uint32(s2.nodes[noff+4:]))
-		if norm == 0 {
-			t.Fatalf("node %d norm should be non-zero", id)
+		if nflags&nodeFlagOccupied == 0 {
+			t.Fatalf("node %d should be marked occupied after replay", id)
 		}
 	}
 

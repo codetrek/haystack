@@ -64,10 +64,10 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 
 	// Write node metadata (level, norm, upper slot).
 	nodeOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
-	s.nodes[nodeOff] = uint8(level) // Level
-	s.nodes[nodeOff+1] = 0          // Flags (not deleted)
-	s.nodes[nodeOff+2] = 0          // padding
-	s.nodes[nodeOff+3] = 0          // padding
+	s.nodes[nodeOff] = uint8(level)       // Level
+	s.nodes[nodeOff+1] = nodeFlagOccupied // Flags: occupied, not deleted
+	s.nodes[nodeOff+2] = 0                // padding
+	s.nodes[nodeOff+3] = 0                // padding
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], upperSlotVal)
 
