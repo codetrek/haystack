@@ -493,3 +493,22 @@ func TestWALContinueLSNAfterReopen(t *testing.T) {
 	assert.Equal(t, uint64(3), lsn)
 	requireNoError(t, w2.Close())
 }
+
+func TestEncodeDecodeMappingRecords(t *testing.T) {
+	nid, doc := uint64(123), "doc-abc"
+	gotID, gotDoc := DecodeSetMapping(EncodeSetMapping(nid, doc))
+	if gotID != nid || gotDoc != doc {
+		t.Fatalf("SetMapping roundtrip: got (%d,%q) want (%d,%q)", gotID, gotDoc, nid, doc)
+	}
+	if got := DecodeDeleteMapping(EncodeDeleteMapping(doc)); got != doc {
+		t.Fatalf("DeleteMapping roundtrip: got %q want %q", got, doc)
+	}
+	// empty docId edge case
+	id2, d2 := DecodeSetMapping(EncodeSetMapping(7, ""))
+	if id2 != 7 || d2 != "" {
+		t.Fatalf("empty-doc roundtrip: got (%d,%q)", id2, d2)
+	}
+	if WalSetMapping != 8 || WalDeleteMapping != 9 {
+		t.Fatalf("marker values: set=%d del=%d want 8,9", WalSetMapping, WalDeleteMapping)
+	}
+}

@@ -21,8 +21,10 @@ const (
 	WalSetNeighbors WalRecordType = 3
 	WalSetEntry     WalRecordType = 4
 	WalSetNorm      WalRecordType = 5
-	WalTxnBegin     WalRecordType = 6 // transaction start marker (empty payload)
-	WalTxnCommit    WalRecordType = 7 // transaction commit marker (empty payload)
+	WalTxnBegin      WalRecordType = 6 // transaction start marker (empty payload)
+	WalTxnCommit     WalRecordType = 7 // transaction commit marker (empty payload)
+	WalSetMapping    WalRecordType = 8 // docId↔nodeId mapping add (payload: nodeId(8) + docId)
+	WalDeleteMapping WalRecordType = 9 // docId↔nodeId mapping remove (payload: docId)
 )
 
 // WAL record disk layout: LSN(8) + Length(4) + Type(1) + Payload(var) + CRC32(4)
@@ -398,3 +400,22 @@ func DecodeSetNorm(payload []byte) (nodeId uint64, norm float32) {
 	norm = math.Float32frombits(binary.LittleEndian.Uint32(payload[8:]))
 	return
 }
+
+// EncodeSetMapping encodes a SETMAPPING WAL payload: nodeId(8) + docId(var).
+func EncodeSetMapping(nodeId uint64, docId string) []byte {
+	b := make([]byte, 8+len(docId))
+	binary.LittleEndian.PutUint64(b[0:8], nodeId)
+	copy(b[8:], docId)
+	return b
+}
+
+// DecodeSetMapping decodes a SETMAPPING payload.
+func DecodeSetMapping(payload []byte) (uint64, string) {
+	return binary.LittleEndian.Uint64(payload[0:8]), string(payload[8:])
+}
+
+// EncodeDeleteMapping encodes a DELETEMAPPING WAL payload: docId(var).
+func EncodeDeleteMapping(docId string) []byte { return []byte(docId) }
+
+// DecodeDeleteMapping decodes a DELETEMAPPING payload.
+func DecodeDeleteMapping(payload []byte) string { return string(payload) }
