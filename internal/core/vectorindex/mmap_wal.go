@@ -16,11 +16,11 @@ import (
 type WalRecordType uint8
 
 const (
-	WalInsert       WalRecordType = 1
-	WalDelete       WalRecordType = 2
-	WalSetNeighbors WalRecordType = 3
-	WalSetEntry     WalRecordType = 4
-	WalSetNorm      WalRecordType = 5
+	WalInsert        WalRecordType = 1
+	WalDelete        WalRecordType = 2
+	WalSetNeighbors  WalRecordType = 3
+	WalSetEntry      WalRecordType = 4
+	WalSetNorm       WalRecordType = 5
 	WalTxnBegin      WalRecordType = 6 // transaction start marker (empty payload)
 	WalTxnCommit     WalRecordType = 7 // transaction commit marker (empty payload)
 	WalSetMapping    WalRecordType = 8 // docId↔nodeId mapping add (payload: nodeId(8) + docId)
