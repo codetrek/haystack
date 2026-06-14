@@ -36,7 +36,7 @@ func TestHNSWUpsertEntryPoint(t *testing.T) {
 	assert.Len(t, results, 2, "should have 2 nodes total")
 }
 
-func TestHNSWInsertBatchDuplicateDocId(t *testing.T) {
+func TestBatchDuplicateDocIdUpsert(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
@@ -59,7 +59,7 @@ func TestHNSWInsertBatchDuplicateDocId(t *testing.T) {
 	assert.InDelta(t, 0.0, results[0].Distance, 0.01)
 }
 
-func TestHNSWInsertBatchPartialFailure(t *testing.T) {
+func TestBatchPartialFailure(t *testing.T) {
 	es := newErrorStore()
 	idx := NewHNSWIndex(es)
 

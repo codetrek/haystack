@@ -72,9 +72,9 @@ func TestIndexMetricFromStore(t *testing.T) {
 	}
 }
 
-// --- InsertBatch tests ---
+// --- Batch tests ---
 
-func TestInsertBatchMemStore(t *testing.T) {
+func TestBatchCommitMemStore(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
@@ -95,7 +95,7 @@ func TestInsertBatchMemStore(t *testing.T) {
 	assert.InDelta(t, 0.0, results[0].Distance, 1e-6)
 }
 
-func TestInsertBatchEmpty(t *testing.T) {
+func TestBatchEmptyNoItems(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
@@ -107,7 +107,7 @@ func TestInsertBatchEmpty(t *testing.T) {
 	assert.Empty(t, results)
 }
 
-func TestInsertBatchSingle(t *testing.T) {
+func TestBatchSinglePut(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
@@ -318,9 +318,9 @@ func TestLoadVectorsTruncatedData(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- InsertBatch with WithM/WithEfConstruction/WithEfSearch ---
+// --- Batch with WithM/WithEfConstruction/WithEfSearch ---
 
-func TestInsertBatchWithCustomOptions(t *testing.T) {
+func TestBatchWithCustomOptions(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store,
 		WithM(4),

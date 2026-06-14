@@ -522,7 +522,7 @@ func (s *MmapStore) replayWAL() error {
 	// Nested BEGIN contract: a WalTxnBegin while a transaction is already open
 	// discards the prior (un-committed) buffer and restarts — consistent with
 	// "uncommitted ⇒ discarded". The write side never emits nested BEGINs
-	// (Phase 2's txnBegin rejects nesting); this is purely defensive on replay.
+	// (txnBegin rejects nesting); this is purely defensive on replay.
 	type pending struct {
 		typ     WalRecordType
 		payload []byte

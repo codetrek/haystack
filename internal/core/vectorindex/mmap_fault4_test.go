@@ -138,3 +138,53 @@ func TestTxnCommitMsyncError(t *testing.T) {
 		t.Fatal("expected msync error from txnCommit")
 	}
 }
+
+// --- AC6: Batch.Commit I/O fault → store faulted → reopen recovers pre-batch state ---
+
+func TestBatchCommitIOFaultReopensClean(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build an index with one doc so NodeCount == 1 before the faulted batch.
+	idx := NewHNSWIndex(s)
+	if err := idx.Insert("pre-existing", []float32{1, 0, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	preCount := s.meta.NodeCount // should be 1
+
+	// Inject a WAL write fault so txnBegin's WalTxnBegin append fails,
+	// causing the store to fault before any new data is committed.
+	failWALNextWrite(s)
+
+	// A batch with a new doc: Commit must return an error.
+	b := idx.NewBatch()
+	b.Put("new-doc", []float32{0, 1, 0, 0})
+	commitErr := b.Commit()
+	if commitErr == nil {
+		t.Fatal("expected Batch.Commit to return an error after WAL write fault")
+	}
+	// Store must now be faulted.
+	if s.faulted == nil {
+		t.Fatal("store must be faulted after failed Batch.Commit")
+	}
+	// A subsequent write must be rejected.
+	if err := idx.Insert("another", []float32{0, 0, 1, 0}); err == nil {
+		t.Fatal("expected faulted store to reject further writes")
+	}
+
+	// Simulate a crash (force WAL flush / close files) so the reopen sees disk state.
+	simulateCrash(s)
+
+	// Reopen and verify the pre-batch state is intact.
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if s2.meta.NodeCount != preCount {
+		t.Fatalf("NodeCount after reopen = %d, want %d (pre-batch state)", s2.meta.NodeCount, preCount)
+	}
+}

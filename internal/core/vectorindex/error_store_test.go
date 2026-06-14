@@ -382,10 +382,10 @@ func TestInsertWithCosineDistanceMultiNode(t *testing.T) {
 }
 
 // =====================================================================
-// InsertBatch error paths
+// Batch error paths
 // =====================================================================
 
-func TestInsertBatchPropagatesError(t *testing.T) {
+func TestBatchCommitPropagatesError(t *testing.T) {
 	es := newErrorStore()
 	idx := NewHNSWIndex(es)
 

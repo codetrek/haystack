@@ -360,7 +360,7 @@ func (s *MmapStore) txnCommit() error {
 // txnAbort records a fault and clears the open-transaction flag WITHOUT writing
 // a commit marker. In-place mmap writes from the partial transaction are not
 // rolled back here; reopening recovers to the pre-transaction state because the
-// unterminated WAL transaction is discarded on replay (Phase 1). Returns the
+// unterminated WAL transaction is discarded on replay. Returns the
 // fault error so callers can propagate it.
 func (s *MmapStore) txnAbort(cause error) error {
 	s.muWrite.Lock()
