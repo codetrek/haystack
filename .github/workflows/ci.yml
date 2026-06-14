@@ -57,3 +57,12 @@ jobs:
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
         run: go test -timeout 15m ./internal/core/vectorindex/...
+
+      - name: SIMD bench (experiment)
+        shell: bash
+        run: |
+          echo "RESULT ARCH=$(go env GOARCH) OS=${{ runner.os }}"
+          echo "=== dot kernel: impl(NEON on arm64) vs vek(scalar on arm64 / AVX2 on amd64) ==="
+          go test -run '^$' -bench 'BenchmarkDot_' -benchtime=400ms ./internal/core/vectorindex/ 2>&1 | grep -E 'Benchmark|ns/op'
+          echo "=== HNSW end-to-end (distance now NEON-backed on arm64) ==="
+          go test -tags=benchmark -run '^$' -bench 'BenchmarkHNSW(Insert|Search)$' -benchtime=3000x ./internal/core/vectorindex/ 2>&1 | grep -E 'Benchmark|ns/op'

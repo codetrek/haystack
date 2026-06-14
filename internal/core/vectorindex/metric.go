@@ -76,5 +76,5 @@ func (m Metric) distance(a, b []float32) float32 {
 	if m == Euclidean {
 		return vek32.Distance(a, b)
 	}
-	return 1 - vek32.Dot(a, b)
+	return 1 - dot(a, b)
 }
