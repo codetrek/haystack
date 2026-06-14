@@ -83,17 +83,13 @@ jobs:
           cache: true
       - name: go-cov (searchcore)
         # searchcore has its own go.mod, so the main gate's `go test ./...` never
-        # reaches it. Run go-cov inside the module. Thresholds are a current
-        # baseline: most packages are already 86–98%, but the `engine` package
-        # (61%) and a few 0% functions (engine logic + invertedindex config
-        # getters) keep it off the main-module bar — so per-package/func gating
-        # is off for now and only TOTAL is gated (floor 85%, currently 87.6%) to
-        # prevent regression. Tightening (engine tests → per-func 80%) is a
-        # follow-up.
+        # reaches it. Run go-cov inside the module at the same bar as the main
+        # module (func 80 / package 85 / total 90).
         working-directory: searchcore
         env:
-          THRESHOLD_TOTAL: "85"
-          THRESHOLD_PACKAGE: "0"
-          THRESHOLD_FUNC: "0"
+          THRESHOLD_FUNC: "80"
+          THRESHOLD_PACKAGE: "85"
+          THRESHOLD_PRINT: "85"
+          THRESHOLD_TOTAL: "90"
         run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.1
 
