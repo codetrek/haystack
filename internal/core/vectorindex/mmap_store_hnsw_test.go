@@ -998,7 +998,55 @@ func TestMmapHNSW_ExportRecall(t *testing.T) {
 	assert.Greater(t, recall, 0.95, "exported MmapStore recall@10 should be > 0.95")
 }
 
-// TestMmapHNSW_ExportThenInsertDelete verifies incremental ops work after export.
+func TestBatchCommitDurableAfterCrash(t *testing.T) {
+	dir := t.TempDir()
+	const N, dim = 60, 16
+	store, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: dim, M: 16, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(7))))
+
+	rng := rand.New(rand.NewSource(1))
+	vecs := make([][]float32, N)
+	b := idx.NewBatch()
+	for i := 0; i < N; i++ {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		vecs[i] = v
+		b.Put(fmt.Sprintf("doc-%d", i), v)
+	}
+	if err := b.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	simulateCrash(store) // no Close — committed WAL transaction must survive
+
+	store2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: dim, M: 16})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store2.Close()
+	idx2 := NewHNSWIndex(store2, WithRand(rand.New(rand.NewSource(7))))
+
+	// Every committed doc is its own nearest neighbor after recovery.
+	for i := 0; i < N; i++ {
+		res, err := idx2.Search(vecs[i], 1)
+		if err != nil {
+			t.Fatalf("search %d: %v", i, err)
+		}
+		if len(res) == 0 {
+			t.Fatalf("doc-%d not found after crash recovery", i)
+		}
+		if res[0].Distance > 1e-4 {
+			t.Fatalf("doc-%d nearest distance %f, want ~0", i, res[0].Distance)
+		}
+	}
+	if store2.meta.NodeCount != N {
+		t.Fatalf("NodeCount = %d, want %d", store2.meta.NodeCount, N)
+	}
+}
 func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 	const (
 		n       = 500
