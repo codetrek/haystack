@@ -500,6 +500,18 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 		if s.meta.NodeCount > 0 {
 			s.meta.NodeCount--
 		}
+
+	case WalSetMapping:
+		nodeId, docId := DecodeSetMapping(payload)
+		s.docToNode[docId] = nodeId
+		s.nodeToDoc[nodeId] = docId
+
+	case WalDeleteMapping:
+		docId := DecodeDeleteMapping(payload)
+		if nodeId, ok := s.docToNode[docId]; ok {
+			delete(s.nodeToDoc, nodeId)
+		}
+		delete(s.docToNode, docId)
 	}
 	return nil
 }
