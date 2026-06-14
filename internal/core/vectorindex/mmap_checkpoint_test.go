@@ -252,14 +252,21 @@ func TestAutoCheckpoint_NotTriggeredBelowInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write 5 records — well below 1000.
+	// Write 5 records inside a txn — well below the 1000 threshold.
+	// txnCommit flushes the WAL to disk without triggering a checkpoint.
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 5; i++ {
 		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
 			t.Fatal(err)
 		}
 	}
+	if err := s.txnCommit(); err != nil {
+		t.Fatal(err)
+	}
 
-	// WAL should still have data (no auto-checkpoint).
+	// WAL should still have data (no auto-checkpoint — ops < interval).
 	walPath := filepath.Join(dir, "wal.bin")
 	info, _ := os.Stat(walPath)
 	if info.Size() == 0 {

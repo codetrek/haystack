@@ -47,7 +47,11 @@ func TestWALReplayPayloadTooLarge(t *testing.T) {
 	}
 	defer w.Close()
 
-	if _, err := w.Append(WalInsert, []byte("x"), false); err != nil {
+	if _, err := w.Append(WalInsert, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	// Flush the buffer to disk so the record is on-disk before we corrupt it.
+	if err := w.Flush(); err != nil {
 		t.Fatal(err)
 	}
 

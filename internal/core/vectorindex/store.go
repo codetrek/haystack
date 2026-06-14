@@ -42,15 +42,6 @@ type NodeStore interface {
 	Close() error
 }
 
-// BatchableStore defines optional batching support for NodeStore implementations.
-// TODO(Phase 4): remove — superseded by the txnBegin/txnCommit/txnAbort primitive.
-type BatchableStore interface {
-	BeginBatch()
-	CommitBatch(sync bool) error
-	DiscardBatch()
-	BatchDepth() int
-}
-
 // --- encoding helpers ---
 
 func encodeFloat32s(v []float32) []byte {

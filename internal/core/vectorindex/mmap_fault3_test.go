@@ -1,14 +1,19 @@
 package vectorindex
 
 import (
+	"bufio"
 	"testing"
 )
 
 // failWALNextWrite makes the store's WAL fail its next buffered flush, so the
-// next non-batch Append (and the write method calling it) returns an error.
+// next Append (and the write method calling it) returns an error. The existing
+// buffer is flushed first, then replaced with a 1-byte buffer backed by a
+// fault-injecting file so that the very next buf.Write triggers a flush/error.
 func failWALNextWrite(s *MmapStore) {
-	s.wal.file = &faultFile{osFile: s.wal.file, failWrite: true}
-	s.wal.buf.Reset(s.wal.file)
+	_ = s.wal.buf.Flush() // drain any pending bytes
+	ff := &faultFile{osFile: s.wal.file, failWrite: true}
+	s.wal.file = ff
+	s.wal.buf = bufio.NewWriterSize(ff, 1) // 1-byte buffer: any Write triggers immediate flush
 }
 
 // --- grow dispatch / re-check / newCap==0 ---
@@ -108,31 +113,6 @@ func TestDeleteNodeWALError(t *testing.T) {
 
 // --- WAL method error branches ---
 
-func TestWALAppendFlushError(t *testing.T) {
-	w, err := OpenWAL(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-	w.file = &faultFile{osFile: w.file, failWrite: true}
-	w.buf.Reset(w.file)
-	if _, err := w.Append(WalInsert, []byte("x"), false); err == nil {
-		t.Fatal("expected flush error from Append")
-	}
-}
-
-func TestWALAppendSyncError(t *testing.T) {
-	w, err := OpenWAL(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-	w.file = &faultFile{osFile: w.file, failSync: true}
-	if _, err := w.Append(WalInsert, []byte("x"), false); err == nil {
-		t.Fatal("expected sync error from Append")
-	}
-}
-
 func TestWALSyncFlushError(t *testing.T) {
 	w, err := OpenWAL(t.TempDir())
 	if err != nil {
@@ -195,7 +175,7 @@ func TestWALReplayTruncateError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	if _, err := w.Append(WalInsert, []byte("x"), false); err != nil {
+	if _, err := w.Append(WalInsert, []byte("x")); err != nil {
 		t.Fatal(err)
 	}
 	w.file = &faultFile{osFile: w.file, failTruncate: true}

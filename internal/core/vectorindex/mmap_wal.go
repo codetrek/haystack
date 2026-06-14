@@ -121,9 +121,10 @@ func (w *WAL) scanLSN() error {
 	return nil
 }
 
-// Append writes a WAL record and returns the assigned LSN.
-// In non-batch mode, it fsyncs immediately.
-func (w *WAL) Append(typ WalRecordType, payload []byte, batchMode bool) (uint64, error) {
+// Append writes a WAL record and returns the assigned LSN. The record is
+// buffered; the caller is responsible for flushing and fsyncing at the
+// appropriate commit boundary (txnCommit calls wal.Sync).
+func (w *WAL) Append(typ WalRecordType, payload []byte) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
@@ -150,15 +151,6 @@ func (w *WAL) Append(typ WalRecordType, payload []byte, batchMode bool) (uint64,
 	}
 	if _, err := w.buf.Write(crcBuf); err != nil {
 		return 0, fmt.Errorf("WAL: write crc: %w", err)
-	}
-
-	if !batchMode {
-		if err := w.buf.Flush(); err != nil {
-			return 0, fmt.Errorf("WAL: flush: %w", err)
-		}
-		if err := w.file.Sync(); err != nil {
-			return 0, fmt.Errorf("WAL: sync: %w", err)
-		}
 	}
 
 	return lsn, nil

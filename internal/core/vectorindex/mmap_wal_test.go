@@ -14,23 +14,23 @@ func TestWALAppendAndReplay(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{1.0, 2.0, 3.0}
-	lsn1, err := w.Append(WalInsert, EncodeInsert(0, 1, vec, 3.74, "doc-0"), false)
+	lsn1, err := w.Append(WalInsert, EncodeInsert(0, 1, vec, 3.74, "doc-0"))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(1), lsn1)
 
-	lsn2, err := w.Append(WalSetNeighbors, EncodeSetNeighbors(0, 0, []uint64{1, 2, 3}), false)
+	lsn2, err := w.Append(WalSetNeighbors, EncodeSetNeighbors(0, 0, []uint64{1, 2, 3}))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(2), lsn2)
 
-	lsn3, err := w.Append(WalSetEntry, EncodeSetEntry(0, 1), false)
+	lsn3, err := w.Append(WalSetEntry, EncodeSetEntry(0, 1))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(3), lsn3)
 
-	lsn4, err := w.Append(WalSetNorm, EncodeSetNorm(0, 5.5), false)
+	lsn4, err := w.Append(WalSetNorm, EncodeSetNorm(0, 5.5))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(4), lsn4)
 
-	lsn5, err := w.Append(WalDelete, EncodeDelete(0, "doc-0"), false)
+	lsn5, err := w.Append(WalDelete, EncodeDelete(0, "doc-0"))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(5), lsn5)
 
@@ -89,7 +89,7 @@ func TestWALReplayAfterLSN(t *testing.T) {
 	requireNoError(t, err)
 
 	for i := 0; i < 10; i++ {
-		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)), false)
+		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)))
 		requireNoError(t, err)
 	}
 	requireNoError(t, w.Close())
@@ -114,7 +114,7 @@ func TestWALTruncatedRecord(t *testing.T) {
 	requireNoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)), false)
+		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)))
 		requireNoError(t, err)
 	}
 	requireNoError(t, w.Close())
@@ -143,7 +143,7 @@ func TestWALCorruptedCRC(t *testing.T) {
 	requireNoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)), false)
+		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)))
 		requireNoError(t, err)
 	}
 	requireNoError(t, w.Close())
@@ -326,7 +326,7 @@ func openStoreForReplay(t *testing.T, dir string, dim, m int) *MmapStore {
 // hand-build txn-framed WAL streams.
 func appendRaw(t *testing.T, s *MmapStore, typ WalRecordType, payload []byte) {
 	t.Helper()
-	if _, err := s.wal.Append(typ, payload, true); err != nil {
+	if _, err := s.wal.Append(typ, payload); err != nil {
 		t.Fatalf("append %d: %v", typ, err)
 	}
 }
@@ -480,15 +480,15 @@ func TestWALContinueLSNAfterReopen(t *testing.T) {
 	w, err := OpenWAL(dir)
 	requireNoError(t, err)
 
-	_, err = w.Append(WalSetNorm, EncodeSetNorm(0, 1.0), false)
+	_, err = w.Append(WalSetNorm, EncodeSetNorm(0, 1.0))
 	requireNoError(t, err)
-	_, err = w.Append(WalSetNorm, EncodeSetNorm(1, 2.0), false)
+	_, err = w.Append(WalSetNorm, EncodeSetNorm(1, 2.0))
 	requireNoError(t, err)
 	requireNoError(t, w.Close())
 
 	w2, err := OpenWAL(dir)
 	requireNoError(t, err)
-	lsn, err := w2.Append(WalSetNorm, EncodeSetNorm(2, 3.0), false)
+	lsn, err := w2.Append(WalSetNorm, EncodeSetNorm(2, 3.0))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(3), lsn)
 	requireNoError(t, w2.Close())

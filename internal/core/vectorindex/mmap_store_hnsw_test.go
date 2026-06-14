@@ -506,8 +506,7 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
-		// Build using a single index batch: all inserts committed as one durable txn,
-		// deferring per-op msync without weakening the test.
+		// Build using a single index batch: all inserts committed as one durable txn.
 		b := idx.NewBatch()
 		for i, v := range vecs {
 			b.Put(fmt.Sprintf("doc-%d", i), v)
@@ -1079,8 +1078,7 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 	// Use an index-level batch to group post-export inserts + deletes: each HNSW op
-	// is a PutNode plus several SetNeighbors, and a per-op msync makes this ~13s on
-	// Windows. One batch Commit defers all syncing without changing what's tested.
+	// is a PutNode plus several SetNeighbors. One batch Commit defers all syncing.
 	b := mmapIdx.NewBatch()
 	for i := n; i < n+nExtra; i++ {
 		b.Put(fmt.Sprintf("doc-%d", i), baseVecs[i])

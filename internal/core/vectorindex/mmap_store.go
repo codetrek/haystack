@@ -12,14 +12,6 @@ import (
 
 const defaultInitialCapacity = 1024
 
-// SyncMode controls fsync behavior in CommitBatch.
-type SyncMode int
-
-const (
-	SyncImmediate SyncMode = 0 // WAL flush + file sync + msync (default, durable)
-	SyncDeferred  SyncMode = 1 // WAL flush only (caller must call Sync() later)
-)
-
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
 	Dim                int    // vector dimension (required)
@@ -33,8 +25,7 @@ type MmapStoreOptions struct {
 // Concurrency model:
 //
 //   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
-//     DeleteNode, SetNodeMapping, NextNodeId, BeginBatch, CommitBatch,
-//     DiscardBatch) are serialised by muWrite.Lock().
+//     DeleteNode, SetNodeMapping, NextNodeId) are serialised by muWrite.Lock().
 //   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
 //   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
 //   - Grow functions (ensureCapacity / growFile) are called under muWrite
@@ -55,10 +46,8 @@ type MmapStore struct {
 	l0File    osFile
 	upperFile osFile
 
-	// WAL and batch support
+	// WAL and transaction support
 	wal                *WAL
-	batchMode          bool
-	batchDepth         int
 	inTxn              bool  // a store transaction (txnBegin..txnCommit) is open
 	faulted            error // first fatal write error; once set, writes are rejected
 	opsSinceCheckpoint uint64
@@ -68,8 +57,6 @@ type MmapStore struct {
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
 	idmapFile osFile // idmap.dat append handle
-
-	syncMode SyncMode
 
 	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
 	muVec   sync.RWMutex
@@ -520,9 +507,9 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 // recovery fully reconstructs the index.
 func (s *MmapStore) replayWAL() error {
 	var replayed int
-	prevBatchMode := s.batchMode
-	s.batchMode = true
-	defer func() { s.batchMode = prevBatchMode }()
+	prevInTxn := s.inTxn
+	s.inTxn = true
+	defer func() { s.inTxn = prevInTxn }()
 
 	// Transaction framing: records between WalTxnBegin and its matching
 	// WalTxnCommit are buffered and applied atomically on COMMIT. An

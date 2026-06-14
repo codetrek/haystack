@@ -8,8 +8,7 @@ import (
 // TestKill9Recovery_E2E simulates a kill -9 scenario:
 // Insert vectors → "crash" (skip Close) → reopen → verify all data intact.
 // N and CheckpointInterval are kept proportional (N/interval ≈ 4) so recovery
-// still replays a WAL that spans several mid-stream checkpoints; the absolute
-// counts are modest to keep the per-op msync cost (heaviest on Windows) low.
+// still replays a WAL that spans several mid-stream checkpoints.
 func TestKill9Recovery_E2E(t *testing.T) {
 	dir := t.TempDir()
 	const N = 200

@@ -195,7 +195,6 @@ func TestMmapStoreBatchWriteAndRead(t *testing.T) {
 	}
 }
 
-
 func TestMmapStoreNextNodeId(t *testing.T) {
 	s := openTestMmapStore(t)
 	defer s.Close()
@@ -268,4 +267,3 @@ func TestTxnInsertSurvivesReopen(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(50), nodeId)
 }
-

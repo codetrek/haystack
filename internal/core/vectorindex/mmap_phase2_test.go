@@ -305,7 +305,7 @@ func TestMmapStoreRebuildNodeCount(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CommitBatch exercises WAL flush + syncAll paths
+// txnCommit exercises WAL flush + syncAll paths
 // ---------------------------------------------------------------------------
 
 func TestMmapStoreTxnCommitSyncs(t *testing.T) {
