@@ -18,6 +18,10 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	// Convert to stored form (cosine: unit vector) and keep the original norm
 	// for GetVector restore. norm never participates in distance computation.
 	stored, norm := s.metric.prepare(vector)
@@ -91,6 +95,10 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 func (s *MmapStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
+
+	if s.faulted != nil {
+		return s.faulted
+	}
 
 	if _, err := s.wal.Append(WalSetNeighbors, EncodeSetNeighbors(id, layer, neighbors), s.batchMode); err != nil {
 		return fmt.Errorf("MmapStore.SetNeighbors: WAL: %w", err)
@@ -171,6 +179,10 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	if _, err := s.wal.Append(WalSetNorm, EncodeSetNorm(id, norm), s.batchMode); err != nil {
 		return fmt.Errorf("MmapStore.SetNorm: WAL: %w", err)
 	}
@@ -192,6 +204,10 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	if _, err := s.wal.Append(WalSetEntry, EncodeSetEntry(id, maxLayer), s.batchMode); err != nil {
 		return fmt.Errorf("MmapStore.SetEntryPoint: WAL: %w", err)
 	}
@@ -208,6 +224,10 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 func (s *MmapStore) SetNodeMapping(docId string, nodeId uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
+
+	if s.faulted != nil {
+		return s.faulted
+	}
 
 	s.muDoc.Lock()
 	defer s.muDoc.Unlock()
@@ -253,6 +273,10 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	// Look up docId for WAL record.
 	docId := s.nodeToDoc[id]
 
@@ -286,6 +310,21 @@ func (s *MmapStore) allocUpperSlot() uint32 {
 }
 
 // --- BatchableStore implementation ---
+
+// deferSync reports whether per-op syncing should be skipped because a batch
+// or a transaction is open; the open scope syncs once at commit time.
+// Caller holds muWrite.
+func (s *MmapStore) deferSync() bool { return s.batchMode || s.inTxn }
+
+// fault records the first fatal write error and returns it. Once faulted, all
+// write methods reject. Recovery is via reopen (transaction-aware replay
+// restores the last committed state). Caller holds muWrite.
+func (s *MmapStore) fault(err error) error {
+	if s.faulted == nil {
+		s.faulted = err
+	}
+	return s.faulted
+}
 
 // BeginBatch enters batch mode, deferring sync until CommitBatch.
 func (s *MmapStore) BeginBatch() {

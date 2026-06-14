@@ -59,6 +59,8 @@ type MmapStore struct {
 	wal                *WAL
 	batchMode          bool
 	batchDepth         int
+	inTxn              bool  // a store transaction (txnBegin..txnCommit) is open
+	faulted            error // first fatal write error; once set, writes are rejected
 	opsSinceCheckpoint uint64
 	checkpointInterval uint64
 
