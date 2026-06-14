@@ -125,3 +125,24 @@ Same code, 308s vs 427s — a 118s (38%) swing. The 308s run is faster than #69'
 351s, so #69 was not special. Conclusion: the gate time is dominated by CI
 runner speed; single before/after comparisons are meaningless without averaging
 several runs.
+
+## 6. A local wrapper on the distance hot path costs ~5s under coverage/-race
+
+Routing the cosine/dot distance through a local `dot()` wrapper (added for the
+arm64 NEON kernel) had **zero cost without coverage** (it inlines to vek32.Dot;
+per-test diff vs #69 was ≤0.03s). But under the gate's `-coverpkg=./...` atomic
+coverage, `dot()` — being local code — gets a coverage counter that fires on
+**every** distance call. Across millions of calls that was ~5s (amplified under
+-race). vek32.Dot is in an external package, so it is never instrumented.
+
+Measured, runner-controlled (same box, 3 samples each, with `-coverpkg=./...`):
+
+| | current (dot wrapper) | direct vek32.Dot | #69 |
+|---|---|---|---|
+| coverage time | 23s | 19s | 18s |
+
+Fix: make `distance` architecture-specific — amd64 calls `vek32.Dot` directly
+(metric_distance_amd64.go), arm64 routes through the NEON `dot()`
+(metric_distance_arm64.go). amd64's hot path is then byte-for-byte #69 (no extra
+counter); the NEON wrapper exists only on arm64. Lesson: a local indirection on
+a hot path is free at runtime but NOT free under instrumented coverage.
