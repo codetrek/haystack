@@ -267,3 +267,40 @@ func TestTxnInsertSurvivesReopen(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(50), nodeId)
 }
+
+func TestMappingDiscardedOnAbortReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	_ = s.txnAbort(fmt.Errorf("boom"))
+	_ = s.Close() // graceful close of a faulted store must not persist
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	requireNoError(t, err)
+	defer s2.Close()
+	if _, ok, _ := s2.GetNodeId("doc-0"); ok {
+		t.Fatal("aborted batch's docId mapping must NOT survive reopen (D1 closed)")
+	}
+}
+
+func TestMappingCommittedSurvivesCrash(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	requireNoError(t, s.txnCommit())
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	requireNoError(t, err)
+	defer s2.Close()
+	id, ok, _ := s2.GetNodeId("doc-0")
+	if !ok || id != 0 {
+		t.Fatalf("committed mapping must survive crash: got (%d,%v)", id, ok)
+	}
+}

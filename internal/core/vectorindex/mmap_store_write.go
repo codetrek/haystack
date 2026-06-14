@@ -204,40 +204,27 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	return s.maybeCheckpoint()
 }
 
-// SetNodeMapping adds a docId ↔ nodeId mapping and persists it to idmap.dat.
+// SetNodeMapping adds a docId ↔ nodeId mapping. The mapping is journaled to the
+// WAL (committed atomically with its transaction); idmap.dat is rewritten only
+// at checkpoint (compactIdmap). Crash recovery rebuilds the maps from the WAL.
 func (s *MmapStore) SetNodeMapping(docId string, nodeId uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
-
 	if s.faulted != nil {
 		return s.faulted
 	}
-
+	if _, err := s.wal.Append(WalSetMapping, EncodeSetMapping(nodeId, docId)); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.SetNodeMapping: WAL: %w", err))
+	}
 	s.muDoc.Lock()
-	defer s.muDoc.Unlock()
-
 	s.docToNode[docId] = nodeId
 	s.nodeToDoc[nodeId] = docId
-
-	// Append to idmap.dat: NodeId(8) + DocIdLen(2) + DocId(var) + CRC32(4)
-	docBytes := []byte(docId)
-	entry := make([]byte, 10+len(docBytes)+4)
-	binary.LittleEndian.PutUint64(entry[0:], nodeId)
-	binary.LittleEndian.PutUint16(entry[8:], uint16(len(docBytes)))
-	copy(entry[10:], docBytes)
-
-	h := crc32.NewIEEE()
-	h.Write(entry[:10+len(docBytes)])
-	binary.LittleEndian.PutUint32(entry[10+len(docBytes):], h.Sum32())
-
-	if _, err := s.idmapFile.Write(entry); err != nil {
-		return fmt.Errorf("MmapStore.SetNodeMapping: write idmap: %w", err)
-	}
+	s.muDoc.Unlock()
 	return nil
 }
 
-// DeleteNodeMapping removes a docId mapping from memory.
-// idmap.dat is not updated (Phase 3 compact will clean it up).
+// DeleteNodeMapping removes a docId mapping. Journaled to the WAL so the removal
+// is transactional and replayable; idmap.dat is reconciled at checkpoint.
 func (s *MmapStore) DeleteNodeMapping(docId string) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
@@ -246,13 +233,15 @@ func (s *MmapStore) DeleteNodeMapping(docId string) error {
 		return s.faulted
 	}
 
+	if _, err := s.wal.Append(WalDeleteMapping, EncodeDeleteMapping(docId)); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.DeleteNodeMapping: WAL: %w", err))
+	}
 	s.muDoc.Lock()
-	defer s.muDoc.Unlock()
-
 	if nodeId, ok := s.docToNode[docId]; ok {
 		delete(s.nodeToDoc, nodeId)
 	}
 	delete(s.docToNode, docId)
+	s.muDoc.Unlock()
 	return nil
 }
 
