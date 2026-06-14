@@ -67,3 +67,29 @@ jobs:
           if [ "$status" -ne 0 ]; then echo "===== full test log ====="; cat vitest.log; fi
           rm -f vitest.log
           exit "$status"
+
+  ab-gate-timing:
+    name: AB gate timing (experiment, do not merge)
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: current vs #69, same runner (interleaved)
+        shell: bash
+        run: |
+          # Times vectorindex tests under coverage. current = this branch (with
+          # the msync fixes); m69 = origin/main (#69, the slow versions). Same VM
+          # => runner speed cancels; the difference is the code.
+          run_cov() { go clean -testcache; t0=$(date +%s); go test -covermode=atomic -coverprofile=/tmp/cov.out ./internal/core/vectorindex/ >/dev/null 2>&1 || true; echo "$(($(date +%s)-t0))s"; }
+          git fetch -q origin main
+          git worktree add -q ../m69 origin/main
+          echo "RESULT current_1=$(run_cov)"
+          echo "RESULT m69_1=$( cd ../m69 && run_cov )"
+          echo "RESULT current_2=$(run_cov)"
+          echo "RESULT m69_2=$( cd ../m69 && run_cov )"
