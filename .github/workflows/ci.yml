@@ -69,3 +69,27 @@ jobs:
           rm -f vitest.log
           exit "$status"
 
+  searchcore-coverage:
+    name: Coverage (searchcore)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: go-cov (searchcore)
+        # searchcore has its own go.mod, so the main gate's `go test ./...` never
+        # reaches it. Run go-cov inside the module at the same bar as the main
+        # module (func 80 / package 85 / total 90).
+        working-directory: searchcore
+        env:
+          THRESHOLD_FUNC: "80"
+          THRESHOLD_PACKAGE: "85"
+          THRESHOLD_PRINT: "85"
+          THRESHOLD_TOTAL: "90"
+        run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.1
+

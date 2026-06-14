@@ -1,6 +1,6 @@
-package searchcore_test
+package engine_test
 
-// TestReadmeExample mirrors the Usage snippet in README.md end-to-end:
+// TestReadmeExample mirrors the Usage snippet in searchcore/README.md end-to-end:
 // open a temp pebblekv store, build the stack, create a collection, save a
 // document, compile and run a query. Keeping this test in sync with the README
 // ensures the example compiles and the described API actually works.
