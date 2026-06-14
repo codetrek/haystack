@@ -69,15 +69,29 @@ jobs:
           rm -f vitest.log
           exit "$status"
 
-      # TEMPORARY (investigation, do not merge): measure the NEON dot kernel
-      # variants on real Apple Silicon. Compares the shipped 1-accumulator hybrid
-      # vs a 4-accumulator kernel (Go tail) vs fully-pure-asm. Strip before merge.
-      - name: Dot kernel benchmark (Apple Silicon)
+      # TEMPORARY (investigation, do not merge): end-to-end A/B of the
+      # 4-accumulator dot kernel (this branch) vs origin/main's single-
+      # accumulator kernel, on real Apple Silicon, back-to-back on the same
+      # runner. Shows whether the kernel speedup translates to HNSW
+      # insert/search (dim=128). Strip before merge.
+      - name: Dot kernel end-to-end A/B (Apple Silicon)
         if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
-          go test -tags=dotbench -run '^TestDotVariants$' \
-            -bench '^BenchmarkDot$' -benchmem -count=8 -benchtime=200ms \
-            ./internal/core/vectorindex/
+          set -e
+          git fetch --depth=1 origin main
+          run() { go test -tags=benchmark -run '^$' \
+            -bench '^(BenchmarkHNSWInsert|BenchmarkHNSWSearch)$' \
+            -benchmem -count=12 -benchtime=200ms -timeout 20m \
+            ./internal/core/vectorindex/; }
+          echo '##### NEW: 4-accumulator kernel (this branch) #####'
+          run | tee /tmp/new.txt
+          echo '##### OLD: 1-accumulator kernel (origin/main) #####'
+          git checkout FETCH_HEAD -- internal/core/vectorindex/dot_arm64.s internal/core/vectorindex/dot_arm64.go
+          run | tee /tmp/old.txt
+          git checkout HEAD -- internal/core/vectorindex/dot_arm64.s internal/core/vectorindex/dot_arm64.go
+          echo '##### PAIRED (old | new) #####'
+          paste <(grep -E '^Benchmark' /tmp/old.txt) <(grep -E '^Benchmark' /tmp/new.txt) || true
 
   searchcore-coverage:
     name: Coverage (searchcore)
