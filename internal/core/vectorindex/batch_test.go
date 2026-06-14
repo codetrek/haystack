@@ -1,6 +1,7 @@
 package vectorindex
 
 import (
+	"fmt"
 	"math/rand"
 	"testing"
 
@@ -110,6 +111,44 @@ func TestBatchUpsertReplacesCommittedDoc(t *testing.T) {
 	requireNoError(t, err)
 	requireLen(t, res2, 1)
 	assert.Greater(t, res2[0].Distance, float32(0.5), "old [1,0,0] node must no longer exist")
+}
+
+// failingStore wraps a MemNodeStore and fails the Nth PutNode, recording
+// whether the transaction was aborted.
+type failingStore struct {
+	*MemNodeStore
+	failOnPut int
+	puts      int
+	aborted   bool
+}
+
+func (f *failingStore) PutNode(id uint64, level int, vec []float32) error {
+	f.puts++
+	if f.puts == f.failOnPut {
+		return fmt.Errorf("injected PutNode failure")
+	}
+	return f.MemNodeStore.PutNode(id, level, vec)
+}
+
+func (f *failingStore) txnAbort(cause error) error {
+	f.aborted = true
+	return f.MemNodeStore.txnAbort(cause)
+}
+
+func TestBatchCommitAbortsOnApplyError(t *testing.T) {
+	fs := &failingStore{MemNodeStore: NewMemNodeStore(), failOnPut: 3}
+	idx := NewHNSWIndex(fs, WithRand(rand.New(rand.NewSource(5))))
+
+	b := idx.NewBatch()
+	for i := 0; i < 5; i++ {
+		b.Put(fmt.Sprintf("doc-%d", i), []float32{float32(i), 1, 0})
+	}
+	if err := b.Commit(); err == nil {
+		t.Fatal("Commit must return the injected error")
+	}
+	if !fs.aborted {
+		t.Fatal("Commit must abort the transaction on a mid-apply error")
+	}
 }
 
 func TestBatchReusableAcrossCommits(t *testing.T) {
