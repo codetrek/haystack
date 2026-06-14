@@ -69,6 +69,16 @@ jobs:
           rm -f vitest.log
           exit "$status"
 
+      # TEMPORARY (investigation, do not merge): re-measure 4Acc Go-tail vs
+      # pure-asm on Apple Silicon, after making dot4AccPure read len once, with
+      # more samples and dims bracketing 384. Strip before merge.
+      - name: Dot kernel benchmark (Apple Silicon)
+        if: matrix.os == 'macos-latest'
+        run: |
+          go test -tags=dotbench -run '^TestDotVariants$' \
+            -bench '^BenchmarkDot$' -benchmem -count=20 -benchtime=300ms \
+            ./internal/core/vectorindex/
+
   searchcore-coverage:
     name: Coverage (searchcore)
     runs-on: ubuntu-latest
