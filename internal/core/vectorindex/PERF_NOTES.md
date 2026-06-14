@@ -3,9 +3,7 @@
 Raw measurements gathered while investigating CI/runtime perf. Kept so the
 detailed numbers aren't lost when CI instrumentation is reverted.
 
-## 1. Windows CI test step — where the time goes (measured on the runners)
-
-vectorindex-only test step (`go test ./internal/core/vectorindex/...`):
+## 1. Windows CI test step — where the time goes (measured on the runners)vectorindex-only test step (`go test ./internal/core/vectorindex/...`):
 
 | | Windows | macOS | my Linux box |
 |---|---|---|---|
@@ -82,3 +80,33 @@ vs NEON 128-bit (4 lanes), plus the macOS runner is smaller — so arm64 stays
 hot path is no longer scalar. The remaining headroom on arm64 would come from a
 wider/unrolled NEON kernel (multiple accumulators) — deferred; the simple
 1-accumulator kernel already captures the bulk of the win.
+
+## 5. The Linux coverage gate IS the vectorindex tests
+
+The ubuntu gate runs `go-cov` = `go test -coverpkg=./... -covermode=atomic ./...`
+for the whole repo. Per-package breakdown of the gate test run (#69):
+
+| package | gate time |
+|---|---|
+| internal/core/vectorindex | 351.68s |
+| internal/server/searcher | 30.42s |
+| internal/server/indexer | 4.66s |
+| everything else | < 1s |
+
+So the gate is ~99% vectorindex — every other package finishes in parallel
+within ~30s; vectorindex is the long pole. The gate total ≈ vectorindex's
+coverage-test time + ~50s setup/build.
+
+vectorindex coverage time is high AND hugely variable across runs (runner-
+dependent): 351s (#69), 418s (#67), 432s (#68), 419s (current branch). The
+"6m41s" #69 run was a lucky-fast runner; the norm is ~420s (~7m). Locally the
+same tests are ~18s with coverage — the 20x+ blowup on CI is: 4-core runner +
+slow CI disk + atomic covermode + the I/O-heavy mmap/fault tests (every msync /
+TempDir is a real syscall on a slow disk, multiplied by coverage overhead).
+
+Root cause of the long-term Linux growth = the same as Windows: per-op msync in
+the growing set of I/O-heavy tests. The msync/batch fixes (Kill9, WALReplay,
+Grow, Export) reduce exactly this, so they help Linux too — but the ±80s runner
+variance masks the per-run gain. Bigger structural levers (separate task):
+covermode atomic→count (atomic is only needed with -race), or narrower
+-coverpkg scope.
