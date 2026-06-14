@@ -58,21 +58,13 @@ jobs:
         if: matrix.os != 'ubuntu-latest'
         shell: bash
         run: |
-          set -x
           echo "RESULT OS=${{ runner.os }}"
-          echo "=== cache state (was the Go build cache restored on this OS?) ==="
-          go env GOCACHE GOMODCACHE
-          CACHE=$(go env GOCACHE)
-          du -sh "$CACHE" 2>/dev/null || echo "RESULT cache_dir_missing_or_unreadable"
-          echo "=== STEP 1: compile+link the vectorindex test binary ==="
-          t0=$(date +%s); go test -c -o vitest_bin ./internal/core/vectorindex/ ; t1=$(date +%s)
-          echo "RESULT COMPILE=$((t1-t0))s"
-          echo "=== STEP 2: run ALL (binary now cached → ~pure execution) ==="
-          t0=$(date +%s); go test -count=1 ./internal/core/vectorindex/ ; t1=$(date +%s)
-          echo "RESULT RUN_ALL=$((t1-t0))s"
-          echo "=== STEP 3: run WITHOUT fault/crash/WAL tests ==="
-          t0=$(date +%s); go test -count=1 -skip 'Error|Fault|Crash|Kill9|Recovery|Replay|WAL|Checkpoint|Idmap' ./internal/core/vectorindex/ ; t1=$(date +%s)
-          echo "RESULT RUN_NO_FAULT=$((t1-t0))s"
-          echo "=== STEP 4: run ONLY fault/crash/WAL tests (the 55 added ones live here) ==="
-          t0=$(date +%s); go test -count=1 -run 'Error|Fault|Crash|Kill9|Recovery|Replay|WAL|Checkpoint|Idmap' ./internal/core/vectorindex/ ; t1=$(date +%s)
+          FAULT='Error|Fault|Crash|Kill9|Recovery|Replay|WAL|Checkpoint|Idmap|Remap|Grow|OutOfRange|Endian'
+          echo "=== total time: fault subset (noise re-check vs prior run) ==="
+          t0=$(date +%s); go test -count=1 -run "$FAULT" ./internal/core/vectorindex/ >/dev/null 2>&1; t1=$(date +%s)
           echo "RESULT RUN_ONLY_FAULT=$((t1-t0))s"
+          echo "=== per-test timing (verbose), fault subset — sorted desc ==="
+          go test -v -count=1 -run "$FAULT" ./internal/core/vectorindex/ 2>&1 \
+            | grep -E '^--- (PASS|FAIL):' \
+            | sed -E 's/^--- (PASS|FAIL): (Test[A-Za-z0-9_]+) \(([0-9.]+)s\)/PERTEST \3 \2/' \
+            | sort -rn | head -40
