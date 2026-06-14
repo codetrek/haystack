@@ -1,0 +1,73 @@
+package vectorindex
+
+import "github.com/viterin/vek/vek32"
+
+// Metric is the immutable distance metric of an index. It is chosen when the
+// index is created, persisted in the store metadata, and must never change for
+// a given index: both the graph structure and the on-disk vector form depend on
+// it (see the package docs on why a metric cannot be swapped after build).
+type Metric uint8
+
+const (
+	// Cosine stores vectors normalized to unit length, so cosine distance
+	// reduces to 1 - dot(a, b) with no per-distance norm division.
+	Cosine Metric = 0
+	// DotProduct stores raw vectors; distance is 1 - dot(a, b).
+	DotProduct Metric = 1
+	// Euclidean stores raw vectors; distance is the L2 norm of a - b.
+	Euclidean Metric = 2
+)
+
+func (m Metric) String() string {
+	switch m {
+	case Cosine:
+		return "cosine"
+	case DotProduct:
+		return "dot"
+	case Euclidean:
+		return "euclidean"
+	default:
+		return "unknown"
+	}
+}
+
+// storesNormalized reports whether vectors are normalized before being stored.
+func (m Metric) storesNormalized() bool { return m == Cosine }
+
+// prepare maps a raw vector to the form stored on disk and returns the raw
+// vector's L2 norm (persisted so GetVector can restore the original). For
+// cosine it returns a new unit-length slice; for the raw metrics it returns the
+// input slice unchanged. A zero vector is stored as-is (norm 0).
+func (m Metric) prepare(v []float32) (stored []float32, norm float32) {
+	norm = vek32.Norm(v)
+	if m != Cosine || norm == 0 {
+		return v, norm
+	}
+	out := make([]float32, len(v))
+	inv := 1.0 / norm
+	for i, x := range v {
+		out[i] = x * inv
+	}
+	return out, norm
+}
+
+// restore maps a stored vector back to its original raw form. For cosine it
+// multiplies the unit vector by the stored norm; otherwise it is the identity.
+func (m Metric) restore(stored []float32, norm float32) []float32 {
+	if m != Cosine {
+		return stored
+	}
+	out := make([]float32, len(stored))
+	for i, x := range stored {
+		out[i] = x * norm
+	}
+	return out
+}
+
+// distance compares two vectors that are already in stored form.
+func (m Metric) distance(a, b []float32) float32 {
+	if m == Euclidean {
+		return vek32.Distance(a, b)
+	}
+	return 1 - vek32.Dot(a, b)
+}

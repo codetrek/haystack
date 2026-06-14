@@ -3,16 +3,15 @@ package vectorindex
 import (
 	"fmt"
 	"sync"
-
-	"github.com/viterin/vek/vek32"
 )
 
 // MemNodeStore is an in-memory implementation of NodeStore for testing.
 type MemNodeStore struct {
 	mu        sync.RWMutex
-	vectors   map[uint64][]float32
+	metric    Metric
+	vectors   map[uint64][]float32 // stored form (normalized for cosine)
 	levels    map[uint64]int
-	norms     map[uint64]float32
+	norms     map[uint64]float32          // original norm, used only to restore vectors
 	neighbors map[uint64]map[int][]uint64 // nodeId -> layer -> neighbor ids
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
@@ -22,9 +21,15 @@ type MemNodeStore struct {
 	nextID    uint64
 }
 
-// NewMemNodeStore creates a new in-memory NodeStore.
-func NewMemNodeStore() *MemNodeStore {
+// NewMemNodeStore creates a new in-memory NodeStore. The distance metric
+// defaults to Cosine when not specified.
+func NewMemNodeStore(metric ...Metric) *MemNodeStore {
+	m := Cosine
+	if len(metric) > 0 {
+		m = metric[0]
+	}
 	return &MemNodeStore{
+		metric:    m,
 		vectors:   make(map[uint64][]float32),
 		levels:    make(map[uint64]int),
 		norms:     make(map[uint64]float32),
@@ -35,8 +40,11 @@ func NewMemNodeStore() *MemNodeStore {
 	}
 }
 
-// GetVector returns a copy of the vector for the given node.
-// The returned slice is safe to modify.
+// Metric returns the store's distance metric.
+func (m *MemNodeStore) Metric() Metric { return m.metric }
+
+// GetVector returns a copy of the original vector for the given node. For cosine
+// the stored unit vector is restored to its original scale via the stored norm.
 func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -44,13 +52,11 @@ func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	if !ok {
 		return nil, fmt.Errorf("node %d not found", id)
 	}
-	cp := make([]float32, len(v))
-	copy(cp, v)
-	return cp, nil
+	return m.metric.restore(v, m.norms[id]), nil
 }
 
-// GetVectorRef returns the internal vector slice directly without copying.
-// The caller MUST NOT modify the returned slice.
+// GetVectorRef returns the internal stored vector slice directly without
+// copying. The caller MUST NOT modify the returned slice.
 func (m *MemNodeStore) GetVectorRef(id uint64) ([]float32, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -64,11 +70,12 @@ func (m *MemNodeStore) GetVectorRef(id uint64) ([]float32, error) {
 func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	cp := make([]float32, len(vector))
-	copy(cp, vector)
+	stored, norm := m.metric.prepare(vector)
+	cp := make([]float32, len(stored))
+	copy(cp, stored)
 	m.vectors[id] = cp
 	m.levels[id] = level
-	m.norms[id] = vek32.Norm(vector)
+	m.norms[id] = norm
 	if _, ok := m.neighbors[id]; !ok {
 		m.neighbors[id] = make(map[int][]uint64)
 	}

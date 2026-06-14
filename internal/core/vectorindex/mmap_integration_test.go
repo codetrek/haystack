@@ -93,6 +93,7 @@ func TestMmapStoreIntegration(t *testing.T) {
 		Version:    1,
 		Dim:        dim,
 		M:          m,
+		Metric:     uint32(DotProduct),
 		MaxLevel:   2,
 		EntryLevel: 2,
 		NodeCount:  3,
@@ -106,7 +107,7 @@ func TestMmapStoreIntegration(t *testing.T) {
 
 	// --- Open and verify ---
 
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: m})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: m})
 	if err != nil {
 		t.Fatalf("OpenMmapStore: %v", err)
 	}

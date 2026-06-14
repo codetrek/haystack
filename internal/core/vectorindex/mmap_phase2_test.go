@@ -87,7 +87,7 @@ func TestMmapStoreSetNeighborsUpperMultipleLayers(t *testing.T) {
 
 func TestMmapStoreGrowUpperGraph(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s.Close()
 
@@ -110,7 +110,7 @@ func TestMmapStoreGrowUpperGraph(t *testing.T) {
 
 func TestMmapStoreCloseReopenPersistence(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -172,7 +172,7 @@ func TestMmapStoreCloseReopenPersistence(t *testing.T) {
 
 func TestMmapStoreLoadIdmap(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	// Write multiple mappings, close, reopen — all should be present.
 	s, err := OpenMmapStore(dir, opts)
@@ -197,7 +197,7 @@ func TestMmapStoreLoadIdmap(t *testing.T) {
 
 func TestMmapStoreLoadIdmapCorrupt(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -248,7 +248,7 @@ func TestMmapStoreSyncAll(t *testing.T) {
 
 func TestMmapStoreDeleteNodeAndReopen(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -279,7 +279,7 @@ func TestMmapStoreDeleteNodeAndReopen(t *testing.T) {
 
 func TestMmapStoreRebuildNodeCount(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -306,7 +306,7 @@ func TestMmapStoreRebuildNodeCount(t *testing.T) {
 
 func TestMmapStoreCommitBatchSyncs(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)

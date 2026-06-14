@@ -8,7 +8,7 @@ import (
 
 func TestMmapStoreGetVector(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestMmapStoreGetVector(t *testing.T) {
 
 func TestMmapStoreGetVectorOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestMmapStoreGetVectorOutOfRange(t *testing.T) {
 
 func TestMmapStoreGetNeighborsL0(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestMmapStoreGetNeighborsL0(t *testing.T) {
 
 func TestMmapStoreGetNeighborsUpper(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestMmapStoreGetNeighborsUpper(t *testing.T) {
 
 func TestMmapStoreGetNormAndLevel(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestMmapStoreGetNormAndLevel(t *testing.T) {
 
 func TestMmapStoreGetNodeLevelDeleted(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +157,7 @@ func TestMmapStoreGetNodeLevelDeleted(t *testing.T) {
 
 func TestMmapStoreGetEntryPoint(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestMmapStoreGetEntryPoint(t *testing.T) {
 
 func TestMmapStoreGetNodeId(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +209,7 @@ func TestMmapStoreGetNodeId(t *testing.T) {
 
 func TestMmapStoreReadUpperSlotOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestMmapStoreReadUpperSlotOutOfRange(t *testing.T) {
 
 func TestMmapStoreGetNeighborsL0OutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestMmapStoreGetNeighborsL0OutOfRange(t *testing.T) {
 
 func TestMmapStoreGetNeighborsUpperOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestMmapStoreGetNeighborsUpperOutOfRange(t *testing.T) {
 
 func TestMmapStoreGetNeighborsUpperSlotZero(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestMmapStoreGetNeighborsUpperSlotZero(t *testing.T) {
 
 func TestMmapStoreGetNeighborsUpperBadLayer(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +301,7 @@ func TestMmapStoreGetNeighborsUpperBadLayer(t *testing.T) {
 
 func TestMmapStoreGetNeighborsUpperSlotOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestMmapStoreGetNeighborsUpperSlotOutOfRange(t *testing.T) {
 
 func TestMmapStoreGetNormOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,7 +332,7 @@ func TestMmapStoreGetNormOutOfRange(t *testing.T) {
 
 func TestMmapStoreGetNodeLevelOutOfRange(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 16})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 16})
 	if err != nil {
 		t.Fatal(err)
 	}

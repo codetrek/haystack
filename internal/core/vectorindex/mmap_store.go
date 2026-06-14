@@ -22,9 +22,10 @@ const (
 
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
-	Dim                int // vector dimension (required)
-	M                  int // HNSW M parameter (required)
-	CheckpointInterval int // auto-checkpoint every N WAL appends (0 = default 1000)
+	Dim                int    // vector dimension (required)
+	M                  int    // HNSW M parameter (required)
+	Metric             Metric // distance metric (default Cosine); immutable once created
+	CheckpointInterval int    // auto-checkpoint every N WAL appends (0 = default 1000)
 }
 
 // MmapStore implements NodeStore backed by mmap'd flat files.
@@ -41,6 +42,8 @@ type MmapStoreOptions struct {
 type MmapStore struct {
 	dir  string
 	meta MetaHeader
+
+	metric Metric
 
 	vectors    []byte // vectors.dat mmap
 	nodes      []byte // nodes.dat mmap
@@ -91,6 +94,9 @@ type MmapStore struct {
 	crashBeforeTruncate func() // called before WAL Reset in Checkpoint
 }
 
+// Metric returns the store's immutable distance metric.
+func (s *MmapStore) Metric() Metric { return s.metric }
+
 // OpenMmapStore opens or creates an mmap-backed store in dir.
 func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	if opts.Dim <= 0 {
@@ -106,6 +112,7 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 
 	s := &MmapStore{
 		dir:         dir,
+		metric:      opts.Metric,
 		dim:         opts.Dim,
 		m:           opts.M,
 		mmax0:       opts.M * 2,
@@ -141,6 +148,10 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		if int(h.M) != opts.M {
 			return nil, fmt.Errorf("MmapStore: M mismatch: file=%d, opts=%d", h.M, opts.M)
 		}
+		if Metric(h.Metric) != opts.Metric {
+			return nil, fmt.Errorf("MmapStore: metric mismatch: file=%s, opts=%s", Metric(h.Metric), opts.Metric)
+		}
+		s.metric = Metric(h.Metric)
 		s.meta = *h
 	}
 
@@ -234,6 +245,7 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 		Version:    1,
 		Dim:        uint32(s.dim),
 		M:          uint32(s.m),
+		Metric:     uint32(s.metric),
 		EntryPoint: ^uint64(0), // sentinel: no entry point
 	}
 

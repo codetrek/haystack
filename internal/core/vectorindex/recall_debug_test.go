@@ -27,7 +27,7 @@ func TestHNSWRecallDebug10K(t *testing.T) {
 
 	// Build the index once and reuse it for all efSearch values.
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance(), WithRand(rand.New(rand.NewSource(seed))))
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(seed))))
 
 	for i, v := range vecs {
 		if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {

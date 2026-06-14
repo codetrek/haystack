@@ -42,13 +42,13 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 		bs := bs
 		t.Run(fmt.Sprintf("batch%d", bs), func(t *testing.T) {
 			dir := t.TempDir()
-			store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: mParam})
+			store, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: mParam, Metric: Euclidean})
 			if err != nil {
 				t.Fatalf("OpenMmapStore: %v", err)
 			}
 			defer store.Close()
 
-			idx := NewHNSWIndex(store, WithEuclideanDistance())
+			idx := NewHNSWIndex(store)
 
 			t.Logf("Inserting %d vectors: batch_size=%d, sync per batch...", nBase, bs)
 			start := time.Now()
@@ -124,7 +124,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 		}
 		defer store.Close()
 
-		idx := NewHNSWIndex(store, WithEuclideanDistance())
+		idx := NewHNSWIndex(store)
 
 		t.Log("Inserting 50K vectors: deferred sync (single bulk)...")
 		if err := store.SetSyncMode(SyncDeferred); err != nil {

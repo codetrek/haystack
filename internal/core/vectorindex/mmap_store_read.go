@@ -7,12 +7,21 @@ import (
 	"unsafe"
 )
 
-// GetVector returns a copy of the vector for the given node ID. The returned
-// slice is owned by the caller and is safe to retain and mutate.
+// GetVector returns a copy of the original vector for the given node ID. The
+// returned slice is owned by the caller. For cosine the stored unit vector is
+// restored to its original scale via the stored norm; for the raw metrics the
+// stored vector is the original.
 func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	ref, err := s.GetVectorRef(id)
 	if err != nil {
 		return nil, err
+	}
+	if s.metric.storesNormalized() {
+		norm, err := s.GetNorm(id)
+		if err != nil {
+			return nil, err
+		}
+		return s.metric.restore(ref, norm), nil // allocates a fresh slice
 	}
 	vec := make([]float32, len(ref))
 	copy(vec, ref)

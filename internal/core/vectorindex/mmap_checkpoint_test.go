@@ -11,7 +11,7 @@ import (
 
 func TestCheckpoint_MetaAndWALTruncated(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestCheckpoint_MetaAndWALTruncated(t *testing.T) {
 
 func TestCheckpoint_ContinueWriteAndReplay(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestCheckpoint_ContinueWriteAndReplay(t *testing.T) {
 	}
 
 	// Reopen — replay should only see the 2 new records.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +120,7 @@ func TestCheckpoint_ContinueWriteAndReplay(t *testing.T) {
 
 func TestClose_WALTruncated(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestClose_WALTruncated(t *testing.T) {
 
 func TestOpen_ReplayThenCheckpoint(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +184,7 @@ func TestOpen_ReplayThenCheckpoint(t *testing.T) {
 	s.upperFile.Close()
 
 	// Reopen — should replay WAL and then auto-checkpoint.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,7 +214,7 @@ func TestOpen_ReplayThenCheckpoint(t *testing.T) {
 
 func TestAutoCheckpoint_TriggeredAtInterval(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4, CheckpointInterval: 10})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,7 @@ func TestAutoCheckpoint_TriggeredAtInterval(t *testing.T) {
 
 func TestAutoCheckpoint_NotTriggeredBelowInterval(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4, CheckpointInterval: 1000})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +274,7 @@ func TestAutoCheckpoint_NotTriggeredBelowInterval(t *testing.T) {
 
 func TestAutoCheckpoint_BatchMode(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4, CheckpointInterval: 5})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 5})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -303,7 +303,7 @@ func TestAutoCheckpoint_BatchMode(t *testing.T) {
 
 func TestCrashRecovery_BasicReplay(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestCrashRecovery_BasicReplay(t *testing.T) {
 	s.upperFile.Close()
 
 	// Reopen — WAL replay should recover all data.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestCrashRecovery_BasicReplay(t *testing.T) {
 
 func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,7 +410,7 @@ func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
 	s.upperFile.Close()
 
 	// Reopen — should recover all 15 nodes.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,7 +436,7 @@ func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
 
 func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func simulateCrash(s *MmapStore) {
 // 6a: WAL written, msync not done → WAL replay recovers data.
 func TestCrashPoint_AfterWALWrite(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,7 +528,7 @@ func TestCrashPoint_AfterWALWrite(t *testing.T) {
 	simulateCrash(s)
 
 	// Reopen — WAL replay should recover node 5.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +547,7 @@ func TestCrashPoint_AfterWALWrite(t *testing.T) {
 // 6b: Checkpoint msync done, meta.bin not written → old checkpoint LSN, WAL replays.
 func TestCrashPoint_AfterMsync(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +573,7 @@ func TestCrashPoint_AfterMsync(t *testing.T) {
 	s.crashAfterMsync = nil
 	simulateCrash(s)
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestCrashPoint_AfterMsync(t *testing.T) {
 // filter skips them because meta.WalCheckpointLSN is already advanced.
 func TestCrashPoint_AfterMeta(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -620,7 +620,7 @@ func TestCrashPoint_AfterMeta(t *testing.T) {
 	s.crashAfterMeta = nil
 	simulateCrash(s)
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +639,7 @@ func TestCrashPoint_AfterMeta(t *testing.T) {
 // 6c-b: crash BEFORE WAL truncate (uses crashBeforeTruncate hook).
 func TestCrashPoint_BeforeTruncate(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,7 +665,7 @@ func TestCrashPoint_BeforeTruncate(t *testing.T) {
 	s.crashBeforeTruncate = nil
 	simulateCrash(s)
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +684,7 @@ func TestCrashPoint_BeforeTruncate(t *testing.T) {
 // 6d: Partial WAL record — incomplete bytes appended to wal.bin.
 func TestCrashPoint_PartialWALRecord(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +701,7 @@ func TestCrashPoint_PartialWALRecord(t *testing.T) {
 	s.Close()
 
 	// Reopen, write more, close raw, append junk.
-	s, err = OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err = OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -718,7 +718,7 @@ func TestCrashPoint_PartialWALRecord(t *testing.T) {
 	f.Write([]byte{0xFF, 0xFE, 0xFD, 0xFC, 0xFB})
 	f.Close()
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -737,7 +737,7 @@ func TestCrashPoint_PartialWALRecord(t *testing.T) {
 // 6e: Partial meta.bin write — meta truncated to 32 bytes (corrupt).
 func TestCrashPoint_PartialMeta(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ func TestCrashPoint_PartialMeta(t *testing.T) {
 	f.Truncate(32)
 	f.Close()
 
-	_, err = OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	_, err = OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err == nil {
 		t.Fatal("expected error on corrupt meta.bin")
 	}
@@ -762,7 +762,7 @@ func TestCrashPoint_PartialMeta(t *testing.T) {
 // 6f: grow during write, crash before meta update → replay re-grows.
 func TestCrashPoint_GrowMidWrite(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -781,7 +781,7 @@ func TestCrashPoint_GrowMidWrite(t *testing.T) {
 	s.wal.Sync()
 	simulateCrash(s)
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -800,7 +800,7 @@ func TestCrashPoint_GrowMidWrite(t *testing.T) {
 // 6g: SetNeighbors WAL written, crash before msync.
 func TestCrashPoint_SetNeighborsCrash(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -821,7 +821,7 @@ func TestCrashPoint_SetNeighborsCrash(t *testing.T) {
 
 	simulateCrash(s)
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -838,7 +838,7 @@ func TestCrashPoint_SetNeighborsCrash(t *testing.T) {
 // 6h: DeleteNode WAL written, crash before msync.
 func TestCrashPoint_DeleteNodeCrash(t *testing.T) {
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -859,7 +859,7 @@ func TestCrashPoint_DeleteNodeCrash(t *testing.T) {
 
 	simulateCrash(s)
 
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ import (
 func openTestMmapStore(t *testing.T) *MmapStore {
 	t.Helper()
 	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: 4, M: 4})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	return s
 }
@@ -124,7 +124,7 @@ func TestMmapStoreNodeMapping(t *testing.T) {
 
 func TestMmapStoreNodeMappingPersistence(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -233,7 +233,7 @@ func TestMmapStoreNextNodeId(t *testing.T) {
 
 func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
@@ -256,7 +256,7 @@ func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 
 func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 	dir := t.TempDir()
-	opts := MmapStoreOptions{Dim: 4, M: 4}
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)

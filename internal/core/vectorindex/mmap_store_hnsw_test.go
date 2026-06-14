@@ -27,7 +27,7 @@ func TestMmapHNSW_InsertSearch(t *testing.T) {
 	}
 	defer store.Close()
 
-	idx := NewHNSWIndex(store, WithCosineDistance(),
+	idx := NewHNSWIndex(store,
 		WithRand(rand.New(rand.NewSource(42))))
 
 	rng := rand.New(rand.NewSource(99))
@@ -70,7 +70,7 @@ func TestMmapHNSW_InsertDeleteSearch(t *testing.T) {
 	}
 	defer store.Close()
 
-	idx := NewHNSWIndex(store, WithCosineDistance(),
+	idx := NewHNSWIndex(store,
 		WithRand(rand.New(rand.NewSource(42))))
 
 	rng := rand.New(rand.NewSource(99))
@@ -130,7 +130,7 @@ func TestMmapHNSW_DeleteReinsert(t *testing.T) {
 	}
 	defer store.Close()
 
-	idx := NewHNSWIndex(store, WithCosineDistance(),
+	idx := NewHNSWIndex(store,
 		WithRand(rand.New(rand.NewSource(42))))
 
 	rng := rand.New(rand.NewSource(99))
@@ -181,7 +181,7 @@ func TestMmapHNSW_Upsert(t *testing.T) {
 	}
 	defer store.Close()
 
-	idx := NewHNSWIndex(store, WithCosineDistance(),
+	idx := NewHNSWIndex(store,
 		WithRand(rand.New(rand.NewSource(42))))
 
 	rng := rand.New(rand.NewSource(99))
@@ -301,7 +301,7 @@ func TestMmapHNSW_PersistenceReopen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i, v := range vecs {
@@ -324,7 +324,7 @@ func TestMmapHNSW_PersistenceReopen(t *testing.T) {
 		}
 		defer store.Close()
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		postResults := mmapHNSWSearchResults(t, idx, queries, k)
@@ -352,7 +352,7 @@ func TestMmapHNSW_PersistenceReopenContinueInsert(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i := 0; i < n1; i++ {
@@ -373,7 +373,7 @@ func TestMmapHNSW_PersistenceReopenContinueInsert(t *testing.T) {
 		}
 		defer store.Close()
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i := n1; i < n1+n2; i++ {
@@ -418,7 +418,7 @@ func TestMmapHNSW_PersistenceReopenDelete(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i, v := range vecs {
@@ -439,7 +439,7 @@ func TestMmapHNSW_PersistenceReopenDelete(t *testing.T) {
 		}
 		defer store.Close()
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i := 0; i < numDeleted; i++ {
@@ -504,7 +504,7 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		}
 		t.Cleanup(crashCleanup)
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		for i, v := range vecs {
@@ -528,7 +528,7 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		}
 		t.Cleanup(func() { store.Close() })
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 		postResults := mmapHNSWSearchResults(t, idx, queries, k)
@@ -557,7 +557,7 @@ func TestMmapHNSW_UpperGraph_MultiLayer(t *testing.T) {
 	defer store.Close()
 
 	// Use efConstruction=200 and fixed seed to get deterministic upper layers.
-	idx := NewHNSWIndex(store, WithCosineDistance(),
+	idx := NewHNSWIndex(store,
 		WithEfConstruction(200),
 		WithRand(rand.New(rand.NewSource(42))))
 
@@ -604,7 +604,7 @@ func TestMmapHNSW_UpperGraph_MultiLayer(t *testing.T) {
 
 	// Build MemStore baseline for structural comparison.
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, WithCosineDistance(),
+	memIdx := NewHNSWIndex(memStore,
 		WithEfConstruction(200),
 		WithRand(rand.New(rand.NewSource(42))))
 	for i, v := range vecs {
@@ -667,7 +667,7 @@ func TestMmapHNSW_UpperGraph_PersistenceReopen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithEfConstruction(200),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
@@ -694,7 +694,7 @@ func TestMmapHNSW_UpperGraph_PersistenceReopen(t *testing.T) {
 		}
 		defer store.Close()
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithEfConstruction(200),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
@@ -753,7 +753,7 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 		}
 		t.Cleanup(crashCleanup)
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithEfConstruction(200),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
@@ -783,7 +783,7 @@ func TestMmapHNSW_UpperGraph_GrowCrashRecovery(t *testing.T) {
 		}
 		t.Cleanup(func() { store.Close() })
 
-		idx := NewHNSWIndex(store, WithCosineDistance(),
+		idx := NewHNSWIndex(store,
 			WithEfConstruction(200),
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
@@ -873,7 +873,7 @@ func TestMmapHNSW_RecallAt10(t *testing.T) {
 
 	// --- MemStore recall ---
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, WithCosineDistance(),
+	memIdx := NewHNSWIndex(memStore,
 		WithEfConstruction(200), WithEfSearch(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range baseVecs {
@@ -903,7 +903,7 @@ func TestMmapHNSW_RecallAt10(t *testing.T) {
 	}
 	defer mmapStore.Close()
 
-	mmapIdx := NewHNSWIndex(mmapStore, WithCosineDistance(),
+	mmapIdx := NewHNSWIndex(mmapStore,
 		WithEfConstruction(200), WithEfSearch(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	insertAllBatch(t, mmapIdx, baseVecs)
@@ -949,7 +949,7 @@ func TestMmapHNSW_ExportRecall(t *testing.T) {
 	hnswSeed := int64(42)
 
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, WithCosineDistance(),
+	memIdx := NewHNSWIndex(memStore,
 		WithEfConstruction(200), WithEfSearch(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range baseVecs {
@@ -967,7 +967,7 @@ func TestMmapHNSW_ExportRecall(t *testing.T) {
 	}
 	defer mmapStore.Close()
 
-	mmapIdx := NewHNSWIndex(mmapStore, WithCosineDistance(),
+	mmapIdx := NewHNSWIndex(mmapStore,
 		WithEfConstruction(200), WithEfSearch(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 
@@ -1007,7 +1007,7 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 	hnswSeed := int64(42)
 
 	memStore := NewMemNodeStore()
-	memIdx := NewHNSWIndex(memStore, WithCosineDistance(),
+	memIdx := NewHNSWIndex(memStore,
 		WithEfConstruction(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i := 0; i < n; i++ {
@@ -1023,7 +1023,7 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 	}
 	defer mmapStore.Close()
 
-	mmapIdx := NewHNSWIndex(mmapStore, WithCosineDistance(),
+	mmapIdx := NewHNSWIndex(mmapStore,
 		WithEfConstruction(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 

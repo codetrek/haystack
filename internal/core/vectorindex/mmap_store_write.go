@@ -8,8 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-
-	"github.com/viterin/vek/vek32"
 )
 
 // PutNode stores a node's vector, level, and norm into the mmap files.
@@ -20,13 +18,15 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
-	norm := vek32.Norm(vector)
+	// Convert to stored form (cosine: unit vector) and keep the original norm
+	// for GetVector restore. norm never participates in distance computation.
+	stored, norm := s.metric.prepare(vector)
 
 	// Look up docId from the in-memory mapping (may be empty if not yet set).
 	docId := s.nodeToDoc[id]
 
-	// WAL
-	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, vector, norm, docId), s.batchMode); err != nil {
+	// WAL — record the stored form so replay writes it back verbatim.
+	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, stored, norm, docId), s.batchMode); err != nil {
 		return fmt.Errorf("MmapStore.PutNode: WAL: %w", err)
 	}
 	if s.crashAfterWALWrite != nil {
@@ -44,9 +44,9 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 		return err
 	}
 
-	// Write vector.
+	// Write vector (stored form).
 	vecOff := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
-	for i, v := range vector {
+	for i, v := range stored {
 		binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
 	}
 	if !s.batchMode {

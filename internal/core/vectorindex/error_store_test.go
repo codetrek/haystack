@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/viterin/vek/vek32"
 )
 
 // errorStore is a NodeStore mock that wraps MemNodeStore and lets callers
@@ -43,6 +42,8 @@ func (e *errorStore) getErr(err error) error {
 	defer e.mu.RUnlock()
 	return err
 }
+
+func (e *errorStore) Metric() Metric { return Cosine }
 
 func (e *errorStore) GetVector(id uint64) ([]float32, error) {
 	if err := e.getErr(e.GetVectorErr); err != nil {
@@ -355,28 +356,13 @@ func TestDeleteSetNeighborsError(t *testing.T) {
 // nodeDistanceWithNorm — fallback when GetNorm fails
 // =====================================================================
 
-func TestNodeDistanceWithNormFallback(t *testing.T) {
-	es := newErrorStore()
-	idx := NewHNSWIndex(es, WithCosineDistance())
-
-	requireNoError(t, es.inner.PutNode(1, 0, []float32{1, 0}))
-	requireNoError(t, es.inner.SetNorm(1, vek32.Norm([]float32{1, 0})))
-
-	// Inject GetNorm error — nodeDistanceWithNorm should fall back to
-	// computing the distance without precomputed norms.
-	es.GetNormErr = fmt.Errorf("injected: GetNorm")
-	dist, err := idx.nodeDistanceWithNorm(1, []float32{1, 0}, vek32.Norm([]float32{1, 0}))
-	requireNoError(t, err)
-	assert.InDelta(t, 0.0, dist, 1e-5)
-}
-
 // =====================================================================
 // Insert with cosine distance — exercises nodeDistCalc / norm path
 // =====================================================================
 
 func TestInsertWithCosineDistanceMultiNode(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, WithCosineDistance())
+	idx := NewHNSWIndex(es)
 
 	// Insert several nodes to exercise phase-1 greedy traversal and
 	// phase-2 neighbor selection with cosine + norm caching.
@@ -423,7 +409,7 @@ func TestDeleteNonExistentDoc(t *testing.T) {
 // via GetEntryPoint error after the index was previously populated.
 func TestInsertAfterDeleteAll(t *testing.T) {
 	es := newErrorStore()
-	idx := NewHNSWIndex(es, WithCosineDistance())
+	idx := NewHNSWIndex(es)
 
 	requireNoError(t, idx.Insert("doc1", []float32{1, 0}))
 	requireNoError(t, idx.Insert("doc2", []float32{0, 1}))

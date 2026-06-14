@@ -9,7 +9,7 @@ import (
 
 func TestConcurrentInsertAndSearch(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance())
+	idx := NewHNSWIndex(store)
 
 	dim := 32
 	var wg sync.WaitGroup
@@ -59,7 +59,7 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 
 func TestConcurrentSearchOnly(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance())
+	idx := NewHNSWIndex(store)
 
 	dim := 32
 	n := 100
@@ -106,7 +106,7 @@ func TestConcurrentSearchOnly(t *testing.T) {
 
 func TestConcurrentInsertDeleteSearch(t *testing.T) {
 	store := NewMemNodeStore()
-	idx := NewHNSWIndex(store, WithCosineDistance())
+	idx := NewHNSWIndex(store)
 
 	dim := 32
 

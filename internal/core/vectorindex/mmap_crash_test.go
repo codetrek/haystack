@@ -14,7 +14,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	const dim = 32
 
 	// Phase 1: Write 1000 vectors in batches, then crash (no Close).
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 8, CheckpointInterval: 200})
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: 8, CheckpointInterval: 200})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	simulateCrash(s)
 
 	// Phase 2: Reopen and verify everything recovered.
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Dim: dim, M: 8})
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: 8})
 	if err != nil {
 		t.Fatalf("reopen after crash: %v", err)
 	}

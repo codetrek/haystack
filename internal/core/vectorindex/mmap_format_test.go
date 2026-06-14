@@ -8,8 +8,8 @@ import (
 )
 
 func TestMetaHeaderSize(t *testing.T) {
-	if s := unsafe.Sizeof(MetaHeader{}); s != 64 {
-		t.Fatalf("MetaHeader size = %d, want 64", s)
+	if s := unsafe.Sizeof(MetaHeader{}); s != 72 {
+		t.Fatalf("MetaHeader size = %d, want 72", s)
 	}
 }
 
@@ -65,8 +65,8 @@ func TestMetaHeaderWriteRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Size() != 64 {
-		t.Errorf("meta.bin size = %d, want 64", info.Size())
+	if info.Size() != 72 {
+		t.Errorf("meta.bin size = %d, want 72", info.Size())
 	}
 }
 

@@ -6,8 +6,6 @@ import (
 	"math/rand"
 	"sort"
 	"sync"
-
-	"github.com/viterin/vek/vek32"
 )
 
 // Default HNSW parameters per arXiv:1603.09320.
@@ -23,8 +21,7 @@ const (
 type HNSWIndex struct {
 	mu             sync.RWMutex
 	store          NodeStore
-	distance       DistanceFunc
-	isCosine       bool // true when distance == CosineDistance, enables norm caching
+	metric         Metric // taken from the store; immutable for the index's life
 	M              int
 	Mmax0          int
 	efConstruction int
@@ -59,58 +56,17 @@ func WithRand(r *rand.Rand) Option {
 	return func(h *HNSWIndex) { h.rng = r }
 }
 
-// The distance metric is selected with one of the With*Distance options below.
-// Each sets both h.distance and h.isCosine together, so the metric and the
-// norm-cache fast path can never disagree — there is no separate distance
-// argument to fall out of sync. nodeDistCalc selects the norm-cache fast path
-// purely off isCosine; if isCosine were true under a non-cosine metric,
-// searchLayer/nodeDistCalc would use cosine-with-norms while the shrink/delete
-// paths used h.distance, i.e. two metrics on one graph. When no metric option
-// is passed, the index defaults to cosine (see NewHNSWIndex).
+// The distance metric is a property of the store, not the index: it is chosen
+// when the store is created, persisted in the store metadata, and read back via
+// store.Metric(). The index cannot override it, so the metric, the on-disk
+// vector form, and the graph can never disagree.
 
-// WithCosineDistance selects cosine distance and enables precomputed-norm
-// optimizations. This is also the default when no metric option is given.
-func WithCosineDistance() Option {
-	return func(h *HNSWIndex) {
-		h.distance = CosineDistance
-		h.isCosine = true
-	}
-}
-
-// WithEuclideanDistance selects L2 (Euclidean) distance.
-func WithEuclideanDistance() Option {
-	return func(h *HNSWIndex) {
-		h.distance = EuclideanDistance
-		h.isCosine = false
-	}
-}
-
-// WithDotProductDistance selects dot-product distance (1 - dot), intended for
-// pre-normalized vectors.
-func WithDotProductDistance() Option {
-	return func(h *HNSWIndex) {
-		h.distance = DotProductDistance
-		h.isCosine = false
-	}
-}
-
-// WithDistanceFunc selects a custom distance metric. The norm-cache fast path
-// is disabled, as it is only valid for cosine distance.
-func WithDistanceFunc(fn DistanceFunc) Option {
-	return func(h *HNSWIndex) {
-		h.distance = fn
-		h.isCosine = false
-	}
-}
-
-// NewHNSWIndex creates a new HNSW index. The distance metric is chosen with a
-// With*Distance option; when none is given the index defaults to cosine
-// distance with norm caching.
+// NewHNSWIndex creates a new HNSW index over store. The distance metric is taken
+// from store.Metric().
 func NewHNSWIndex(store NodeStore, opts ...Option) *HNSWIndex {
 	h := &HNSWIndex{
 		store:          store,
-		distance:       CosineDistance,
-		isCosine:       true,
+		metric:         store.Metric(),
 		M:              DefaultM,
 		Mmax0:          DefaultMmax0,
 		efConstruction: DefaultEfConstruction,
@@ -213,10 +169,8 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 
 	// Phase 1: From top layer down to l+1, greedy search with ef=1.
 	curEp := epId
-	var queryNorm float32
-	if h.isCosine {
-		queryNorm = vek32.Norm(vector)
-	}
+	// Compare against stored neighbors in stored form (cosine: unit vectors).
+	prepared, _ := h.metric.prepare(vector)
 	for layer := maxLayer; layer > l; layer-- {
 		changed := true
 		for changed {
@@ -225,12 +179,12 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 			if nerr != nil {
 				return nerr
 			}
-			curDist, derr := h.nodeDistCalc(curEp, vector, queryNorm)
+			curDist, derr := h.nodeDist(curEp, prepared)
 			if derr != nil {
 				return derr
 			}
 			for _, nb := range neighbors {
-				nbDist, derr := h.nodeDistCalc(nb, vector, queryNorm)
+				nbDist, derr := h.nodeDist(nb, prepared)
 				if derr != nil {
 					continue // node may have been deleted
 				}
@@ -249,7 +203,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 		topLayer = maxLayer
 	}
 	for layer := topLayer; layer >= 0; layer-- {
-		candidates, err := h.searchLayer(vector, curEp, h.efConstruction, layer)
+		candidates, err := h.searchLayer(prepared, curEp, h.efConstruction, layer)
 		if err != nil {
 			return err
 		}
@@ -295,7 +249,7 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 					shrinkVecCache[cid] = cVec
 					nbCandidates = append(nbCandidates, distItem{
 						id:   cid,
-						dist: h.distance(nbVec, cVec),
+						dist: h.metric.distance(nbVec, cVec),
 					})
 				}
 				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax, shrinkVecCache)
@@ -379,10 +333,8 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 
 	// Phase 1: From top layer down to 1, greedy search with ef=1.
 	curEp := epId
-	var queryNorm float32
-	if h.isCosine {
-		queryNorm = vek32.Norm(query)
-	}
+	// Compare against stored vectors in stored form (cosine: unit vectors).
+	prepared, _ := h.metric.prepare(query)
 	for layer := maxLayer; layer >= 1; layer-- {
 		changed := true
 		for changed {
@@ -391,12 +343,12 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 			if nerr != nil {
 				return nil, nerr
 			}
-			curDist, derr := h.nodeDistCalc(curEp, query, queryNorm)
+			curDist, derr := h.nodeDist(curEp, prepared)
 			if derr != nil {
 				return nil, derr
 			}
 			for _, nb := range neighbors {
-				nbDist, derr := h.nodeDistCalc(nb, query, queryNorm)
+				nbDist, derr := h.nodeDist(nb, prepared)
 				if derr != nil {
 					continue // node may have been deleted
 				}
@@ -414,7 +366,7 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	if k > ef {
 		ef = k
 	}
-	results, err := h.searchLayer(query, curEp, ef, 0)
+	results, err := h.searchLayer(prepared, curEp, ef, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -506,7 +458,7 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64, docId string) error {
 				}
 				candidates = append(candidates, distItem{
 					id:   cid,
-					dist: h.distance(nbVec, cVec),
+					dist: h.metric.distance(nbVec, cVec),
 				})
 			}
 
@@ -568,14 +520,9 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64, docId string) error {
 
 // searchLayer performs a beam search on a single layer with given ef width.
 // Uses a min-heap for candidates and a max-heap for the result set.
+// query is already in prepared (stored) form.
 func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer int) ([]distItem, error) {
-	// Precompute query norm for cosine distance optimization.
-	var queryNorm float32
-	if h.isCosine {
-		queryNorm = vek32.Norm(query)
-	}
-
-	entryDist, err := h.nodeDistCalc(entryId, query, queryNorm)
+	entryDist, err := h.nodeDist(entryId, query)
 	if err != nil {
 		return nil, err
 	}
@@ -613,7 +560,7 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 			}
 			visited.mark(nbId)
 
-			nbDist, err := h.nodeDistCalc(nbId, query, queryNorm)
+			nbDist, err := h.nodeDist(nbId, query)
 			if err != nil {
 				continue // node may have been deleted
 			}
@@ -651,13 +598,12 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	// Sort candidates by distance to query.
 	sortDistItems(candidates)
 
-	// Resolve each candidate's vector (and norm) once into position-indexed
-	// slices. The diversity loop below is O(candidates*selected); reading from
-	// these slices instead of id-keyed maps removes the map hashing that
-	// dominated the insert CPU profile. vecs[i]/norms[i] correspond to the
-	// just-sorted candidates[i]. A nil vecs[i] means the vector was
-	// unavailable; norms[i] < 0 means the norm was unavailable (mirroring the
-	// previous "missing from cache" checks).
+	// Resolve each candidate's stored vector once into a position-indexed slice.
+	// Reading from this slice instead of an id-keyed map removes the map hashing
+	// that dominated the insert CPU profile. vecs[i] corresponds to the
+	// just-sorted candidates[i]; a nil vecs[i] means the vector was unavailable.
+	// Vectors are in stored form, so metric.distance compares them directly with
+	// no norm lookup.
 	n := len(candidates)
 	vecs := make([][]float32, n)
 	for i, c := range candidates {
@@ -667,19 +613,8 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 			vecs[i] = v
 		}
 	}
-	var norms []float32
-	if h.isCosine {
-		norms = make([]float32, n)
-		for i, c := range candidates {
-			if nrm, err := h.store.GetNorm(c.id); err == nil {
-				norms[i] = nrm
-			} else {
-				norms[i] = -1 // sentinel: norm unavailable
-			}
-		}
-	}
 
-	selected := make([]int, 0, m) // indices into candidates/vecs/norms
+	selected := make([]int, 0, m) // indices into candidates/vecs
 	for i := range candidates {
 		if len(selected) >= m {
 			break
@@ -695,13 +630,7 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 			if sVec == nil {
 				continue
 			}
-			var dist float32
-			if h.isCosine && norms[i] >= 0 && norms[sIdx] >= 0 {
-				dist = CosineDistanceWithNorms(cVec, sVec, norms[i], norms[sIdx])
-			} else {
-				dist = h.distance(cVec, sVec)
-			}
-			if dist < candidates[i].dist {
+			if h.metric.distance(cVec, sVec) < candidates[i].dist {
 				good = false
 				break
 			}
@@ -735,37 +664,15 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	return out
 }
 
-// nodeDistance computes distance between a stored node and a query vector.
-func (h *HNSWIndex) nodeDistance(nodeId uint64, query []float32) (float32, error) {
+// nodeDist computes the distance between a stored node and an already-prepared
+// query vector. Both operands are in stored form (cosine: unit vectors), so the
+// metric handles cosine as a plain 1 - dot with no norm lookup.
+func (h *HNSWIndex) nodeDist(nodeId uint64, query []float32) (float32, error) {
 	vec, err := h.store.GetVectorRef(nodeId)
 	if err != nil {
 		return 0, err
 	}
-	return h.distance(vec, query), nil
-}
-
-// nodeDistanceWithNorm computes cosine distance between a stored node and a
-// query vector, using precomputed norms to avoid redundant norm calculations.
-// queryNorm is the precomputed L2 norm of the query vector.
-func (h *HNSWIndex) nodeDistanceWithNorm(nodeId uint64, query []float32, queryNorm float32) (float32, error) {
-	vec, err := h.store.GetVectorRef(nodeId)
-	if err != nil {
-		return 0, err
-	}
-	nodeNorm, err := h.store.GetNorm(nodeId)
-	if err != nil {
-		// Fallback to standard distance if norm not available.
-		return h.distance(vec, query), nil
-	}
-	return CosineDistanceWithNorms(vec, query, nodeNorm, queryNorm), nil
-}
-
-// nodeDistCalc computes distance, using precomputed norms when available.
-func (h *HNSWIndex) nodeDistCalc(nodeId uint64, query []float32, queryNorm float32) (float32, error) {
-	if h.isCosine {
-		return h.nodeDistanceWithNorm(nodeId, query, queryNorm)
-	}
-	return h.nodeDistance(nodeId, query)
+	return h.metric.distance(vec, query), nil
 }
 
 func removeId(ids []uint64, target uint64) []uint64 {
