@@ -78,13 +78,11 @@ func TestInsertBatchMemStore(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	items := []InsertItem{
-		{DocId: "doc-0", Vector: []float32{1, 0, 0}},
-		{DocId: "doc-1", Vector: []float32{0, 1, 0}},
-		{DocId: "doc-2", Vector: []float32{0, 0, 1}},
-	}
-
-	err := idx.InsertBatch(items)
+	b := idx.NewBatch()
+	b.Put("doc-0", []float32{1, 0, 0})
+	b.Put("doc-1", []float32{0, 1, 0})
+	b.Put("doc-2", []float32{0, 0, 1})
+	err := b.Commit()
 	requireNoError(t, err)
 
 	// Verify all items are searchable.
@@ -101,7 +99,7 @@ func TestInsertBatchEmpty(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	err := idx.InsertBatch(nil)
+	err := idx.NewBatch().Commit() // empty batch is a no-op
 	requireNoError(t, err)
 
 	results, err := idx.Search([]float32{1, 0, 0}, 1)
@@ -113,10 +111,9 @@ func TestInsertBatchSingle(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	err := idx.InsertBatch([]InsertItem{
-		{DocId: "only", Vector: []float32{1, 2, 3}},
-	})
-	requireNoError(t, err)
+	b := idx.NewBatch()
+	b.Put("only", []float32{1, 2, 3})
+	requireNoError(t, b.Commit())
 
 	results, err := idx.Search([]float32{1, 2, 3}, 1)
 	requireNoError(t, err)
@@ -332,22 +329,22 @@ func TestInsertBatchWithCustomOptions(t *testing.T) {
 		WithRand(rand.New(rand.NewSource(42))),
 	)
 
-	items := make([]InsertItem, 20)
-	for i := range items {
+	b := idx.NewBatch()
+	for i := 0; i < 20; i++ {
 		v := make([]float32, 8)
 		for j := range v {
 			v[j] = float32(i*8+j) + 0.1
 		}
-		items[i] = InsertItem{
-			DocId:  fmt.Sprintf("doc-%d", i),
-			Vector: v,
-		}
+		b.Put(fmt.Sprintf("doc-%d", i), v)
 	}
-
-	requireNoError(t, idx.InsertBatch(items))
+	requireNoError(t, b.Commit())
 
 	// Verify search works with custom efSearch.
-	results, err := idx.Search(items[0].Vector, 5)
+	v0 := make([]float32, 8)
+	for j := range v0 {
+		v0[j] = float32(0*8+j) + 0.1
+	}
+	results, err := idx.Search(v0, 5)
 	requireNoError(t, err)
 	assert.NotEmpty(t, results)
 	assert.Equal(t, uint64(1), results[0].ID, "closest result should be the query itself")

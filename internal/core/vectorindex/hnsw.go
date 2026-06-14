@@ -292,30 +292,6 @@ func (h *HNSWIndex) deleteOneLocked(docId string) error {
 	return h.deleteNodeLocked(nodeId, docId)
 }
 
-// InsertItem holds a document ID and its vector for batch insertion.
-type InsertItem struct {
-	DocId  string
-	Vector []float32
-}
-
-// InsertBatch inserts multiple items in a single batch when the store
-// supports batching. The outer batch commits once at the end.
-func (h *HNSWIndex) InsertBatch(items []InsertItem) error {
-	bs, batchable := h.store.(BatchableStore)
-	if batchable {
-		bs.BeginBatch()
-		defer bs.DiscardBatch()
-	}
-	for _, item := range items {
-		if err := h.Insert(item.DocId, item.Vector); err != nil {
-			return err
-		}
-	}
-	if batchable {
-		return bs.CommitBatch(true)
-	}
-	return nil
-}
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {

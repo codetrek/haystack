@@ -232,19 +232,18 @@ func TestMmapHNSW_Upsert(t *testing.T) {
 // Task 2: Persistence verification tests
 // ---------------------------------------------------------------------------
 
-// mmapHNSWSearchResults runs search and returns results for comparison.
-// insertAllBatch builds an index from vecs via a single InsertBatch using doc
+// insertAllBatch builds an index from vecs via a single batch using doc
 // IDs "doc-%d". For MmapStore this collapses ~N per-insert WAL syncs into one,
 // which is far faster than a serial Insert loop while producing an identical
 // graph (same insertion order → same random levels → same topology).
 func insertAllBatch(t *testing.T, idx *HNSWIndex, vecs [][]float32) {
 	t.Helper()
-	items := make([]InsertItem, len(vecs))
+	b := idx.NewBatch()
 	for i, v := range vecs {
-		items[i] = InsertItem{DocId: fmt.Sprintf("doc-%d", i), Vector: v}
+		b.Put(fmt.Sprintf("doc-%d", i), v)
 	}
-	if err := idx.InsertBatch(items); err != nil {
-		t.Fatalf("InsertBatch (%d items): %v", len(vecs), err)
+	if err := b.Commit(); err != nil {
+		t.Fatalf("Batch.Commit (%d items): %v", len(vecs), err)
 	}
 }
 

@@ -40,12 +40,11 @@ func TestHNSWInsertBatchDuplicateDocId(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	items := []InsertItem{
-		{DocId: "doc1", Vector: []float32{1, 0, 0}},
-		{DocId: "doc2", Vector: []float32{0, 1, 0}},
-		{DocId: "doc1", Vector: []float32{0, 0, 1}}, // duplicate
-	}
-	err := idx.InsertBatch(items)
+	b := idx.NewBatch()
+	b.Put("doc1", []float32{1, 0, 0})
+	b.Put("doc2", []float32{0, 1, 0})
+	b.Put("doc1", []float32{0, 0, 1}) // duplicate — last-op-wins coalescing
+	err := b.Commit()
 	assert.NoError(t, err)
 
 	// Should have exactly 2 nodes

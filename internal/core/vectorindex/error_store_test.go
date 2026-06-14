@@ -389,13 +389,12 @@ func TestInsertBatchPropagatesError(t *testing.T) {
 	es := newErrorStore()
 	idx := NewHNSWIndex(es)
 
-	items := []InsertItem{
-		{DocId: "a", Vector: []float32{1, 0}},
-		{DocId: "b", Vector: []float32{0, 1}},
-	}
+	b := idx.NewBatch()
+	b.Put("a", []float32{1, 0})
+	b.Put("b", []float32{0, 1})
 
 	es.PutNodeErr = fmt.Errorf("injected: PutNode in batch")
-	err := idx.InsertBatch(items)
+	err := b.Commit()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "PutNode")
 }
