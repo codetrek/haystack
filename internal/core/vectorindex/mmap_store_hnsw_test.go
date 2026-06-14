@@ -507,10 +507,17 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
+		// Build under a batch: defers the per-op msync (the dominant cost on
+		// Windows) without weakening the test — CommitBatch(false) flushes the
+		// WAL but does NOT msync the mmaps, so recovery still has to replay.
+		store.BeginBatch()
 		for i, v := range vecs {
 			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
 				t.Fatalf("Insert doc-%d: %v", i, err)
 			}
+		}
+		if err := store.CommitBatch(false); err != nil {
+			t.Fatalf("CommitBatch: %v", err)
 		}
 
 		preResults = mmapHNSWSearchResults(t, idx, queries, k)

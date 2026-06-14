@@ -6,14 +6,17 @@ import (
 )
 
 // TestKill9Recovery_E2E simulates a kill -9 scenario:
-// Insert 1000 vectors → "crash" (skip Close) → reopen → verify all data intact.
+// Insert vectors → "crash" (skip Close) → reopen → verify all data intact.
+// N and CheckpointInterval are kept proportional (N/interval ≈ 4) so recovery
+// still replays a WAL that spans several mid-stream checkpoints; the absolute
+// counts are modest to keep the per-op msync cost (heaviest on Windows) low.
 func TestKill9Recovery_E2E(t *testing.T) {
 	dir := t.TempDir()
-	const N = 1000
+	const N = 200
 	const dim = 32
 
-	// Phase 1: Write 1000 vectors in batches, then crash (no Close).
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: 8, CheckpointInterval: 200})
+	// Phase 1: Write vectors in batches, then crash (no Close).
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: 8, CheckpointInterval: 50})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +47,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	}
 
 	// Delete a few nodes to test tombstone recovery.
-	for _, id := range []uint64{10, 50, 100, 500, 999} {
+	for _, id := range []uint64{10, 50, 100, 150, 199} {
 		if err := s.DeleteNode(id); err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +63,7 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	}
 	defer s2.Close()
 
-	deletedSet := map[uint64]bool{10: true, 50: true, 100: true, 500: true, 999: true}
+	deletedSet := map[uint64]bool{10: true, 50: true, 100: true, 150: true, 199: true}
 
 	// Verify vectors.
 	for i := 0; i < N; i++ {

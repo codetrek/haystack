@@ -97,10 +97,13 @@ func TestMmapStoreGrowUpperGraph(t *testing.T) {
 
 	// Insert many nodes with level > 0 to exhaust the initial upper capacity.
 	// Each level>0 node allocates one upper slot. Upper starts at cap/4 = 256 (for default 1024).
-	// We need ~256+ upper slots to trigger a grow.
+	// We need ~256+ upper slots to trigger a grow. Batched so the grow still fires
+	// without paying a per-insert msync (the heaviest cost on Windows).
+	s.BeginBatch()
 	for i := uint64(0); i < initialUpperCap+10; i++ {
 		requireNoError(t, s.PutNode(i, 1, vec))
 	}
+	requireNoError(t, s.CommitBatch(true))
 
 	assert.Greater(t, s.upperCapacity, initialUpperCap, "upper capacity should have grown")
 }
