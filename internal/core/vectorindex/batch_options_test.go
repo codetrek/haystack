@@ -416,3 +416,17 @@ func requireNoError(t *testing.T, err error) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestMemNodeStoreTxnNoOps(t *testing.T) {
+	var ns NodeStore = NewMemNodeStore()
+	if err := ns.txnBegin(); err != nil {
+		t.Fatalf("txnBegin: %v", err)
+	}
+	if err := ns.txnCommit(); err != nil {
+		t.Fatalf("txnCommit: %v", err)
+	}
+	cause := fmt.Errorf("boom")
+	if err := ns.txnAbort(cause); err != cause {
+		t.Fatalf("txnAbort must return its cause, got %v", err)
+	}
+}

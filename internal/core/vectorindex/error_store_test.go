@@ -150,6 +150,10 @@ func (e *errorStore) SetNorm(id uint64, norm float32) error {
 	return e.inner.SetNorm(id, norm)
 }
 
+func (e *errorStore) txnBegin() error  { return e.inner.txnBegin() }
+func (e *errorStore) txnCommit() error { return e.inner.txnCommit() }
+func (e *errorStore) txnAbort(cause error) error { return e.inner.txnAbort(cause) }
+
 func (e *errorStore) Close() error {
 	if err := e.getErr(e.CloseErr); err != nil {
 		return err

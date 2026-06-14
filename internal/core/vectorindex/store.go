@@ -33,6 +33,12 @@ type NodeStore interface {
 	GetNorm(id uint64) (float32, error)
 	// SetNorm stores a precomputed L2 norm for a node's vector.
 	SetNorm(id uint64, norm float32) error
+	// Transaction primitive (internal). Batch.Commit brackets a group of
+	// mutations as one durable, crash-atomic unit. MemNodeStore implements
+	// these as no-ops (no durability target); MmapStore frames them in the WAL.
+	txnBegin() error
+	txnCommit() error
+	txnAbort(cause error) error
 	Close() error
 }
 
