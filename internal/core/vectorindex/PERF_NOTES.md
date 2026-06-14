@@ -110,3 +110,18 @@ Grow, Export) reduce exactly this, so they help Linux too — but the ±80s runn
 variance masks the per-run gain. Bigger structural levers (separate task):
 covermode atomic→count (atomic is only needed with -race), or narrower
 -coverpkg scope.
+
+### Proof it's runner variance (not a regression)
+
+Two consecutive runs of this branch differing ONLY by a docs-only commit
+(identical test code):
+
+| commit | vectorindex gate |
+|---|---|
+| 81f5366 (Export fix) | 308.4s |
+| 85671d6 (docs only)  | 426.5s |
+
+Same code, 308s vs 427s — a 118s (38%) swing. The 308s run is faster than #69's
+351s, so #69 was not special. Conclusion: the gate time is dominated by CI
+runner speed; single before/after comparisons are meaningless without averaging
+several runs.
