@@ -18,6 +18,8 @@ type batchOp struct {
 // single goroutine. Put/Delete buffer operations in memory (coalesced per
 // docId, last-op-wins); Commit applies them to the graph atomically inside one
 // store transaction; Discard drops the buffer without touching the graph.
+// It is not safe to call Put, Delete, Commit, or Discard concurrently from
+// multiple goroutines.
 type Batch struct {
 	idx  *HNSWIndex
 	ops  []batchOp

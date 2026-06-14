@@ -111,3 +111,20 @@ func TestBatchUpsertReplacesCommittedDoc(t *testing.T) {
 	requireLen(t, res2, 1)
 	assert.Greater(t, res2[0].Distance, float32(0.5), "old [1,0,0] node must no longer exist")
 }
+
+func TestBatchReusableAcrossCommits(t *testing.T) {
+	idx := newTestIndex()
+	b := idx.NewBatch()
+	b.Put("a", []float32{1, 0, 0})
+	requireNoError(t, b.Commit())
+	assert.Equal(t, 0, b.Len(), "batch must be empty after Commit")
+
+	b.Put("b", []float32{0, 1, 0})
+	assert.Equal(t, 1, b.Len(), "reused batch sees only the new op")
+	requireNoError(t, b.Commit())
+
+	res, err := idx.Search([]float32{0, 1, 0}, 1)
+	requireNoError(t, err)
+	requireLen(t, res, 1)
+	assert.InDelta(t, 0.0, res[0].Distance, 1e-6)
+}

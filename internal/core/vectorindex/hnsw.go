@@ -292,7 +292,6 @@ func (h *HNSWIndex) deleteOneLocked(docId string) error {
 	return h.deleteNodeLocked(nodeId, docId)
 }
 
-
 // Search returns the k nearest neighbors of query (Algorithm 2).
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	h.mu.RLock()
