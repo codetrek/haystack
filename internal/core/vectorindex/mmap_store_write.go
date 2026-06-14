@@ -379,6 +379,68 @@ func (s *MmapStore) BatchDepth() int {
 	return s.batchDepth
 }
 
+// --- Transaction primitive (internal; used by Batch.Commit) ---
+
+// txnBegin opens a single-level store transaction: writes a WalTxnBegin marker
+// (buffered) and defers all syncing until txnCommit. Nesting is a programming
+// error and returns an error. The caller (Batch.Commit) serializes via the
+// index write lock; muWrite guards store state.
+func (s *MmapStore) txnBegin() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	if s.faulted != nil {
+		return s.faulted
+	}
+	if s.inTxn {
+		return fmt.Errorf("MmapStore.txnBegin: transaction already open")
+	}
+	if _, err := s.wal.Append(WalTxnBegin, nil, true); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.txnBegin: WAL: %w", err))
+	}
+	s.inTxn = true
+	return nil
+}
+
+// txnCommit closes the transaction durably: writes a WalTxnCommit marker, then
+// fsyncs the WAL (the atomic commit point), msyncs all mmap regions, and
+// maybe-checkpoints. Any failure faults the store.
+func (s *MmapStore) txnCommit() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	if s.faulted != nil {
+		return s.faulted
+	}
+	if !s.inTxn {
+		return fmt.Errorf("MmapStore.txnCommit: no open transaction")
+	}
+	if _, err := s.wal.Append(WalTxnCommit, nil, true); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.txnCommit: WAL append: %w", err))
+	}
+	if err := s.wal.Sync(); err != nil { // flush + fsync = commit point
+		return s.fault(fmt.Errorf("MmapStore.txnCommit: WAL sync: %w", err))
+	}
+	if err := s.syncAll(); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.txnCommit: msync: %w", err))
+	}
+	s.inTxn = false
+	if s.opsSinceCheckpoint >= s.checkpointInterval {
+		return s.checkpointLocked()
+	}
+	return nil
+}
+
+// txnAbort records a fault and clears the open-transaction flag WITHOUT writing
+// a commit marker. In-place mmap writes from the partial transaction are not
+// rolled back here; reopening recovers to the pre-transaction state because the
+// unterminated WAL transaction is discarded on replay (Phase 1). Returns the
+// fault error so callers can propagate it.
+func (s *MmapStore) txnAbort(cause error) error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	s.inTxn = false
+	return s.fault(fmt.Errorf("MmapStore.txnAbort: %w", cause))
+}
+
 // syncAll syncs all mmap regions to disk.
 func (s *MmapStore) syncAll() error {
 	if err := mmapSync(s.vectors); err != nil {
