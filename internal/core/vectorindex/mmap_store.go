@@ -423,6 +423,92 @@ func (s *MmapStore) loadIdmap() error {
 	return nil
 }
 
+// applyWALRecord applies a single decoded WAL record to mmap + meta state.
+// Caller must hold muWrite (replay holds it implicitly: single-threaded Open).
+// It contains exactly the logic previously inlined in the replayWAL callback.
+func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
+	switch typ {
+	case WalInsert:
+		nodeId, level, vec, norm, _ := DecodeInsert(payload)
+		if err := s.ensureVecCapacity(nodeId); err != nil {
+			return err
+		}
+		if err := s.ensureNodeCapacity(nodeId); err != nil {
+			return err
+		}
+		if err := s.ensureL0Capacity(nodeId); err != nil {
+			return err
+		}
+		vecOff := int64(pageSize) + int64(nodeId)*int64(s.vecSlotSize)
+		for i, v := range vec {
+			binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
+		}
+		nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+		s.nodes[nodeOff] = uint8(level)
+		s.nodes[nodeOff+1] = nodeFlagOccupied
+		s.nodes[nodeOff+2] = 0
+		s.nodes[nodeOff+3] = 0
+		binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
+		if level > 0 {
+			if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
+				return err
+			}
+			slot := s.allocUpperSlot()
+			binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], slot)
+		} else {
+			binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
+		}
+		if nodeId >= s.meta.TotalSlots {
+			s.meta.TotalSlots = nodeId + 1
+		}
+		if nodeId+1 > s.meta.NextNodeId {
+			s.meta.NextNodeId = nodeId + 1
+		}
+		s.meta.NodeCount++
+		if uint32(level) > s.meta.MaxLevel {
+			s.meta.MaxLevel = uint32(level)
+		}
+
+	case WalSetNeighbors:
+		nodeId, layer, neighbors := DecodeSetNeighbors(payload)
+		if layer == 0 {
+			if err := s.setNeighborsL0(nodeId, neighbors); err != nil {
+				return err
+			}
+		} else {
+			if err := s.setNeighborsUpper(nodeId, layer, neighbors); err != nil {
+				return err
+			}
+		}
+
+	case WalSetNorm:
+		nodeId, norm := DecodeSetNorm(payload)
+		if nodeId < s.nodeCapacity {
+			offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+			binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
+		}
+
+	case WalSetEntry:
+		entryId, maxLevel := DecodeSetEntry(payload)
+		s.meta.EntryPoint = entryId
+		s.meta.EntryLevel = uint32(maxLevel)
+		if uint32(maxLevel) > s.meta.MaxLevel {
+			s.meta.MaxLevel = uint32(maxLevel)
+		}
+
+	case WalDelete:
+		nodeId, _ := DecodeDelete(payload)
+		if nodeId < s.nodeCapacity {
+			offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+			s.nodes[offset+1] |= nodeFlagDeleted
+		}
+		if s.meta.NodeCount > 0 {
+			s.meta.NodeCount--
+		}
+	}
+	return nil
+}
+
 // replayWAL replays WAL records after the checkpoint LSN to restore both
 // mmap data and meta state. All 5 record types are handled so that crash
 // recovery fully reconstructs the index.
@@ -434,96 +520,7 @@ func (s *MmapStore) replayWAL() error {
 
 	err := s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
 		replayed++
-		switch typ {
-		case WalInsert:
-			nodeId, level, vec, norm, _ := DecodeInsert(payload)
-
-			// Ensure capacity for all regions before writing.
-			if err := s.ensureVecCapacity(nodeId); err != nil {
-				return err
-			}
-			if err := s.ensureNodeCapacity(nodeId); err != nil {
-				return err
-			}
-			if err := s.ensureL0Capacity(nodeId); err != nil {
-				return err
-			}
-
-			// Write vector to vectors.dat.
-			vecOff := int64(pageSize) + int64(nodeId)*int64(s.vecSlotSize)
-			for i, v := range vec {
-				binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
-			}
-
-			// Write node metadata to nodes.dat (level, flags, norm).
-			nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
-			s.nodes[nodeOff] = uint8(level)
-			s.nodes[nodeOff+1] = nodeFlagOccupied // flags: occupied, not deleted
-			s.nodes[nodeOff+2] = 0
-			s.nodes[nodeOff+3] = 0
-			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
-
-			// If level > 0, allocate an upper slot.
-			if level > 0 {
-				if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
-					return err
-				}
-				slot := s.allocUpperSlot()
-				binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], slot)
-			} else {
-				binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
-			}
-
-			// Update meta.
-			if nodeId >= s.meta.TotalSlots {
-				s.meta.TotalSlots = nodeId + 1
-			}
-			if nodeId+1 > s.meta.NextNodeId {
-				s.meta.NextNodeId = nodeId + 1
-			}
-			s.meta.NodeCount++
-			if uint32(level) > s.meta.MaxLevel {
-				s.meta.MaxLevel = uint32(level)
-			}
-
-		case WalSetNeighbors:
-			nodeId, layer, neighbors := DecodeSetNeighbors(payload)
-			if layer == 0 {
-				if err := s.setNeighborsL0(nodeId, neighbors); err != nil {
-					return err
-				}
-			} else {
-				if err := s.setNeighborsUpper(nodeId, layer, neighbors); err != nil {
-					return err
-				}
-			}
-
-		case WalSetNorm:
-			nodeId, norm := DecodeSetNorm(payload)
-			if nodeId < s.nodeCapacity {
-				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
-				binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
-			}
-
-		case WalSetEntry:
-			entryId, maxLevel := DecodeSetEntry(payload)
-			s.meta.EntryPoint = entryId
-			s.meta.EntryLevel = uint32(maxLevel)
-			if uint32(maxLevel) > s.meta.MaxLevel {
-				s.meta.MaxLevel = uint32(maxLevel)
-			}
-
-		case WalDelete:
-			nodeId, _ := DecodeDelete(payload)
-			if nodeId < s.nodeCapacity {
-				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
-				s.nodes[offset+1] |= nodeFlagDeleted
-			}
-			if s.meta.NodeCount > 0 {
-				s.meta.NodeCount--
-			}
-		}
-		return nil
+		return s.applyWALRecord(typ, payload)
 	})
 	if err != nil {
 		return err
