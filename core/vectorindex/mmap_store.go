@@ -85,6 +85,9 @@ type MmapStore struct {
 // Metric returns the store's immutable distance metric.
 func (s *MmapStore) Metric() Metric { return s.metric }
 
+// Dim returns the fixed vector dimension this store was created with.
+func (s *MmapStore) Dim() int { return s.dim }
+
 // OpenMmapStore opens or creates an mmap-backed store in dir.
 func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	if opts.Dim <= 0 {
@@ -387,6 +390,9 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 	switch typ {
 	case WalInsert:
 		nodeId, level, vec, norm, docId := DecodeInsert(payload)
+		if len(vec) != s.dim {
+			return fmt.Errorf("applyWALRecord: WalInsert vec dim %d != store dim %d", len(vec), s.dim)
+		}
 		if err := s.ensureVecCapacity(nodeId); err != nil {
 			return err
 		}

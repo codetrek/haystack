@@ -97,6 +97,15 @@ func (h *HNSWIndex) runInTxnLocked(apply func() error) error {
 	if err := h.store.txnBegin(); err != nil {
 		return err
 	}
+	// A panic inside apply (e.g. a SIMD kernel on malformed input that slipped
+	// past validation) must not leave the store's in-txn flag set, which would
+	// brick every subsequent write. Abort to clear it, then re-panic.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = h.store.txnAbort(fmt.Errorf("panic during transaction: %v", r))
+			panic(r)
+		}
+	}()
 	if err := apply(); err != nil {
 		_ = h.store.txnAbort(err)
 		return err
@@ -104,9 +113,27 @@ func (h *HNSWIndex) runInTxnLocked(apply func() error) error {
 	return h.store.txnCommit()
 }
 
+// validateVector rejects inputs that would corrupt the store or panic the
+// distance kernels: empty vectors, and (when the store has a fixed dimension)
+// vectors whose length disagrees with it. Called at every public write/search
+// entry before any state is mutated, so bad input returns an error instead of
+// faulting the store, panicking a SIMD kernel, or over-writing an adjacent slot.
+func (h *HNSWIndex) validateVector(v []float32) error {
+	if len(v) == 0 {
+		return fmt.Errorf("vectorindex: vector must be non-empty")
+	}
+	if d := h.store.Dim(); d > 0 && len(v) != d {
+		return fmt.Errorf("vectorindex: vector dimension mismatch: got %d, want %d", len(v), d)
+	}
+	return nil
+}
+
 // Insert adds (or replaces) a document's vector. Equivalent to a single-op
 // batch: it wraps one insert in a store transaction.
 func (h *HNSWIndex) Insert(docId int64, vector []float32) error {
+	if err := h.validateVector(vector); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.runInTxnLocked(func() error { return h.insertOneLocked(docId, vector) })
@@ -291,6 +318,9 @@ func (h *HNSWIndex) deleteOneLocked(docId int64) error {
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
+	if err := h.validateVector(query); err != nil {
+		return nil, err
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

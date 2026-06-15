@@ -11,6 +11,9 @@ func dotNEONPartial(a, b *float32, n int, out *float32)
 // viterin/vek has no SIMD path (it falls back to a scalar loop). The vectorized
 // loop handles len rounded down to a multiple of 4; the remainder is scalar.
 func dot(a, b []float32) float32 {
+	if len(a) != len(b) {
+		panic("vectorindex: dot length mismatch")
+	}
 	n := len(a)
 	nn := n &^ 3 // round down to a multiple of 4
 	var sum float32

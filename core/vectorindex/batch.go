@@ -74,6 +74,16 @@ func (b *Batch) Commit() error {
 		return nil
 	}
 	h := b.idx
+	// Validate every Put before opening a transaction, so a malformed vector
+	// returns a clean error without faulting the store or applying a partial
+	// batch. The batch is left intact for the caller to fix and retry.
+	for _, op := range b.ops {
+		if op.kind == opPut {
+			if err := h.validateVector(op.vector); err != nil {
+				return err
+			}
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

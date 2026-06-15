@@ -15,6 +15,9 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32, docId int64)
 	if s.faulted != nil {
 		return s.faulted
 	}
+	if len(vector) != s.dim {
+		return fmt.Errorf("MmapStore.PutNode: vector dim %d != store dim %d", len(vector), s.dim)
+	}
 
 	// Convert to stored form (cosine: unit vector) and keep the original norm
 	// for GetVector restore. norm never participates in distance computation.
