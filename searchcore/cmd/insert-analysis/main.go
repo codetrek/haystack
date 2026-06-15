@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	vi "github.com/codetrek/haystack/internal/core/vectorindex"
+	vi "github.com/codetrek/haystack/searchcore/vectorindex"
 )
 
 type countingStore struct {
@@ -70,7 +70,7 @@ func loadFvecs(path string, limit int) ([][]float32, error) {
 
 func main() {
 	n := 50000
-	siftPath := "internal/core/vectorindex/testdata/sift/sift/sift_base.fvecs"
+	siftPath := "searchcore/vectorindex/testdata/sift/sift/sift_base.fvecs"
 
 	fmt.Printf("Loading %d SIFT vectors...\n", n)
 	vectors, err := loadFvecs(siftPath, n)

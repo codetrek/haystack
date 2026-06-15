@@ -1,6 +1,6 @@
 // Command gen-testdata generates binary fixture files for HNSW benchmark tests.
 //
-// It produces three files in internal/core/vectorindex/testdata/:
+// It produces three files in searchcore/vectorindex/testdata/:
 //   - vectors_100k_384d.bin   100,000 random 384-dim float32 vectors
 //   - queries_50_384d.bin     50 random 384-dim query vectors
 //   - ground_truth_top10.bin  brute-force top-10 nearest neighbors per query (cosine distance)
@@ -27,7 +27,7 @@ const (
 	dim        = 384
 	k          = 10
 	seed       = 42
-	outDir     = "internal/core/vectorindex/testdata"
+	outDir     = "searchcore/vectorindex/testdata"
 )
 
 func main() {
