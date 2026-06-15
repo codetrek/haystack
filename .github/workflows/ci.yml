@@ -46,26 +46,34 @@ jobs:
         run: |
           ./.github/workflows/scripts/check-fmt.sh
 
-      - name: Build
+      - name: Build (root module)
         run: go build ./...
 
-      - name: Test and Coverage (Linux)
+      - name: Build (searchcore module)
+        # searchcore is a separate module (its own go.mod), so the root build
+        # above never reaches it. Compile-check it on every platform.
+        working-directory: searchcore
+        run: go build ./...
+
+      - name: Test and Coverage (Linux, root module)
         if: matrix.os == 'ubuntu-latest'
         run: |
           ./.github/workflows/scripts/test_and_coverage.sh
 
-      - name: Test (macOS/Windows)
+      - name: Test searchcore (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
         shell: bash
-        # vectorindex lives in the searchcore module (its own go.mod), so run
-        # the cross-platform mmap tests from there.
+        # The cross-platform matrix exists for searchcore's platform-sensitive
+        # code (mmap'd vectorindex), so run the whole searchcore module's suite
+        # here. On Linux searchcore is covered by the searchcore-coverage job,
+        # so this step is macOS/Windows only.
         working-directory: searchcore
         run: |
           # -v prints each case's execution time. Show only result lines, and
           # drop the 0.00s cases (noise) — keep all FAILs and the full log on
           # failure (with assertion detail).
           set -o pipefail
-          go test -v -timeout 15m ./vectorindex/... 2>&1 | tee vitest.log \
+          go test -v -timeout 15m ./... 2>&1 | tee vitest.log \
             | grep -E '^(ok|FAIL|--- (PASS|FAIL):|panic:)' | grep -vE '^--- PASS:.*\(0\.00s\)$'
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then echo "===== full test log ====="; cat vitest.log; fi
