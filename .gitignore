@@ -17,11 +17,11 @@ node_modules/
 /haystack
 
 # Generated test fixtures (large binary files)
-internal/core/vectorindex/testdata/*.bin
+searchcore/vectorindex/testdata/*.bin
 *.out
 cover.html
 scripts/lib/coverage/coverage
-internal/core/vectorindex/testdata/sift/
+searchcore/vectorindex/testdata/sift/
 /cmd/bench50k*
 .tmp/
 tmp/
