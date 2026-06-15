@@ -69,11 +69,11 @@ jobs:
           rm -f vitest.log
           exit "$status"
 
-  # The root module (the haystack server) is Linux-targeted, so build, test, and
+  # The app module (the haystack server) is Linux-targeted, so build, test, and
   # gate its coverage on Linux only. Formatting is a repo-wide check and lives
   # here since this is the single Linux job.
-  root:
-    name: Root (ubuntu-latest)
+  app:
+    name: App (ubuntu-latest)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
