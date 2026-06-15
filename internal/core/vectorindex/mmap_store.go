@@ -412,9 +412,6 @@ func (s *MmapStore) loadIdmap() error {
 		off = entryEnd
 	}
 
-	if _, err := f.Seek(0, 2); err != nil {
-		return err
-	}
 	return nil
 }
 

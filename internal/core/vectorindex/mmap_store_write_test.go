@@ -304,3 +304,22 @@ func TestMappingCommittedSurvivesCrash(t *testing.T) {
 		t.Fatalf("committed mapping must survive crash: got (%d,%v)", id, ok)
 	}
 }
+
+func TestMappingSetThenDeleteInTxnSurvivesAsDeleted(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	requireNoError(t, s.DeleteNodeMapping("doc-0"))
+	requireNoError(t, s.txnCommit())
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	requireNoError(t, err)
+	defer s2.Close()
+	if _, ok, _ := s2.GetNodeId("doc-0"); ok {
+		t.Fatal("set-then-delete in same committed txn must not survive as a mapping")
+	}
+}

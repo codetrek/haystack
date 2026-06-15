@@ -482,8 +482,8 @@ func (s *MmapStore) compactIdmap() error {
 		return err
 	}
 
-	// Reopen idmap for append.
-	nf, err := fsOpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
+	// Reopen idmap handle (lifecycle/Close tracking only; writes go through compactIdmap).
+	nf, err := fsOpenFile(path, os.O_RDWR, 0644)
 	if err != nil {
 		s.muDoc.Unlock()
 		return err
