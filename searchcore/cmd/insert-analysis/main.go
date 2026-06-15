@@ -85,10 +85,10 @@ func main() {
 	}
 
 	type sample struct {
-		n                                             int
-		avgReads, avgPuts, avgNeighbors, avgNorms     float64
-		avgTotalWrites                                float64
-		cumReads, cumWrites                           int64
+		n                                         int
+		avgReads, avgPuts, avgNeighbors, avgNorms float64
+		avgTotalWrites                            float64
+		cumReads, cumWrites                       int64
 	}
 
 	var samples []sample
