@@ -7,8 +7,12 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  build-and-test:
-    name: Build & Test (${{ matrix.os }})
+  # The cross-platform matrix exists for searchcore's platform-sensitive code
+  # (its mmap'd vectorindex). searchcore is its own module, so build and test it
+  # from there on every OS. On Linux, go-cov runs the suite and enforces the
+  # coverage bar; macOS/Windows run the suite as a portability check.
+  searchcore:
+    name: Searchcore (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -18,8 +22,65 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Git LFS
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Pin to go.mod's toolchain version. go-version-file would install the
+          # `go` directive (1.23.0) and then trigger a second toolchain download
+          # (go1.24.2) at build time — slow, especially on Windows (NTFS + AV).
+          # Keep this in sync with the `toolchain` line in go.mod.
+          go-version: '1.24.2'
+          # Caches both the module cache and the build cache, with correct
+          # per-OS paths — so no separate actions/cache step is needed.
+          cache: true
+
+      - name: Verify Go version
+        run: go version
+
+      - name: Build
+        working-directory: searchcore
+        run: go build ./...
+
+      - name: Coverage gate (Linux)
+        # go-cov runs searchcore's full suite and enforces the same bar as the
+        # root module (func 80 / package 85 / total 90).
         if: matrix.os == 'ubuntu-latest'
+        working-directory: searchcore
+        env:
+          THRESHOLD_FUNC: "80"
+          THRESHOLD_PACKAGE: "85"
+          THRESHOLD_PRINT: "85"
+          THRESHOLD_TOTAL: "90"
+        run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2
+
+      - name: Test (macOS/Windows)
+        if: matrix.os != 'ubuntu-latest'
+        shell: bash
+        working-directory: searchcore
+        run: |
+          # -v prints each case's execution time. Show only result lines, and
+          # drop the 0.00s cases (noise) — keep all FAILs and the full log on
+          # failure (with assertion detail).
+          set -o pipefail
+          go test -v -timeout 15m ./... 2>&1 | tee vitest.log \
+            | grep -E '^(ok|FAIL|--- (PASS|FAIL):|panic:)' | grep -vE '^--- PASS:.*\(0\.00s\)$'
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then echo "===== full test log ====="; cat vitest.log; fi
+          rm -f vitest.log
+          exit "$status"
+
+  # The root module (the haystack server) is Linux-targeted, so build, test, and
+  # gate its coverage on Linux only. Formatting is a repo-wide check and lives
+  # here since this is the single Linux job.
+  root:
+    name: Root (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Git LFS
         run: |
           git lfs install
           git lfs pull
@@ -27,69 +88,20 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          # See the searchcore job: pin to go.mod's toolchain version to avoid a
+          # redundant SDK install. Keep in sync with the `toolchain` line.
+          go-version: '1.24.2'
           cache: true
-
-      - name: Cache Go build
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/go-build
-          key: go-build-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum', '**/*.go') }}
-          restore-keys: |
-            go-build-${{ runner.os }}-
 
       - name: Verify Go version
         run: go version
 
       - name: Check Formatting
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          ./.github/workflows/scripts/check-fmt.sh
+        # Repo-wide gofmt check; covers both the root and searchcore modules.
+        run: ./.github/workflows/scripts/check-fmt.sh
 
       - name: Build
         run: go build ./...
 
-      - name: Test and Coverage (Linux)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          ./.github/workflows/scripts/test_and_coverage.sh
-
-      - name: Test (macOS/Windows)
-        if: matrix.os != 'ubuntu-latest'
-        shell: bash
-        run: |
-          # -v prints each case's execution time. Show only result lines, and
-          # drop the 0.00s cases (noise) — keep all FAILs and the full log on
-          # failure (with assertion detail).
-          set -o pipefail
-          go test -v -timeout 15m ./internal/core/vectorindex/... 2>&1 | tee vitest.log \
-            | grep -E '^(ok|FAIL|--- (PASS|FAIL):|panic:)' | grep -vE '^--- PASS:.*\(0\.00s\)$'
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then echo "===== full test log ====="; cat vitest.log; fi
-          rm -f vitest.log
-          exit "$status"
-
-  searchcore-coverage:
-    name: Coverage (searchcore)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: 'go.mod'
-          cache: true
-      - name: go-cov (searchcore)
-        # searchcore has its own go.mod, so the main gate's `go test ./...` never
-        # reaches it. Run go-cov inside the module at the same bar as the main
-        # module (func 80 / package 85 / total 90).
-        working-directory: searchcore
-        env:
-          THRESHOLD_FUNC: "80"
-          THRESHOLD_PACKAGE: "85"
-          THRESHOLD_PRINT: "85"
-          THRESHOLD_TOTAL: "90"
-        run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.1
-
+      - name: Test and Coverage
+        run: ./.github/workflows/scripts/test_and_coverage.sh

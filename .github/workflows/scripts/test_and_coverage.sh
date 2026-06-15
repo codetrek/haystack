@@ -4,4 +4,4 @@
 
 set -e
 
-go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.1
+go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2

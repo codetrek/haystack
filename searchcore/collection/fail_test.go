@@ -93,3 +93,43 @@ func TestDelete_DbError(t *testing.T) {
 	fs.failDelete = true
 	assert.Error(t, cat.Delete(col.ID()), "Delete should fail when the db delete fails")
 }
+
+// TestCreate_DocsCreateError covers Catalog.Create's rollback path: the record
+// is persisted, then docs.Create fails, so the catalog deletes the now-orphaned
+// record. We also fail that cleanup delete to exercise the nested log branch, so
+// the whole error block (docs.Create error -> rollback delete -> log) is run.
+func TestCreate_DocsCreateError(t *testing.T) {
+	dir := t.TempDir()
+	real, err := pebblekv.Open(filepath.Join(dir, "data"), 0)
+	require.NoError(t, err)
+
+	q := queue.NewMpsc("collection-docs-fail-test")
+	q.Start()
+
+	idx, err := invertedindex.New(real, q, invertedindex.Options{})
+	require.NoError(t, err)
+	// The document store rides on its own failable wrapper so docs.Create can be
+	// made to fail without affecting the catalog's own db ops.
+	docFS := &failStore{Store: real}
+	docs, err := documents.New(docFS, q, idx, documents.Options{})
+	require.NoError(t, err)
+
+	// The catalog's db is a separate failable wrapper: persistRecord's Put must
+	// succeed (so we reach docs.Create), but the rollback Delete must fail.
+	catFS := &failStore{Store: real}
+	cat, err := New(catFS, docs, Options{})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		idx.CloseAndWait()
+		docs.CloseAndWait()
+		q.Stop()
+		_ = real.Close()
+	})
+
+	docFS.failPut = true    // docs.Create's Put fails -> Create returns an error
+	catFS.failDelete = true // rollback delete fails -> the nested log branch runs
+
+	_, err = cat.Create("proj")
+	assert.Error(t, err, "Create should fail and roll back when docs.Create fails")
+}
