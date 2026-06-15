@@ -42,7 +42,7 @@ clean:
 
 gen-testdata:
 	@echo "Generating test fixtures (this takes ~15 min)..."
-	@go run ./cmd/gen-testdata/
+	@cd searchcore && go run ./cmd/gen-testdata/
 
 DOCKER_TEST_IMAGE=haystack-test
 
