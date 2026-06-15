@@ -9,6 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
@@ -16,11 +21,6 @@ import (
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/server/searcher"
 	"github.com/codetrek/haystack/internal/shared/running"
-	"github.com/codetrek/haystack/core/collection"
-	"github.com/codetrek/haystack/core/documents"
-	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedindex"
-	"github.com/codetrek/haystack/core/queue"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/stretchr/testify/assert"

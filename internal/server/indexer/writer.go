@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/internal/core/workspace"
 )
 
 type WriteDoc struct {

@@ -9,13 +9,13 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/storage"
-	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/queue"
+	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/storage"
+	"github.com/codetrek/haystack/internal/shared/running"
 )
 
 // TestInitLog_Stdout verifies initLog configures stdout logging.

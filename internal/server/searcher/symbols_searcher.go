@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/core/documents"
 
 	"github.com/AntoineAugusti/wordsegmentation"
 	"github.com/AntoineAugusti/wordsegmentation/corpus"

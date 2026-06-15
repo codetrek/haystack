@@ -6,9 +6,9 @@ import (
 	"log"
 	"time"
 
-	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/internal/shared/types"
 )
 
 // extraPayload is the workspace-specific data stored in collection.Record.Extra.

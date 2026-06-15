@@ -6,9 +6,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/tokenizer"
+	"github.com/codetrek/haystack/internal/conf"
 )
 
 type Function struct {

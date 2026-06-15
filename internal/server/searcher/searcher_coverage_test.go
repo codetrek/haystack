@@ -12,6 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/engine"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
@@ -19,11 +24,6 @@ import (
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/internal/testutil"
-	"github.com/codetrek/haystack/core/collection"
-	"github.com/codetrek/haystack/core/documents"
-	"github.com/codetrek/haystack/core/engine"
-	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/stretchr/testify/assert"
 )
 
