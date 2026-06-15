@@ -327,3 +327,88 @@ func TestDocIdCommittedSurvivesCrash(t *testing.T) {
 		t.Fatalf("committed docId=77 must survive crash: got (%d,%v)", nodeId, ok)
 	}
 }
+
+// TestZombieNodeReachableViaGetDocId proves that a node slot written by an
+// aborted/crashed transaction (a "zombie") is never surfaced as a real
+// document, even though a committed node holds a graph edge to it and its mmap
+// bytes leaked to disk.
+//
+// Scenario: a committed node (entry point, docId 100) is durable. A second
+// transaction then allocates a zombie node (docId 999) and rewrites the
+// committed node's L0 neighbor list to point at the zombie — exactly what an
+// HNSW insert does to existing neighbors. The transaction never commits; the
+// dirty mmap pages are synced to disk and the store crashes. On reopen, WAL
+// replay discards the unterminated transaction, so meta.TotalSlots covers only
+// the committed node, leaving the zombie slot at id >= TotalSlots.
+//
+// Without the TotalSlots bound in GetDocId, Search traverses the leaked edge to
+// the zombie and GetDocId returns 999 (aborted-txn data). With the bound, the
+// zombie is reported not-found and never appears in results.
+func TestZombieNodeReachableViaGetDocId(t *testing.T) {
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000}
+	s, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+
+	const (
+		committedID = uint64(0)
+		zombieID    = uint64(1)
+		committedDc = int64(100)
+		zombieDc    = int64(999)
+	)
+
+	// Durable committed node — becomes the search entry point.
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(committedID, 0, []float32{1, 0, 0, 0}, committedDc))
+	requireNoError(t, s.SetEntryPoint(committedID, 0))
+	requireNoError(t, s.txnCommit())
+
+	// Uncommitted transaction: write the zombie and graft a committed→zombie
+	// edge, then crash before COMMIT. The zombie's vector is closer to the query
+	// below than the committed node's, so an unfiltered Search would prefer it.
+	requireNoError(t, s.txnBegin())
+	zid, err := s.NextNodeId()
+	requireNoError(t, err)
+	if zid != zombieID {
+		t.Fatalf("expected zombie node id %d, got %d", zombieID, zid)
+	}
+	requireNoError(t, s.PutNode(zombieID, 0, []float32{0, 1, 0, 0}, zombieDc))
+	requireNoError(t, s.SetNeighbors(committedID, 0, []uint64{zombieID}))
+	// Force the leaked mmap writes to disk, then crash with no COMMIT.
+	requireNoError(t, s.syncAll())
+	simulateCrash(s)
+
+	// Reopen: WAL replay drops the unterminated txn; meta.TotalSlots == 1.
+	s2, err := OpenMmapStore(dir, opts)
+	requireNoError(t, err)
+	defer s2.Close()
+
+	if s2.meta.TotalSlots != 1 {
+		t.Fatalf("TotalSlots = %d, want 1 (zombie txn must be discarded)", s2.meta.TotalSlots)
+	}
+
+	// Direct GetDocId on the zombie slot must report not-found.
+	docId, ok, err := s2.GetDocId(zombieID)
+	requireNoError(t, err)
+	if ok {
+		t.Fatalf("GetDocId(zombie) returned (%d, ok=true); aborted-txn data leaked", docId)
+	}
+
+	// The committed node is still fully readable.
+	cDoc, ok, err := s2.GetDocId(committedID)
+	requireNoError(t, err)
+	if !ok || cDoc != committedDc {
+		t.Fatalf("GetDocId(committed) = (%d, %v), want (%d, true)", cDoc, ok, committedDc)
+	}
+
+	// End-to-end: Search must not surface the zombie's docId even though the
+	// committed entry node holds a leaked edge to it.
+	idx := NewHNSWIndex(s2)
+	results, err := idx.Search([]float32{0, 1, 0, 0}, 10)
+	requireNoError(t, err)
+	for _, r := range results {
+		if r.DocID == zombieDc {
+			t.Fatalf("Search returned zombie docId %d from an aborted transaction", zombieDc)
+		}
+	}
+}

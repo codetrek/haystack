@@ -188,12 +188,23 @@ func (s *MmapStore) GetNodeId(docId int64) (uint64, bool, error) {
 }
 
 // GetDocId returns the document ID stored in the node's slot.
+//
+// Held under muWrite.RLock for the whole body (like GetEntryPoint): this
+// excludes all writers, so both s.meta.TotalSlots and the slot bytes are stable
+// and no separate muNodes lock is needed. The TotalSlots bound rejects slots in
+// [TotalSlots, nodeCapacity) — these are uncommitted/zombie slots whose mmap
+// writes from an aborted or crashed transaction leaked to disk with Occupied
+// set. A committed node can hold a graph edge to such a slot, so Search may
+// reach it; returning not-found here prevents surfacing aborted-txn data.
 func (s *MmapStore) GetDocId(id uint64) (int64, bool, error) {
-	s.muNodes.RLock()
-	defer s.muNodes.RUnlock()
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
 
 	if id >= s.nodeCapacity {
 		return 0, false, fmt.Errorf("MmapStore.GetDocId: id %d out of range (cap %d)", id, s.nodeCapacity)
+	}
+	if id >= s.meta.TotalSlots {
+		return 0, false, nil // uncommitted/zombie slot
 	}
 	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	flags := s.nodes[offset+1]

@@ -62,6 +62,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32, docId int64)
 	s.nodes[nodeOff+3] = 0                // padding
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], upperSlotVal)
+	binary.LittleEndian.PutUint32(s.nodes[nodeOff+12:], 0)             // pad[4]: keep slot fully defined for reuse
 	binary.LittleEndian.PutUint64(s.nodes[nodeOff+16:], uint64(docId)) // DocId at offset 16
 
 	// Update forward map if already built.

@@ -354,6 +354,11 @@ func (s *MmapStore) closeMmaps() {
 // ensureDocToNode builds docToNode from nodes.dat on first call.
 // Must be called under muWrite (guards docToNodeBuilt flag).
 // The map itself is populated under muDoc.
+//
+// It reads s.nodes without taking muNodes: running under muWrite.Lock() excludes
+// every writer (and thus any concurrent growNodes remap of s.nodes), and HNSW's
+// h.mu prevents a concurrent Search reader during any write, so the slice and
+// its bytes are stable for the duration of this scan.
 func (s *MmapStore) ensureDocToNode() {
 	if s.docToNodeBuilt {
 		return
@@ -410,6 +415,7 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 		} else {
 			binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
 		}
+		binary.LittleEndian.PutUint32(s.nodes[nodeOff+12:], 0)             // pad[4]: keep slot fully defined for reuse
 		binary.LittleEndian.PutUint64(s.nodes[nodeOff+16:], uint64(docId)) // DocId at offset 16
 		if nodeId >= s.meta.TotalSlots {
 			s.meta.TotalSlots = nodeId + 1
