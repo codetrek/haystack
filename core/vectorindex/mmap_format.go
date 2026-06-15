@@ -163,6 +163,10 @@ func writeMetaHeader(dir string, h *MetaHeader) error {
 	if err := fsRename(tmp, final); err != nil {
 		return fmt.Errorf("writeMetaHeader: rename: %w", err)
 	}
+	// fsync the directory so the rename (the meta.bin swap) is itself durable.
+	if err := fsyncDir(dir); err != nil {
+		return fmt.Errorf("writeMetaHeader: fsync dir: %w", err)
+	}
 	return nil
 }
 

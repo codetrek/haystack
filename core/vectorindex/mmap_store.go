@@ -161,6 +161,12 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	}
 	s.wal = wal
 
+	// Seed the WAL's LSN floor from the last checkpoint so new records get LSNs
+	// strictly greater than any a future Replay(afterLSN=WalCheckpointLSN) skips.
+	// A checkpoint truncates the WAL; on reopen scanLSN restarts at 0, which
+	// would otherwise make post-reopen writes recoverable-then-discarded.
+	wal.SeedLSN(s.meta.WalCheckpointLSN)
+
 	// Replay WAL from checkpoint.
 	if err := s.replayWAL(); err != nil { // nocov: WAL replay error during Open
 		wal.Close()
@@ -266,6 +272,11 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 	upperSize := int64(pageSize) + int64(upperCap)*int64(s.upperSlotSz)
 	if err := writeDataFileHeader(filepath.Join(s.dir, "graph_upper.dat"), magicGraphUpper, &upperHdr, upperSize); err != nil {
 		return fmt.Errorf("graph_upper.dat: %w", err)
+	}
+
+	// fsync the directory so the newly-created data files' entries are durable.
+	if err := fsyncDir(s.dir); err != nil {
+		return fmt.Errorf("initAllFiles: fsync dir: %w", err)
 	}
 
 	return nil

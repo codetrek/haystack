@@ -363,6 +363,13 @@ func (s *MmapStore) Checkpoint() error {
 }
 
 func (s *MmapStore) checkpointLocked() error {
+	// A faulted store has uncommitted in-place writes; checkpointing would
+	// persist them and truncate the WAL, defeating crash-recovery rollback.
+	// (Close already guards this for its own call; guard here so the exported
+	// Checkpoint() and maybeCheckpoint() can't bypass it.)
+	if s.faulted != nil {
+		return s.faulted
+	}
 	// 1. msync all mmap regions.
 	if err := s.syncAll(); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: msync: %w", err)
