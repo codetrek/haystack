@@ -4,8 +4,8 @@ import (
 	"log"
 	"sync"
 
+	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/internal/utils"
-	"github.com/codetrek/haystack/searchcore/collection"
 )
 
 var (

@@ -1,0 +1,20 @@
+project = "core"
+module_prefix = "github.com/codetrek/haystack/"
+
+[thresholds]
+total = 90
+function = 80
+package = 85
+print = 85
+
+[test]
+timeout = "10m"
+
+[exclude]
+packages = []
+files = []
+funcs = []
+
+[html]
+enabled = true
+path = ".coverage/test_coverage.html"

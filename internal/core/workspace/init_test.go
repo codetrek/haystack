@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/searchcore/collection"
-	"github.com/codetrek/haystack/searchcore/documents"
-	"github.com/codetrek/haystack/searchcore/invertedindex"
-	"github.com/codetrek/haystack/searchcore/kv"
-	"github.com/codetrek/haystack/searchcore/queue"
 )
 
 // setupCatalog is a test helper: runs migration, creates collection.Catalog + documents.Store.
