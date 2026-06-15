@@ -33,7 +33,7 @@ const (
 // Run gen-testdata first:
 //
 //	go run ./cmd/gen-testdata/
-//	go test ./internal/core/vectorindex/ -run TestBenchmarkSearchLatency -v
+//	go test ./searchcore/vectorindex/ -run TestBenchmarkSearchLatency -v
 func TestBenchmarkSearchLatency(t *testing.T) {
 	vecPath := filepath.Join(fixtureDir, vectorsFile)
 	if _, err := os.Stat(vecPath); os.IsNotExist(err) {
