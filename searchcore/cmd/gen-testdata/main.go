@@ -1,3 +1,5 @@
+//go:build tools
+
 // Command gen-testdata generates binary fixture files for HNSW benchmark tests.
 //
 // It produces three files in searchcore/vectorindex/testdata/:
