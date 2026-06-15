@@ -5,7 +5,7 @@
 //   - queries_50_384d.bin     50 random 384-dim query vectors
 //   - ground_truth_top10.bin  brute-force top-10 nearest neighbors per query (cosine distance)
 //
-// Usage:
+// Usage (run from the searchcore module directory):
 //
 //	go run ./cmd/gen-testdata/
 package main
@@ -27,7 +27,7 @@ const (
 	dim        = 384
 	k          = 10
 	seed       = 42
-	outDir     = "searchcore/vectorindex/testdata"
+	outDir     = "vectorindex/testdata"
 )
 
 func main() {
