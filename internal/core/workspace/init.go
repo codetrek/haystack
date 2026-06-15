@@ -5,7 +5,7 @@ import (
 	"sync"
 
 	"github.com/codetrek/haystack/internal/utils"
-	"github.com/codetrek/haystack/searchcore/collection"
+	"github.com/codetrek/haystack/core/collection"
 )
 
 var (

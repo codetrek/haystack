@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/core/workspace"
-	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/core/documents"
 )
 
 // ---------------------------------------------------------------------------

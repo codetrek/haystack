@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codetrek/haystack/searchcore/engine"
+	"github.com/codetrek/haystack/core/engine"
 	"github.com/stretchr/testify/assert"
 )
 

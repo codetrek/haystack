@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/internal/core/storage"
-	"github.com/codetrek/haystack/searchcore/collection"
-	"github.com/codetrek/haystack/searchcore/kv"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // faultInjectStore wraps a real kv.Store and injects a Put error for a

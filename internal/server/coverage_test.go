@@ -12,10 +12,10 @@ import (
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/shared/running"
-	"github.com/codetrek/haystack/searchcore/idtable"
-	"github.com/codetrek/haystack/searchcore/invertedindex"
-	"github.com/codetrek/haystack/searchcore/kv"
-	"github.com/codetrek/haystack/searchcore/queue"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // TestInitLog_Stdout verifies initLog configures stdout logging.

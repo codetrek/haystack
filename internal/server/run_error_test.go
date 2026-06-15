@@ -7,11 +7,11 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/searchcore/collection"
-	"github.com/codetrek/haystack/searchcore/documents"
-	"github.com/codetrek/haystack/searchcore/invertedindex"
-	"github.com/codetrek/haystack/searchcore/kv"
-	"github.com/codetrek/haystack/searchcore/queue"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 var errFake = errors.New("fake init error")

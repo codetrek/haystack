@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/codetrek/haystack/internal/utils"
-	"github.com/codetrek/haystack/searchcore/idtable"
+	"github.com/codetrek/haystack/core/idtable"
 
 	"github.com/gabriel-vasile/mimetype"
 )

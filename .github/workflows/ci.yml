@@ -7,12 +7,12 @@ on:
     branches: [ "main", "master" ]
 
 jobs:
-  # The cross-platform matrix exists for searchcore's platform-sensitive code
-  # (its mmap'd vectorindex). searchcore is its own module, so build and test it
+  # The cross-platform matrix exists for core's platform-sensitive code
+  # (its mmap'd vectorindex). core is its own module, so build and test it
   # from there on every OS. On Linux, go-cov runs the suite and enforces the
   # coverage bar; macOS/Windows run the suite as a portability check.
-  searchcore:
-    name: Searchcore (${{ matrix.os }})
+  core:
+    name: Core (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -38,14 +38,14 @@ jobs:
         run: go version
 
       - name: Build
-        working-directory: searchcore
+        working-directory: core
         run: go build ./...
 
       - name: Coverage gate (Linux)
-        # go-cov runs searchcore's full suite and enforces the same bar as the
+        # go-cov runs core's full suite and enforces the same bar as the
         # root module (func 80 / package 85 / total 90).
         if: matrix.os == 'ubuntu-latest'
-        working-directory: searchcore
+        working-directory: core
         env:
           THRESHOLD_FUNC: "80"
           THRESHOLD_PACKAGE: "85"
@@ -56,7 +56,7 @@ jobs:
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
         shell: bash
-        working-directory: searchcore
+        working-directory: core
         run: |
           # -v prints each case's execution time. Show only result lines, and
           # drop the 0.00s cases (noise) — keep all FAILs and the full log on
@@ -88,7 +88,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          # See the searchcore job: pin to go.mod's toolchain version to avoid a
+          # See the core job: pin to go.mod's toolchain version to avoid a
           # redundant SDK install. Keep in sync with the `toolchain` line.
           go-version: '1.24.2'
           cache: true
@@ -97,7 +97,7 @@ jobs:
         run: go version
 
       - name: Check Formatting
-        # Repo-wide gofmt check; covers both the root and searchcore modules.
+        # Repo-wide gofmt check; covers both the root and core modules.
         run: ./.github/workflows/scripts/check-fmt.sh
 
       - name: Build

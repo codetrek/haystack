@@ -17,14 +17,16 @@ node_modules/
 /haystack
 
 # Generated test fixtures (large binary files)
-searchcore/vectorindex/testdata/*.bin
+core/vectorindex/testdata/*.bin
 *.out
 cover.html
 scripts/lib/coverage/coverage
-searchcore/vectorindex/testdata/sift/
+core/vectorindex/testdata/sift/
 /cmd/bench50k*
 .tmp/
 tmp/
+.bf/
 
 # superpowers workflow artifacts (transient, not persistent docs)
 docs/superpowers/
+.claude/

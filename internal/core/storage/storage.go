@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/codetrek/haystack/searchcore/kv"
-	"github.com/codetrek/haystack/searchcore/kv/pebblekv"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 )
 
 const StorageVersion = "1.4"

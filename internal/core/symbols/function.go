@@ -7,8 +7,8 @@ import (
 	"unicode"
 
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/searchcore/kv"
-	"github.com/codetrek/haystack/searchcore/tokenizer"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/tokenizer"
 )
 
 type Function struct {

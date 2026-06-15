@@ -12,9 +12,9 @@ import (
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/searchcore/collection"
-	"github.com/codetrek/haystack/searchcore/documents"
-	"github.com/codetrek/haystack/searchcore/queue"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // newTestStore creates a transient documents.Store for use in workspace unit

@@ -19,11 +19,11 @@ import (
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/internal/testutil"
-	"github.com/codetrek/haystack/searchcore/collection"
-	"github.com/codetrek/haystack/searchcore/documents"
-	"github.com/codetrek/haystack/searchcore/engine"
-	"github.com/codetrek/haystack/searchcore/idtable"
-	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/engine"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/stretchr/testify/assert"
 )
 

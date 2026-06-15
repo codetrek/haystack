@@ -12,7 +12,7 @@ import (
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
 	"github.com/codetrek/haystack/internal/shared/types"
-	"github.com/codetrek/haystack/searchcore/documents"
+	"github.com/codetrek/haystack/core/documents"
 )
 
 // ---------------------------------------------------------------------------

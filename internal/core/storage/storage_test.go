@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/codetrek/haystack/searchcore/collection"
-	"github.com/codetrek/haystack/searchcore/documents"
-	"github.com/codetrek/haystack/searchcore/idtable"
-	"github.com/codetrek/haystack/searchcore/invertedindex"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -141,7 +141,7 @@ func TestIsKeyType(t *testing.T) {
 }
 
 // TestKeyTypeConstants is a global-keyspace collision canary. It imports the
-// authoritative Default* constants from each searchcore sub-package and the
+// authoritative Default* constants from each core sub-package and the
 // storage-local symbol consts, then asserts there are no duplicates across
 // the entire shared on-disk key namespace.
 func TestKeyTypeConstants(t *testing.T) {

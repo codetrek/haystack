@@ -10,8 +10,8 @@ import (
 
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/workspace"
-	"github.com/codetrek/haystack/searchcore/documents"
-	"github.com/codetrek/haystack/searchcore/tokenizer"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/tokenizer"
 )
 
 // ParseFile represents a file to be parsed
