@@ -70,7 +70,7 @@ func TestPutNodeWALError(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
 	failWALNextWrite(s)
-	if err := s.PutNode(0, 0, []float32{1, 0, 0, 0}); err == nil {
+	if err := s.PutNode(0, 0, []float32{1, 0, 0, 0}, 0); err == nil {
 		t.Fatal("expected WAL error from PutNode")
 	}
 }

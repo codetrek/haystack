@@ -55,3 +55,6 @@ func mmapSyncWindows(data []byte) error {
 	}
 	return syscall.FlushViewOfFile(uintptr(unsafe.Pointer(&data[0])), uintptr(len(data)))
 }
+
+// mmapAdviseSequential is a no-op on Windows (no equivalent of MADV_SEQUENTIAL).
+func mmapAdviseSequential(data []byte) {}

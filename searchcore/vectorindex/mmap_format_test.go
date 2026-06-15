@@ -118,8 +118,8 @@ func TestWriteMetaHeaderVersionDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != 1 {
-		t.Errorf("Version = %d, want 1 (auto-set from 0)", got.Version)
+	if got.Version != 2 {
+		t.Errorf("Version = %d, want 2 (auto-set from 0)", got.Version)
 	}
 }
 

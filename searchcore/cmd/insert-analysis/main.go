@@ -14,7 +14,6 @@ type countingStore struct {
 	reads        atomic.Int64
 	putNodes     atomic.Int64
 	setNeighbors atomic.Int64
-	setMappings  atomic.Int64
 	setNorms     atomic.Int64
 }
 
@@ -26,25 +25,21 @@ func (c *countingStore) GetVector(id uint64) ([]float32, error) {
 	c.reads.Add(1)
 	return c.NodeStore.GetVector(id)
 }
-func (c *countingStore) PutNode(id uint64, level int, vector []float32) error {
+func (c *countingStore) PutNode(id uint64, level int, vector []float32, docId int64) error {
 	c.putNodes.Add(1)
-	return c.NodeStore.PutNode(id, level, vector)
+	return c.NodeStore.PutNode(id, level, vector, docId)
 }
 func (c *countingStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error {
 	c.setNeighbors.Add(1)
 	return c.NodeStore.SetNeighbors(id, layer, neighbors)
-}
-func (c *countingStore) SetNodeMapping(docId string, nodeId uint64) error {
-	c.setMappings.Add(1)
-	return c.NodeStore.SetNodeMapping(docId, nodeId)
 }
 func (c *countingStore) SetNorm(id uint64, norm float32) error {
 	c.setNorms.Add(1)
 	return c.NodeStore.SetNorm(id, norm)
 }
 
-func (c *countingStore) ResetAll() (reads, puts, neighbors, mappings, norms int64) {
-	return c.reads.Swap(0), c.putNodes.Swap(0), c.setNeighbors.Swap(0), c.setMappings.Swap(0), c.setNorms.Swap(0)
+func (c *countingStore) ResetAll() (reads, puts, neighbors, norms int64) {
+	return c.reads.Swap(0), c.putNodes.Swap(0), c.setNeighbors.Swap(0), c.setNorms.Swap(0)
 }
 
 func loadFvecs(path string, limit int) ([][]float32, error) {
@@ -90,32 +85,31 @@ func main() {
 	}
 
 	type sample struct {
-		n                                                      int
-		avgReads, avgPuts, avgNeighbors, avgMappings, avgNorms float64
-		avgTotalWrites                                         float64
-		cumReads, cumWrites                                    int64
+		n                                             int
+		avgReads, avgPuts, avgNeighbors, avgNorms     float64
+		avgTotalWrites                                float64
+		cumReads, cumWrites                           int64
 	}
 
 	var samples []sample
-	var wReads, wPuts, wNeighbors, wMappings, wNorms int64
+	var wReads, wPuts, wNeighbors, wNorms int64
 	var wCount int
 	var cumReads, cumWrites int64
 
 	for i, v := range vectors {
 		cs.ResetAll()
-		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+		if err := idx.Insert(int64(i), v); err != nil {
 			fmt.Fprintf(os.Stderr, "insert %d: %v\n", i, err)
 			os.Exit(1)
 		}
-		reads, puts, neighbors, mappings, norms := cs.ResetAll()
-		writes := puts + neighbors + mappings + norms
+		reads, puts, neighbors, norms := cs.ResetAll()
+		writes := puts + neighbors + norms
 
 		cumReads += reads
 		cumWrites += writes
 		wReads += reads
 		wPuts += puts
 		wNeighbors += neighbors
-		wMappings += mappings
 		wNorms += norms
 		wCount++
 
@@ -127,22 +121,21 @@ func main() {
 				avgReads:       float64(wReads) / c,
 				avgPuts:        float64(wPuts) / c,
 				avgNeighbors:   float64(wNeighbors) / c,
-				avgMappings:    float64(wMappings) / c,
 				avgNorms:       float64(wNorms) / c,
-				avgTotalWrites: float64(wPuts+wNeighbors+wMappings+wNorms) / c,
+				avgTotalWrites: float64(wPuts+wNeighbors+wNorms) / c,
 				cumReads:       cumReads,
 				cumWrites:      cumWrites,
 			})
-			wReads, wPuts, wNeighbors, wMappings, wNorms, wCount = 0, 0, 0, 0, 0, 0
+			wReads, wPuts, wNeighbors, wNorms, wCount = 0, 0, 0, 0, 0
 		}
 	}
 
-	fmt.Printf("\n%-8s %-12s %-10s %-14s %-10s %-10s %-14s %-14s %-14s\n",
-		"Nodes", "Avg reads", "Avg puts", "Avg neighbors", "Avg maps", "Avg norms", "Avg writes", "Cum reads", "Cum writes")
-	fmt.Printf("%-8s %-12s %-10s %-14s %-10s %-10s %-14s %-14s %-14s\n",
-		"-----", "---------", "--------", "-------------", "--------", "---------", "----------", "---------", "----------")
+	fmt.Printf("\n%-8s %-12s %-10s %-14s %-10s %-14s %-14s %-14s\n",
+		"Nodes", "Avg reads", "Avg puts", "Avg neighbors", "Avg norms", "Avg writes", "Cum reads", "Cum writes")
+	fmt.Printf("%-8s %-12s %-10s %-14s %-10s %-14s %-14s %-14s\n",
+		"-----", "---------", "--------", "-------------", "---------", "----------", "---------", "----------")
 	for _, s := range samples {
-		fmt.Printf("%-8d %-12.1f %-10.1f %-14.1f %-10.1f %-10.1f %-14.1f %-14d %-14d\n",
-			s.n, s.avgReads, s.avgPuts, s.avgNeighbors, s.avgMappings, s.avgNorms, s.avgTotalWrites, s.cumReads, s.cumWrites)
+		fmt.Printf("%-8d %-12.1f %-10.1f %-14.1f %-10.1f %-14.1f %-14d %-14d\n",
+			s.n, s.avgReads, s.avgPuts, s.avgNeighbors, s.avgNorms, s.avgTotalWrites, s.cumReads, s.cumWrites)
 	}
 }

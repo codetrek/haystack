@@ -15,8 +15,8 @@ func newTestIndex() *HNSWIndex {
 func TestBatchCoalescePutThenPut(t *testing.T) {
 	idx := newTestIndex()
 	b := idx.NewBatch()
-	b.Put("d", []float32{1, 0, 0})
-	b.Put("d", []float32{0, 1, 0}) // overwrites
+	b.Put(100, []float32{1, 0, 0})
+	b.Put(100, []float32{0, 1, 0}) // overwrites
 	assert.Equal(t, 1, b.Len(), "same docId must coalesce to one op")
 
 	requireNoError(t, b.Commit())
@@ -31,8 +31,8 @@ func TestBatchCoalescePutThenPut(t *testing.T) {
 func TestBatchCoalescePutThenDelete(t *testing.T) {
 	idx := newTestIndex()
 	b := idx.NewBatch()
-	b.Put("d", []float32{1, 0, 0})
-	b.Delete("d") // net: delete, nothing inserted
+	b.Put(100, []float32{1, 0, 0})
+	b.Delete(100) // net: delete, nothing inserted
 	assert.Equal(t, 1, b.Len())
 
 	requireNoError(t, b.Commit())
@@ -45,8 +45,8 @@ func TestBatchCoalescePutThenDelete(t *testing.T) {
 func TestBatchCoalesceDeleteThenPutIsUpsert(t *testing.T) {
 	idx := newTestIndex()
 	b := idx.NewBatch()
-	b.Delete("d")
-	b.Put("d", []float32{0, 0, 1})
+	b.Delete(100)
+	b.Put(100, []float32{0, 0, 1})
 	assert.Equal(t, 1, b.Len())
 
 	requireNoError(t, b.Commit())
@@ -60,7 +60,7 @@ func TestBatchCoalesceDeleteThenPutIsUpsert(t *testing.T) {
 func TestBatchDeleteAbsentIsNoop(t *testing.T) {
 	idx := newTestIndex()
 	b := idx.NewBatch()
-	b.Delete("never-existed")
+	b.Delete(99999)
 	assert.Equal(t, 1, b.Len())
 	requireNoError(t, b.Commit()) // must not error
 
@@ -79,7 +79,7 @@ func TestBatchEmptyCommitNoop(t *testing.T) {
 func TestBatchDiscardDropsBuffer(t *testing.T) {
 	idx := newTestIndex()
 	b := idx.NewBatch()
-	b.Put("d", []float32{1, 0, 0})
+	b.Put(100, []float32{1, 0, 0})
 	b.Discard()
 	assert.Equal(t, 0, b.Len())
 
@@ -93,17 +93,17 @@ func TestBatchUpsertReplacesCommittedDoc(t *testing.T) {
 	idx := newTestIndex()
 
 	// Commit an initial value.
-	requireNoError(t, idx.Insert("d", []float32{1, 0, 0}))
+	requireNoError(t, idx.Insert(100, []float32{1, 0, 0}))
 
 	// A second batch Puts the same docId with a new vector.
 	b := idx.NewBatch()
-	b.Put("d", []float32{0, 0, 1})
+	b.Put(100, []float32{0, 0, 1})
 	requireNoError(t, b.Commit())
 
 	// docId maps to exactly one node, and it is the new vector.
 	res, err := idx.Search([]float32{0, 0, 1}, 2)
 	requireNoError(t, err)
-	requireLen(t, res, 1) // only one node exists for "d"
+	requireLen(t, res, 1) // only one node exists for docId=100
 	assert.InDelta(t, 0.0, res[0].Distance, 1e-6)
 
 	// The old vector is gone.
@@ -122,12 +122,12 @@ type failingStore struct {
 	aborted   bool
 }
 
-func (f *failingStore) PutNode(id uint64, level int, vec []float32) error {
+func (f *failingStore) PutNode(id uint64, level int, vec []float32, docId int64) error {
 	f.puts++
 	if f.puts == f.failOnPut {
 		return fmt.Errorf("injected PutNode failure")
 	}
-	return f.MemNodeStore.PutNode(id, level, vec)
+	return f.MemNodeStore.PutNode(id, level, vec, docId)
 }
 
 func (f *failingStore) txnAbort(cause error) error {
@@ -141,7 +141,7 @@ func TestBatchCommitAbortsOnApplyError(t *testing.T) {
 
 	b := idx.NewBatch()
 	for i := 0; i < 5; i++ {
-		b.Put(fmt.Sprintf("doc-%d", i), []float32{float32(i), 1, 0})
+		b.Put(int64(i), []float32{float32(i), 1, 0})
 	}
 	if err := b.Commit(); err == nil {
 		t.Fatal("Commit must return the injected error")
@@ -154,11 +154,11 @@ func TestBatchCommitAbortsOnApplyError(t *testing.T) {
 func TestBatchReusableAcrossCommits(t *testing.T) {
 	idx := newTestIndex()
 	b := idx.NewBatch()
-	b.Put("a", []float32{1, 0, 0})
+	b.Put(10, []float32{1, 0, 0})
 	requireNoError(t, b.Commit())
 	assert.Equal(t, 0, b.Len(), "batch must be empty after Commit")
 
-	b.Put("b", []float32{0, 1, 0})
+	b.Put(20, []float32{0, 1, 0})
 	assert.Equal(t, 1, b.Len(), "reused batch sees only the new op")
 	requireNoError(t, b.Commit())
 

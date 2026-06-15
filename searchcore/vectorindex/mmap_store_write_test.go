@@ -1,7 +1,6 @@
 package vectorindex
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,12 +19,17 @@ func TestMmapStorePutNodeAndGetVector(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.SetNodeMapping("doc-0", 0))
-	requireNoError(t, s.PutNode(0, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 42))
 
 	got, err := s.GetVector(0)
 	requireNoError(t, err)
 	assert.Equal(t, vec, got)
+
+	// Verify docId stored on the node slot.
+	docId, ok, err := s.GetDocId(0)
+	requireNoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, int64(42), docId)
 }
 
 func TestMmapStorePutNodeAndGetNorm(t *testing.T) {
@@ -37,7 +41,7 @@ func TestMmapStorePutNodeAndGetNorm(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{3.0, 4.0, 0.0, 0.0} // norm = 5.0
-	requireNoError(t, s.PutNode(0, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 0))
 
 	norm, err := s.GetNorm(0)
 	requireNoError(t, err)
@@ -50,7 +54,7 @@ func TestMmapStorePutNodeRawMetricNoNorm(t *testing.T) {
 	s := openTestMmapStore(t) // DotProduct
 	defer s.Close()
 
-	requireNoError(t, s.PutNode(0, 0, []float32{3.0, 4.0, 0.0, 0.0}))
+	requireNoError(t, s.PutNode(0, 0, []float32{3.0, 4.0, 0.0, 0.0}, 0))
 
 	norm, err := s.GetNorm(0)
 	requireNoError(t, err)
@@ -62,7 +66,7 @@ func TestMmapStorePutNodeWithLevel(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 2, vec))
+	requireNoError(t, s.PutNode(0, 2, vec, 0))
 
 	level, err := s.GetNodeLevel(0)
 	requireNoError(t, err)
@@ -74,9 +78,9 @@ func TestMmapStoreSetNeighborsL0(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 0, vec))
-	requireNoError(t, s.PutNode(1, 0, vec))
-	requireNoError(t, s.PutNode(2, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 0))
+	requireNoError(t, s.PutNode(1, 0, vec, 1))
+	requireNoError(t, s.PutNode(2, 0, vec, 2))
 
 	nbs := []uint64{1, 2}
 	requireNoError(t, s.SetNeighbors(0, 0, nbs))
@@ -91,7 +95,7 @@ func TestMmapStoreSetNeighborsUpper(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 3, vec)) // level=3 → allocates upper slot
+	requireNoError(t, s.PutNode(0, 3, vec, 0)) // level=3 → allocates upper slot
 
 	nbs := []uint64{1, 2}
 	requireNoError(t, s.SetNeighbors(0, 2, nbs))
@@ -106,7 +110,7 @@ func TestMmapStoreSetNorm(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 0.0, 0.0, 0.0}
-	requireNoError(t, s.PutNode(0, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 0))
 
 	requireNoError(t, s.SetNorm(0, 99.5))
 
@@ -127,48 +131,68 @@ func TestMmapStoreSetEntryPoint(t *testing.T) {
 	assert.Equal(t, 3, level)
 }
 
-func TestMmapStoreNodeMapping(t *testing.T) {
+// TestMmapStoreDocIdRoundtrip verifies that a docId written via PutNode is
+// readable via GetDocId and via the lazy docToNode map via GetNodeId.
+func TestMmapStoreDocIdRoundtrip(t *testing.T) {
 	s := openTestMmapStore(t)
 	defer s.Close()
 
-	requireNoError(t, s.SetNodeMapping("doc-1", 42))
+	requireNoError(t, s.PutNode(42, 0, []float32{1, 0, 0, 0}, int64(999)))
 
-	id, ok, err := s.GetNodeId("doc-1")
+	// GetDocId reads from the mmap node slot.
+	docId, ok, err := s.GetDocId(42)
 	requireNoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, uint64(42), id)
+	assert.Equal(t, int64(999), docId)
+
+	// GetNodeId triggers lazy docToNode build, then does a map lookup.
+	nodeId, ok, err := s.GetNodeId(int64(999))
+	requireNoError(t, err)
+	assert.True(t, ok)
+	assert.Equal(t, uint64(42), nodeId)
+
+	// Non-existent docId returns ok=false.
+	_, ok, err = s.GetNodeId(int64(12345))
+	requireNoError(t, err)
+	assert.False(t, ok)
 }
 
-func TestMmapStoreNodeMappingPersistence(t *testing.T) {
+// TestMmapStoreDocIdPersistence verifies that the docId survives close → reopen.
+func TestMmapStoreDocIdPersistence(t *testing.T) {
 	dir := t.TempDir()
 	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
-	requireNoError(t, s.SetNodeMapping("doc-1", 42))
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 0, 0, 0}, int64(100)))
+	requireNoError(t, s.PutNode(1, 0, []float32{0, 1, 0, 0}, int64(200)))
 	requireNoError(t, s.Close())
 
-	// Reopen.
+	// Reopen and verify docIds are readable from mmap.
 	s2, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
 	defer s2.Close()
 
-	id, ok, err := s2.GetNodeId("doc-1")
+	docId0, ok0, err := s2.GetDocId(0)
+	requireNoError(t, err)
+	assert.True(t, ok0)
+	assert.Equal(t, int64(100), docId0)
+
+	docId1, ok1, err := s2.GetDocId(1)
+	requireNoError(t, err)
+	assert.True(t, ok1)
+	assert.Equal(t, int64(200), docId1)
+
+	// GetNodeId must rebuild docToNode from mmap scan.
+	nodeId, ok, err := s2.GetNodeId(int64(100))
 	requireNoError(t, err)
 	assert.True(t, ok)
-	assert.Equal(t, uint64(42), id)
-}
+	assert.Equal(t, uint64(0), nodeId)
 
-func TestMmapStoreDeleteNodeMapping(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
-
-	requireNoError(t, s.SetNodeMapping("doc-1", 42))
-	requireNoError(t, s.DeleteNodeMapping("doc-1"))
-
-	_, ok, err := s.GetNodeId("doc-1")
+	nodeId2, ok2, err := s2.GetNodeId(int64(200))
 	requireNoError(t, err)
-	assert.False(t, ok)
+	assert.True(t, ok2)
+	assert.Equal(t, uint64(1), nodeId2)
 }
 
 func TestMmapStoreBatchWriteAndRead(t *testing.T) {
@@ -178,7 +202,7 @@ func TestMmapStoreBatchWriteAndRead(t *testing.T) {
 	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < 10; i++ {
 		vec := []float32{float32(i), 0, 0, 0}
-		requireNoError(t, s.PutNode(i, 0, vec))
+		requireNoError(t, s.PutNode(i, 0, vec, int64(i)))
 		requireNoError(t, s.SetNeighbors(i, 0, []uint64{(i + 1) % 10}))
 	}
 	requireNoError(t, s.txnCommit())
@@ -246,8 +270,7 @@ func TestTxnInsertSurvivesReopen(t *testing.T) {
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
 		v := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
-		requireNoError(t, s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)))
-		requireNoError(t, s.PutNode(uint64(i), 0, v))
+		requireNoError(t, s.PutNode(uint64(i), 0, v, int64(i)))
 	}
 	requireNoError(t, s.txnCommit())
 	requireNoError(t, s.Close())
@@ -262,64 +285,45 @@ func TestTxnInsertSurvivesReopen(t *testing.T) {
 		requireNoError(t, err)
 		assert.Equal(t, v, got, "vector %d mismatch after reopen", i)
 	}
-	nodeId, ok, err := s2.GetNodeId("doc-50")
+	// Verify docId=50 maps back to nodeId=50.
+	nodeId, ok, err := s2.GetNodeId(int64(50))
 	requireNoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, uint64(50), nodeId)
 }
 
-func TestMappingDiscardedOnAbortReopen(t *testing.T) {
+func TestDocIdDiscardedOnAbortReopen(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
 	requireNoError(t, err)
 	requireNoError(t, s.txnBegin())
-	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
-	requireNoError(t, s.SetNodeMapping("doc-0", 0))
-	_ = s.txnAbort(fmt.Errorf("boom"))
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}, int64(999)))
+	_ = s.txnAbort(nil)
 	_ = s.Close() // graceful close of a faulted store must not persist
 
 	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s2.Close()
-	if _, ok, _ := s2.GetNodeId("doc-0"); ok {
-		t.Fatal("aborted batch's docId mapping must NOT survive reopen (D1 closed)")
+	// The aborted node must not exist (WAL txn was never committed).
+	if _, ok, _ := s2.GetNodeId(int64(999)); ok {
+		t.Fatal("aborted txn's docId=999 must NOT survive reopen")
 	}
 }
 
-func TestMappingCommittedSurvivesCrash(t *testing.T) {
+func TestDocIdCommittedSurvivesCrash(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
 	requireNoError(t, err)
 	requireNoError(t, s.txnBegin())
-	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
-	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}, int64(77)))
 	requireNoError(t, s.txnCommit())
 	simulateCrash(s)
 
 	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	requireNoError(t, err)
 	defer s2.Close()
-	id, ok, _ := s2.GetNodeId("doc-0")
-	if !ok || id != 0 {
-		t.Fatalf("committed mapping must survive crash: got (%d,%v)", id, ok)
-	}
-}
-
-func TestMappingSetThenDeleteInTxnSurvivesAsDeleted(t *testing.T) {
-	dir := t.TempDir()
-	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
-	requireNoError(t, err)
-	requireNoError(t, s.txnBegin())
-	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
-	requireNoError(t, s.SetNodeMapping("doc-0", 0))
-	requireNoError(t, s.DeleteNodeMapping("doc-0"))
-	requireNoError(t, s.txnCommit())
-	simulateCrash(s)
-
-	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
-	requireNoError(t, err)
-	defer s2.Close()
-	if _, ok, _ := s2.GetNodeId("doc-0"); ok {
-		t.Fatal("set-then-delete in same committed txn must not survive as a mapping")
+	nodeId, ok, _ := s2.GetNodeId(int64(77))
+	if !ok || nodeId != 0 {
+		t.Fatalf("committed docId=77 must survive crash: got (%d,%v)", nodeId, ok)
 	}
 }

@@ -16,15 +16,14 @@ import (
 type WalRecordType uint8
 
 const (
-	WalInsert        WalRecordType = 1
-	WalDelete        WalRecordType = 2
-	WalSetNeighbors  WalRecordType = 3
-	WalSetEntry      WalRecordType = 4
-	WalSetNorm       WalRecordType = 5
-	WalTxnBegin      WalRecordType = 6 // transaction start marker (empty payload)
-	WalTxnCommit     WalRecordType = 7 // transaction commit marker (empty payload)
-	WalSetMapping    WalRecordType = 8 // docId↔nodeId mapping add (payload: nodeId(8) + docId)
-	WalDeleteMapping WalRecordType = 9 // docId↔nodeId mapping remove (payload: docId)
+	WalInsert       WalRecordType = 1
+	WalDelete       WalRecordType = 2
+	WalSetNeighbors WalRecordType = 3
+	WalSetEntry     WalRecordType = 4
+	WalSetNorm      WalRecordType = 5
+	WalTxnBegin     WalRecordType = 6 // transaction start marker (empty payload)
+	WalTxnCommit    WalRecordType = 7 // transaction commit marker (empty payload)
+	// record types 8 (WalSetMapping) and 9 (WalDeleteMapping) are retired.
 )
 
 // WAL record disk layout: LSN(8) + Length(4) + Type(1) + Payload(var) + CRC32(4)
@@ -282,10 +281,9 @@ func (w *WAL) Replay(afterLSN uint64, fn func(lsn uint64, typ WalRecordType, pay
 // --- Payload encode/decode helpers ---
 
 // EncodeInsert encodes an INSERT WAL payload.
-func EncodeInsert(nodeId uint64, level int, vec []float32, norm float32, docId string) []byte {
-	// nodeId(8) + level(4) + norm(4) + vecLen(4) + vec(N*4) + docIdLen(2) + docId
-	docBytes := []byte(docId)
-	size := 8 + 4 + 4 + 4 + len(vec)*4 + 2 + len(docBytes)
+func EncodeInsert(nodeId uint64, level int, vec []float32, norm float32, docId int64) []byte {
+	// nodeId(8) + level(4) + norm(4) + vecLen(4) + vec(N*4) + docId(8)
+	size := 8 + 4 + 4 + 4 + len(vec)*4 + 8
 	buf := make([]byte, size)
 	off := 0
 	binary.LittleEndian.PutUint64(buf[off:], nodeId)
@@ -300,14 +298,12 @@ func EncodeInsert(nodeId uint64, level int, vec []float32, norm float32, docId s
 		binary.LittleEndian.PutUint32(buf[off:], math.Float32bits(v))
 		off += 4
 	}
-	binary.LittleEndian.PutUint16(buf[off:], uint16(len(docBytes)))
-	off += 2
-	copy(buf[off:], docBytes)
+	binary.LittleEndian.PutUint64(buf[off:], uint64(docId))
 	return buf
 }
 
 // DecodeInsert decodes an INSERT WAL payload.
-func DecodeInsert(payload []byte) (nodeId uint64, level int, vec []float32, norm float32, docId string) {
+func DecodeInsert(payload []byte) (nodeId uint64, level int, vec []float32, norm float32, docId int64) {
 	off := 0
 	nodeId = binary.LittleEndian.Uint64(payload[off:])
 	off += 8
@@ -322,28 +318,20 @@ func DecodeInsert(payload []byte) (nodeId uint64, level int, vec []float32, norm
 		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(payload[off:]))
 		off += 4
 	}
-	docIdLen := int(binary.LittleEndian.Uint16(payload[off:]))
-	off += 2
-	docId = string(payload[off : off+docIdLen])
+	docId = int64(binary.LittleEndian.Uint64(payload[off:]))
 	return
 }
 
-// EncodeDelete encodes a DELETE WAL payload.
-func EncodeDelete(nodeId uint64, docId string) []byte {
-	docBytes := []byte(docId)
-	buf := make([]byte, 8+2+len(docBytes))
-	binary.LittleEndian.PutUint64(buf[0:], nodeId)
-	binary.LittleEndian.PutUint16(buf[8:], uint16(len(docBytes)))
-	copy(buf[10:], docBytes)
+// EncodeDelete encodes a DELETE WAL payload (nodeId only).
+func EncodeDelete(nodeId uint64) []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, nodeId)
 	return buf
 }
 
 // DecodeDelete decodes a DELETE WAL payload.
-func DecodeDelete(payload []byte) (nodeId uint64, docId string) {
-	nodeId = binary.LittleEndian.Uint64(payload[0:])
-	docIdLen := int(binary.LittleEndian.Uint16(payload[8:]))
-	docId = string(payload[10 : 10+docIdLen])
-	return
+func DecodeDelete(payload []byte) (nodeId uint64) {
+	return binary.LittleEndian.Uint64(payload)
 }
 
 // EncodeSetNeighbors encodes a SET_NEIGHBORS WAL payload.
@@ -401,21 +389,4 @@ func DecodeSetNorm(payload []byte) (nodeId uint64, norm float32) {
 	return
 }
 
-// EncodeSetMapping encodes a SETMAPPING WAL payload: nodeId(8) + docId(var).
-func EncodeSetMapping(nodeId uint64, docId string) []byte {
-	b := make([]byte, 8+len(docId))
-	binary.LittleEndian.PutUint64(b[0:8], nodeId)
-	copy(b[8:], docId)
-	return b
-}
 
-// DecodeSetMapping decodes a SETMAPPING payload.
-func DecodeSetMapping(payload []byte) (uint64, string) {
-	return binary.LittleEndian.Uint64(payload[0:8]), string(payload[8:])
-}
-
-// EncodeDeleteMapping encodes a DELETEMAPPING WAL payload: docId(var).
-func EncodeDeleteMapping(docId string) []byte { return []byte(docId) }
-
-// DecodeDeleteMapping decodes a DELETEMAPPING payload.
-func DecodeDeleteMapping(payload []byte) string { return string(payload) }

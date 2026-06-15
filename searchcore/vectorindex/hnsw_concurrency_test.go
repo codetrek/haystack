@@ -1,7 +1,6 @@
 package vectorindex
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"testing"
@@ -25,9 +24,9 @@ func TestConcurrentInsertAndSearch(t *testing.T) {
 				for d := range vec {
 					vec[d] = rng.Float32()*2 - 1
 				}
-				docId := fmt.Sprintf("doc-%d-%d", gid, i)
+				docId := int64(gid*100 + i)
 				if err := idx.Insert(docId, vec); err != nil {
-					t.Errorf("insert %s: %v", docId, err)
+					t.Errorf("insert %d: %v", docId, err)
 					return
 				}
 			}
@@ -71,8 +70,8 @@ func TestConcurrentSearchOnly(t *testing.T) {
 		for d := range vec {
 			vec[d] = rng.Float32()*2 - 1
 		}
-		if err := idx.Insert(fmt.Sprintf("doc-%d", i), vec); err != nil {
-			t.Fatalf("insert doc-%d: %v", i, err)
+		if err := idx.Insert(int64(i), vec); err != nil {
+			t.Fatalf("insert %d: %v", i, err)
 		}
 	}
 
@@ -124,7 +123,9 @@ func TestConcurrentBatchCommitsAndSearch(t *testing.T) {
 					for d := range vec {
 						vec[d] = rng.Float32()
 					}
-					b.Put(fmt.Sprintf("doc-%d-%d-%d", gid, round, i), vec)
+					// Use a unique docId per goroutine+round+item so no key collisions.
+					docId := int64(gid*1000 + round*100 + i)
+					b.Put(docId, vec)
 				}
 				if err := b.Commit(); err != nil {
 					t.Errorf("commit g=%d round=%d: %v", gid, round, err)
@@ -176,7 +177,7 @@ func TestSearchNeverSeesPartialBatch(t *testing.T) {
 			for d := range v {
 				v[d] = rng.Float32()
 			}
-			b.Put(fmt.Sprintf("doc-%d", i), v)
+			b.Put(int64(i), v)
 		}
 		_ = b.Commit() // one transaction; either all 40 visible or none
 	}()
@@ -218,8 +219,8 @@ func TestConcurrentInsertDeleteSearch(t *testing.T) {
 		for d := range vec {
 			vec[d] = rng.Float32()*2 - 1
 		}
-		if err := idx.Insert(fmt.Sprintf("pre-%d", i), vec); err != nil {
-			t.Fatalf("pre-insert pre-%d: %v", i, err)
+		if err := idx.Insert(int64(i), vec); err != nil {
+			t.Fatalf("pre-insert %d: %v", i, err)
 		}
 	}
 
@@ -236,9 +237,9 @@ func TestConcurrentInsertDeleteSearch(t *testing.T) {
 				for d := range vec {
 					vec[d] = r.Float32()*2 - 1
 				}
-				docId := fmt.Sprintf("ins-%d-%d", gid, i)
+				docId := int64(1000 + gid*100 + i)
 				if err := idx.Insert(docId, vec); err != nil {
-					t.Errorf("insert %s: %v", docId, err)
+					t.Errorf("insert %d: %v", docId, err)
 					return
 				}
 			}
@@ -251,9 +252,9 @@ func TestConcurrentInsertDeleteSearch(t *testing.T) {
 		go func(gid int) {
 			defer wg.Done()
 			for i := gid * 10; i < (gid+1)*10; i++ {
-				docId := fmt.Sprintf("pre-%d", i)
+				docId := int64(i)
 				if err := idx.Delete(docId); err != nil {
-					t.Errorf("delete %s: %v", docId, err)
+					t.Errorf("delete %d: %v", docId, err)
 					return
 				}
 			}

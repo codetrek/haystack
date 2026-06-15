@@ -189,8 +189,9 @@ func TestMmapStoreGetNodeId(t *testing.T) {
 	}
 	defer s.Close()
 
-	s.docToNode["doc1"] = 99
-	id, ok, err := s.GetNodeId("doc1")
+	s.docToNode[int64(99)] = 99
+	s.docToNodeBuilt = true
+	id, ok, err := s.GetNodeId(int64(99))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +199,7 @@ func TestMmapStoreGetNodeId(t *testing.T) {
 		t.Errorf("GetNodeId = (%d, %v), want (99, true)", id, ok)
 	}
 
-	_, ok, err = s.GetNodeId("missing")
+	_, ok, err = s.GetNodeId(int64(12345))
 	if err != nil {
 		t.Fatal(err)
 	}

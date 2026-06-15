@@ -17,13 +17,9 @@ func TestMmapStoreCloseMmaps(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.closeMmaps()
-	// closeMmaps does not touch the WAL or idmap handles; release them so the
-	// test leaks no descriptors.
+	// closeMmaps does not touch the WAL; release it so the test leaks no descriptors.
 	if s.wal != nil {
 		_ = s.wal.Close()
-	}
-	if s.idmapFile != nil {
-		_ = s.idmapFile.Close()
 	}
 }
 
@@ -79,7 +75,7 @@ func TestSetNeighborsUpperInvalidArgs(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1, 0, 0, 0}
-	if err := s.PutNode(0, 0, vec); err != nil { // level-0 node => no upper slot
+	if err := s.PutNode(0, 0, vec, 0); err != nil { // level-0 node => no upper slot
 		t.Fatal(err)
 	}
 

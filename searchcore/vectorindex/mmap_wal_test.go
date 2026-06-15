@@ -14,7 +14,7 @@ func TestWALAppendAndReplay(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{1.0, 2.0, 3.0}
-	lsn1, err := w.Append(WalInsert, EncodeInsert(0, 1, vec, 3.74, "doc-0"))
+	lsn1, err := w.Append(WalInsert, EncodeInsert(0, 1, vec, 3.74, int64(42)))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(1), lsn1)
 
@@ -30,7 +30,7 @@ func TestWALAppendAndReplay(t *testing.T) {
 	requireNoError(t, err)
 	assert.Equal(t, uint64(4), lsn4)
 
-	lsn5, err := w.Append(WalDelete, EncodeDelete(0, "doc-0"))
+	lsn5, err := w.Append(WalDelete, EncodeDelete(0))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(5), lsn5)
 
@@ -53,12 +53,12 @@ func TestWALAppendAndReplay(t *testing.T) {
 
 		switch typ {
 		case WalInsert:
-			nid, lvl, v, norm, doc := DecodeInsert(payload)
+			nid, lvl, v, norm, docId := DecodeInsert(payload)
 			assert.Equal(t, uint64(0), nid)
 			assert.Equal(t, 1, lvl)
 			assert.InDelta(t, float32(3.74), norm, 0.01)
 			assert.Equal(t, vec, v)
-			assert.Equal(t, "doc-0", doc)
+			assert.Equal(t, int64(42), docId)
 		case WalSetNeighbors:
 			nid, layer, nbs := DecodeSetNeighbors(payload)
 			assert.Equal(t, uint64(0), nid)
@@ -73,9 +73,8 @@ func TestWALAppendAndReplay(t *testing.T) {
 			assert.Equal(t, uint64(0), nid)
 			assert.InDelta(t, float32(5.5), norm, 0.01)
 		case WalDelete:
-			nid, doc := DecodeDelete(payload)
+			nid := DecodeDelete(payload)
 			assert.Equal(t, uint64(0), nid)
-			assert.Equal(t, "doc-0", doc)
 		}
 		return nil
 	})
@@ -186,7 +185,7 @@ func TestWALReplayInsertWithUpperLevel(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{3.0, 4.0, 0.0, 0.0}
-	requireNoError(t, s.PutNode(0, 2, vec))
+	requireNoError(t, s.PutNode(0, 2, vec, 0))
 	requireNoError(t, s.SetEntryPoint(0, 2))
 	requireNoError(t, s.Close())
 
@@ -221,7 +220,7 @@ func TestWALReplaySetNeighborsUpperPath(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{1.0, 0, 0, 0}
-	requireNoError(t, s.PutNode(0, 2, vec))
+	requireNoError(t, s.PutNode(0, 2, vec, 0))
 	requireNoError(t, s.SetNeighbors(0, 1, []uint64{1, 2}))
 	requireNoError(t, s.SetNeighbors(0, 0, []uint64{3}))
 	requireNoError(t, s.Close())
@@ -248,8 +247,8 @@ func TestWALReplaySetNormAndDelete(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{1.0, 0, 0, 0}
-	requireNoError(t, s.PutNode(0, 0, vec))
-	requireNoError(t, s.PutNode(1, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 0))
+	requireNoError(t, s.PutNode(1, 0, vec, 1))
 	requireNoError(t, s.SetNorm(0, 42.0))
 	requireNoError(t, s.DeleteNode(1))
 	requireNoError(t, s.Close())
@@ -281,7 +280,7 @@ func TestWALReplayGrowsDuringReplay(t *testing.T) {
 
 	vec := []float32{5.0, 6.0, 7.0, 8.0}
 	// Insert at ID 1500 (beyond default 1024 capacity).
-	requireNoError(t, s.PutNode(1500, 0, vec))
+	requireNoError(t, s.PutNode(1500, 0, vec, 0))
 	requireNoError(t, s.Close())
 
 	s2, err := OpenMmapStore(dir, opts)
@@ -336,7 +335,7 @@ func TestReplayCommittedTxnApplies(t *testing.T) {
 	s := openStoreForReplay(t, dir, 4, 8)
 
 	appendRaw(t, s, WalTxnBegin, nil)
-	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 2, 3, 4}, 0, "doc-0"))
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 2, 3, 4}, 0, int64(1)))
 	appendRaw(t, s, WalTxnCommit, nil)
 	if err := s.wal.Sync(); err != nil {
 		t.Fatal(err)
@@ -363,7 +362,7 @@ func TestReplayUnterminatedTxnDiscarded(t *testing.T) {
 	s := openStoreForReplay(t, dir, 4, 8)
 
 	appendRaw(t, s, WalTxnBegin, nil)
-	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{9, 9, 9, 9}, 0, "doc-0"))
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{9, 9, 9, 9}, 0, int64(1)))
 	// NO WalTxnCommit — simulates a crash mid-commit.
 	if err := s.wal.Sync(); err != nil {
 		t.Fatal(err)
@@ -390,7 +389,7 @@ func TestReplayLegacyUnframedRecordsApply(t *testing.T) {
 	dir := t.TempDir()
 	s := openStoreForReplay(t, dir, 4, 8)
 
-	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{5, 6, 7, 8}, 0, "doc-0"))
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{5, 6, 7, 8}, 0, int64(1)))
 	if err := s.wal.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -415,10 +414,10 @@ func TestReplayTwoConsecutiveCommittedTxns(t *testing.T) {
 	s := openStoreForReplay(t, dir, 4, 8)
 
 	appendRaw(t, s, WalTxnBegin, nil)
-	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 1, 1, 1}, 0, "doc-0"))
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 1, 1, 1}, 0, int64(1)))
 	appendRaw(t, s, WalTxnCommit, nil)
 	appendRaw(t, s, WalTxnBegin, nil)
-	appendRaw(t, s, WalInsert, EncodeInsert(1, 0, []float32{2, 2, 2, 2}, 0, "doc-1"))
+	appendRaw(t, s, WalInsert, EncodeInsert(1, 0, []float32{2, 2, 2, 2}, 0, int64(2)))
 	appendRaw(t, s, WalTxnCommit, nil)
 	if err := s.wal.Sync(); err != nil {
 		t.Fatal(err)
@@ -454,7 +453,7 @@ func TestReplayStrayCommitIgnored(t *testing.T) {
 	s := openStoreForReplay(t, dir, 4, 8)
 
 	appendRaw(t, s, WalTxnCommit, nil) // stray commit, no open txn
-	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{7, 7, 7, 7}, 0, "doc-0"))
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{7, 7, 7, 7}, 0, int64(1)))
 	if err := s.wal.Sync(); err != nil {
 		t.Fatal(err)
 	}
@@ -494,21 +493,22 @@ func TestWALContinueLSNAfterReopen(t *testing.T) {
 	requireNoError(t, w2.Close())
 }
 
-func TestEncodeDecodeMappingRecords(t *testing.T) {
-	nid, doc := uint64(123), "doc-abc"
-	gotID, gotDoc := DecodeSetMapping(EncodeSetMapping(nid, doc))
-	if gotID != nid || gotDoc != doc {
-		t.Fatalf("SetMapping roundtrip: got (%d,%q) want (%d,%q)", gotID, gotDoc, nid, doc)
-	}
-	if got := DecodeDeleteMapping(EncodeDeleteMapping(doc)); got != doc {
-		t.Fatalf("DeleteMapping roundtrip: got %q want %q", got, doc)
-	}
-	// empty docId edge case
-	id2, d2 := DecodeSetMapping(EncodeSetMapping(7, ""))
-	if id2 != 7 || d2 != "" {
-		t.Fatalf("empty-doc roundtrip: got (%d,%q)", id2, d2)
-	}
-	if WalSetMapping != 8 || WalDeleteMapping != 9 {
-		t.Fatalf("marker values: set=%d del=%d want 8,9", WalSetMapping, WalDeleteMapping)
-	}
+// TestEncodeDecodeInsertRoundtrip verifies int64 docId survives encode/decode.
+func TestEncodeDecodeInsertRoundtrip(t *testing.T) {
+	vec := []float32{1.0, 2.0, 3.0, 4.0}
+	payload := EncodeInsert(77, 2, vec, 3.14, int64(-9999))
+	nodeId, level, gotVec, norm, docId := DecodeInsert(payload)
+
+	assert.Equal(t, uint64(77), nodeId)
+	assert.Equal(t, 2, level)
+	assert.Equal(t, vec, gotVec)
+	assert.InDelta(t, float32(3.14), norm, 0.01)
+	assert.Equal(t, int64(-9999), docId)
+}
+
+// TestEncodeDecodeDeleteRoundtrip verifies nodeId-only delete encode/decode.
+func TestEncodeDecodeDeleteRoundtrip(t *testing.T) {
+	payload := EncodeDelete(uint64(12345))
+	nodeId := DecodeDelete(payload)
+	assert.Equal(t, uint64(12345), nodeId)
 }

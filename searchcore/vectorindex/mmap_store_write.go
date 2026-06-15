@@ -3,18 +3,12 @@ package vectorindex
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"math"
-	"os"
-	"path/filepath"
-	"sort"
 )
 
-// PutNode stores a node's vector, level, and norm into the mmap files.
+// PutNode stores a node's vector, level, norm, and docId into the mmap files.
 // WAL is written first, then the mmap regions.
-// The docId for this node must have been set via SetNodeMapping before or after this call;
-// the WAL INSERT record includes docId for crash recovery completeness.
-func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
+func (s *MmapStore) PutNode(id uint64, level int, vector []float32, docId int64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
@@ -25,9 +19,6 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	// Convert to stored form (cosine: unit vector) and keep the original norm
 	// for GetVector restore. norm never participates in distance computation.
 	stored, norm := s.metric.prepare(vector)
-
-	// Look up docId from the in-memory mapping (may be empty if not yet set).
-	docId := s.nodeToDoc[id]
 
 	// WAL — record the stored form so replay writes it back verbatim.
 	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, stored, norm, docId)); err != nil {
@@ -63,7 +54,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 		upperSlotVal = s.allocUpperSlot()
 	}
 
-	// Write node metadata (level, norm, upper slot).
+	// Write node metadata (level, flags, norm, upper slot, docId).
 	nodeOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	s.nodes[nodeOff] = uint8(level)       // Level
 	s.nodes[nodeOff+1] = nodeFlagOccupied // Flags: occupied, not deleted
@@ -71,10 +62,21 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	s.nodes[nodeOff+3] = 0                // padding
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], upperSlotVal)
+	binary.LittleEndian.PutUint64(s.nodes[nodeOff+16:], uint64(docId)) // DocId at offset 16
+
+	// Update forward map if already built.
+	if s.docToNodeBuilt {
+		s.muDoc.Lock()
+		s.docToNode[docId] = id
+		s.muDoc.Unlock()
+	}
 
 	// Update meta.
 	if id >= s.meta.TotalSlots {
 		s.meta.TotalSlots = id + 1
+	}
+	if id+1 > s.meta.NextNodeId {
+		s.meta.NextNodeId = id + 1
 	}
 	s.meta.NodeCount++
 	if uint32(level) > s.meta.MaxLevel {
@@ -204,48 +206,7 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	return s.maybeCheckpoint()
 }
 
-// SetNodeMapping adds a docId ↔ nodeId mapping. The mapping is journaled to the
-// WAL (committed atomically with its transaction); idmap.dat is rewritten only
-// at checkpoint (compactIdmap). Crash recovery rebuilds the maps from the WAL.
-func (s *MmapStore) SetNodeMapping(docId string, nodeId uint64) error {
-	s.muWrite.Lock()
-	defer s.muWrite.Unlock()
-	if s.faulted != nil {
-		return s.faulted
-	}
-	if _, err := s.wal.Append(WalSetMapping, EncodeSetMapping(nodeId, docId)); err != nil {
-		return s.fault(fmt.Errorf("MmapStore.SetNodeMapping: WAL: %w", err))
-	}
-	s.muDoc.Lock()
-	s.docToNode[docId] = nodeId
-	s.nodeToDoc[nodeId] = docId
-	s.muDoc.Unlock()
-	return nil
-}
-
-// DeleteNodeMapping removes a docId mapping. Journaled to the WAL so the removal
-// is transactional and replayable; idmap.dat is reconciled at checkpoint.
-func (s *MmapStore) DeleteNodeMapping(docId string) error {
-	s.muWrite.Lock()
-	defer s.muWrite.Unlock()
-
-	if s.faulted != nil {
-		return s.faulted
-	}
-
-	if _, err := s.wal.Append(WalDeleteMapping, EncodeDeleteMapping(docId)); err != nil {
-		return s.fault(fmt.Errorf("MmapStore.DeleteNodeMapping: WAL: %w", err))
-	}
-	s.muDoc.Lock()
-	if nodeId, ok := s.docToNode[docId]; ok {
-		delete(s.nodeToDoc, nodeId)
-	}
-	delete(s.docToNode, docId)
-	s.muDoc.Unlock()
-	return nil
-}
-
-// DeleteNode marks a node as deleted (tombstone). Full implementation in Phase 3.
+// DeleteNode marks a node as deleted (tombstone).
 func (s *MmapStore) DeleteNode(id uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
@@ -254,10 +215,7 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 		return s.faulted
 	}
 
-	// Look up docId for WAL record.
-	docId := s.nodeToDoc[id]
-
-	if _, err := s.wal.Append(WalDelete, EncodeDelete(id, docId)); err != nil {
+	if _, err := s.wal.Append(WalDelete, EncodeDelete(id)); err != nil {
 		return fmt.Errorf("MmapStore.DeleteNode: WAL: %w", err)
 	}
 
@@ -266,7 +224,17 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 	}
 
 	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
+
+	// Read docId from slot before tombstoning, for map cleanup.
+	docId := int64(binary.LittleEndian.Uint64(s.nodes[offset+16:]))
 	s.nodes[offset+1] |= nodeFlagDeleted
+
+	// Remove from forward map if built.
+	if s.docToNodeBuilt {
+		s.muDoc.Lock()
+		delete(s.docToNode, docId)
+		s.muDoc.Unlock()
+	}
 
 	if s.meta.NodeCount > 0 {
 		s.meta.NodeCount--
@@ -383,7 +351,7 @@ func (s *MmapStore) maybeCheckpoint() error {
 }
 
 // Checkpoint persists the current state: msync all mmap regions, write
-// meta.bin with the current WAL LSN, truncate the WAL, and compact idmap.
+// meta.bin with the current WAL LSN, and truncate the WAL.
 func (s *MmapStore) Checkpoint() error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
@@ -413,83 +381,8 @@ func (s *MmapStore) checkpointLocked() error {
 	if err := s.wal.Reset(); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: WAL reset: %w", err)
 	}
-	// 4. Compact idmap.
-	if err := s.compactIdmap(); err != nil {
-		return fmt.Errorf("MmapStore.Checkpoint: idmap compact: %w", err)
-	}
-	// 5. Reset ops counter.
+	// 4. Reset ops counter.
 	s.opsSinceCheckpoint = 0
-	return nil
-}
-
-// compactIdmap rewrites idmap.dat with only the current in-memory mappings,
-// removing stale entries from deleted nodes.
-func (s *MmapStore) compactIdmap() error {
-	path := filepath.Join(s.dir, "idmap.dat")
-	tmp := path + ".tmp"
-	f, err := fsCreate(tmp)
-	if err != nil {
-		return err
-	}
-
-	s.muDoc.RLock()
-	// Sort by nodeId for deterministic output order.
-	type idEntry struct {
-		docId  string
-		nodeId uint64
-	}
-	entries := make([]idEntry, 0, len(s.docToNode))
-	for docId, nodeId := range s.docToNode {
-		entries = append(entries, idEntry{docId, nodeId})
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].nodeId < entries[j].nodeId })
-	for _, e := range entries {
-		docId := e.docId
-		nodeId := e.nodeId
-		docBytes := []byte(docId)
-		entry := make([]byte, 10+len(docBytes)+4)
-		binary.LittleEndian.PutUint64(entry[0:], nodeId)
-		binary.LittleEndian.PutUint16(entry[8:], uint16(len(docBytes)))
-		copy(entry[10:], docBytes)
-		h := crc32.NewIEEE()
-		h.Write(entry[:10+len(docBytes)])
-		binary.LittleEndian.PutUint32(entry[10+len(docBytes):], h.Sum32())
-		if _, err := f.Write(entry); err != nil {
-			s.muDoc.RUnlock()
-			f.Close()
-			fsRemove(tmp)
-			return err
-		}
-	}
-	s.muDoc.RUnlock()
-
-	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmp)
-		return err
-	}
-	f.Close()
-
-	// Close old handle before rename so Windows doesn't block the overwrite.
-	s.muDoc.Lock()
-	if err := s.idmapFile.Close(); err != nil {
-		s.muDoc.Unlock()
-		return fmt.Errorf("MmapStore.compactIdmap: close old idmap: %w", err)
-	}
-
-	if err := fsRename(tmp, path); err != nil {
-		s.muDoc.Unlock()
-		return err
-	}
-
-	// Reopen idmap handle (lifecycle/Close tracking only; writes go through compactIdmap).
-	nf, err := fsOpenFile(path, os.O_RDWR, 0644)
-	if err != nil {
-		s.muDoc.Unlock()
-		return err
-	}
-	s.idmapFile = nf
-	s.muDoc.Unlock()
 	return nil
 }
 

@@ -18,16 +18,16 @@ type NodeStore interface {
 	// GetVectorRef returns the stored vector form without copying. The caller
 	// MUST NOT modify the returned slice. Use GetVector for the original vector.
 	GetVectorRef(id uint64) ([]float32, error)
-	PutNode(id uint64, level int, vector []float32) error
+	PutNode(id uint64, level int, vector []float32, docId int64) error
 	DeleteNode(id uint64) error
 	GetNeighbors(id uint64, layer int) ([]uint64, error)
 	SetNeighbors(id uint64, layer int, neighbors []uint64) error
 	GetEntryPoint() (uint64, int, error)
 	SetEntryPoint(id uint64, maxLayer int) error
 	GetNodeLevel(id uint64) (int, error)
-	GetNodeId(docId string) (uint64, bool, error)
-	SetNodeMapping(docId string, nodeId uint64) error
-	DeleteNodeMapping(docId string) error
+	GetNodeId(docId int64) (uint64, bool, error)
+	GetDocId(id uint64) (int64, bool, error)
+	// (SetNodeMapping / DeleteNodeMapping are removed.)
 	NextNodeId() (uint64, error)
 	// GetNorm returns the precomputed L2 norm for a node's vector.
 	GetNorm(id uint64) (float32, error)

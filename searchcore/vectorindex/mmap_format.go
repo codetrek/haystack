@@ -28,7 +28,6 @@ var (
 	magicNodes      = [4]byte{'N', 'O', 'D', 'E'}
 	magicGraphL0    = [4]byte{'G', 'R', 'L', '0'}
 	magicGraphUpper = [4]byte{'G', 'R', 'U', 'P'}
-	magicIDMap      = [4]byte{'I', 'D', 'M', 'P'}
 )
 
 // pageSize is the header size for mmap data files (page-aligned).
@@ -88,16 +87,20 @@ type GraphUpperHeader struct {
 }
 
 // nodeSlotSize is the on-disk size of a single node metadata slot.
-const nodeSlotSize = 16
+const nodeSlotSize = 24
 
-// NodeSlot is the on-disk layout of a node in nodes.dat (16 bytes).
+// NodeSlot is the on-disk layout of a node in nodes.dat (24 bytes).
+//
+//	Level u8 (0) | Flags u8 (1) | pad[2] (2) | Norm f32 (4) | UpperSlot u32 (8)
+//	| pad[4] (12) | DocId int64 (16)
 type NodeSlot struct {
 	Level     uint8
 	Flags     uint8
 	_         [2]byte
 	Norm      float32
 	UpperSlot uint32
-	_         [4]byte // reserved
+	_         [4]byte
+	DocId     int64
 }
 
 const (
@@ -128,7 +131,7 @@ const defaultMaxLayers = 6
 func writeMetaHeader(dir string, h *MetaHeader) error {
 	h.Magic = magicMeta
 	if h.Version == 0 {
-		h.Version = 1
+		h.Version = 2
 	}
 
 	tmp := filepath.Join(dir, "meta.bin.tmp")

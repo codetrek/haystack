@@ -141,7 +141,7 @@ func TestFaultedStoreRejectsWrites(t *testing.T) {
 	s.fault(fmt.Errorf("disk on fire"))
 	s.muWrite.Unlock()
 
-	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}); err == nil {
+	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}, 101); err == nil {
 		t.Fatal("PutNode on a faulted store must return an error")
 	}
 	if err := s.SetNeighbors(0, 0, []uint64{1}); err == nil {
@@ -159,10 +159,7 @@ func TestTxnCommitDurableAfterCrash(t *testing.T) {
 	if err := s.txnBegin(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SetNodeMapping("doc-0", 0); err != nil {
+	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}, 101); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.txnCommit(); err != nil {
@@ -197,7 +194,7 @@ func TestTxnAbortFaultsAndDiscardsOnReopen(t *testing.T) {
 	if err := s.txnBegin(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}); err != nil {
+	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}, 101); err != nil {
 		t.Fatal(err)
 	}
 	// Abort: records a fault, writes NO commit marker.
@@ -205,7 +202,7 @@ func TestTxnAbortFaultsAndDiscardsOnReopen(t *testing.T) {
 		t.Fatal("txnAbort must return the fault error")
 	}
 	// Subsequent writes are rejected.
-	if err := s.PutNode(1, 0, []float32{1, 1, 1, 1}); err == nil {
+	if err := s.PutNode(1, 0, []float32{1, 1, 1, 1}, 102); err == nil {
 		t.Fatal("writes after abort must be rejected")
 	}
 	simulateCrash(s)
@@ -232,7 +229,7 @@ func TestTxnAbortDiscardedAfterGracefulClose(t *testing.T) {
 	if err := s.txnBegin(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}); err != nil {
+	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}, 101); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.txnAbort(fmt.Errorf("boom"))
@@ -268,5 +265,160 @@ func TestTxnBeginRejectsNested(t *testing.T) {
 	}
 	if err := s.txnCommit(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 new tests
+// ---------------------------------------------------------------------------
+
+// TestOpenRejectsOldVersion verifies that opening a Version 1 store errors
+// with a message mentioning migration.
+func TestOpenRejectsOldVersion(t *testing.T) {
+	dir := t.TempDir()
+	// Create a valid v2 store, then overwrite the version field to 1.
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Overwrite version in-memory, then write meta to disk via writeMetaHeader.
+	s.meta.Version = 1
+	if err := writeMetaHeader(s.dir, &s.meta); err != nil {
+		t.Fatalf("writeMetaHeader: %v", err)
+	}
+	s.simulateCrashNoClose()
+
+	_, err = OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err == nil {
+		t.Fatal("expected error opening Version 1 store")
+	}
+	t.Logf("got expected error: %v", err)
+}
+
+// TestDocIdSurvivesAndAbortLeavesNone inserts a node with a known docId,
+// crashes, reopens, and verifies the docId is intact. It then opens a fresh
+// store, starts a txn, inserts but aborts, and verifies the docId is gone.
+func TestDocIdSurvivesAndAbortLeavesNone(t *testing.T) {
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000}
+
+	const docId int64 = 0xDEADBEEF
+
+	// --- committed insert survives crash ---
+	s, err := OpenMmapStore(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}, docId); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.txnCommit(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	got, found, err := s2.GetDocId(0)
+	if err != nil {
+		t.Fatalf("GetDocId after crash: %v", err)
+	}
+	if !found {
+		t.Fatal("node 0 should be occupied after committed insert")
+	}
+	if got != docId {
+		t.Fatalf("docId = %d, want %d", got, docId)
+	}
+
+	// Verify reverse: GetNodeId returns the correct nodeId.
+	nodeId, ok, err := s2.GetNodeId(docId)
+	if err != nil {
+		t.Fatalf("GetNodeId after crash: %v", err)
+	}
+	if !ok || nodeId != 0 {
+		t.Fatalf("GetNodeId(%d) = (%d, %v), want (0, true)", docId, nodeId, ok)
+	}
+
+	// --- aborted insert leaves no docId ---
+	dir2 := t.TempDir()
+	s3, err := OpenMmapStore(dir2, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s3.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s3.PutNode(0, 0, []float32{1, 2, 3, 4}, docId); err != nil {
+		t.Fatal(err)
+	}
+	// Abort — no WAL commit marker, mmap changes should be discarded on replay.
+	_ = s3.txnAbort(fmt.Errorf("test abort"))
+	simulateCrash(s3)
+
+	s4, err := OpenMmapStore(dir2, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s4.Close()
+
+	if s4.meta.NodeCount != 0 {
+		t.Fatalf("NodeCount = %d after aborted txn, want 0", s4.meta.NodeCount)
+	}
+}
+
+// TestDocToNodeLazyBuiltOnWrite verifies that docToNode is nil before the
+// first write-path call to GetNodeId, and is built lazily on demand.
+func TestDocToNodeLazyBuiltOnWrite(t *testing.T) {
+	dir := t.TempDir()
+	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
+
+	// Insert a node, close, reopen — on reopen docToNodeBuilt is false.
+	s, err := OpenMmapStore(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}, 42); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2, err := OpenMmapStore(dir, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+
+	// docToNodeBuilt should be false immediately after open (lazy).
+	s2.muWrite.Lock()
+	built := s2.docToNodeBuilt
+	s2.muWrite.Unlock()
+	if built {
+		t.Fatal("docToNodeBuilt should be false immediately after open")
+	}
+
+	// GetNodeId triggers the lazy build.
+	nodeId, ok, err := s2.GetNodeId(42)
+	if err != nil {
+		t.Fatalf("GetNodeId: %v", err)
+	}
+	if !ok || nodeId != 0 {
+		t.Fatalf("GetNodeId(42) = (%d, %v), want (0, true)", nodeId, ok)
+	}
+
+	// Now docToNodeBuilt should be true.
+	s2.muWrite.Lock()
+	built = s2.docToNodeBuilt
+	s2.muWrite.Unlock()
+	if !built {
+		t.Fatal("docToNodeBuilt should be true after GetNodeId")
 	}
 }

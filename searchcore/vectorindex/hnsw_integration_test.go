@@ -1,7 +1,6 @@
 package vectorindex
 
 import (
-	"fmt"
 	"math/rand"
 	"testing"
 
@@ -28,7 +27,7 @@ func TestIntegrationResultConsistency(t *testing.T) {
 	memIdx := NewHNSWIndex(memStore, WithRand(rand.New(rand.NewSource(hnswSeed))))
 
 	for i, v := range vecs {
-		requireNoError(t, memIdx.Insert(fmt.Sprintf("doc-%d", i), v))
+		requireNoError(t, memIdx.Insert(int64(i), v))
 	}
 
 	for i, q := range queries {
@@ -45,35 +44,35 @@ func TestIntegrationCRUD(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	// Insert 3 known vectors.
-	requireNoError(t, idx.Insert("alpha", []float32{1, 0, 0}))
-	requireNoError(t, idx.Insert("beta", []float32{0, 1, 0}))
-	requireNoError(t, idx.Insert("gamma", []float32{0, 0, 1}))
+	// Insert 3 known vectors with int64 docIds.
+	requireNoError(t, idx.Insert(10, []float32{1, 0, 0})) // alpha
+	requireNoError(t, idx.Insert(20, []float32{0, 1, 0})) // beta
+	requireNoError(t, idx.Insert(30, []float32{0, 0, 1})) // gamma
 
-	// Search — alpha should be nearest to [1,0,0].
+	// Search — docId=10 (alpha) should be nearest to [1,0,0].
 	results, err := idx.Search([]float32{1, 0, 0}, 3)
 	requireNoError(t, err)
 	requireLen(t, results, 3)
-	assert.Equal(t, uint64(1), results[0].ID) // alpha = node 1
+	assert.Equal(t, int64(10), results[0].DocID) // alpha has docId=10
 	assert.InDelta(t, 0.0, results[0].Distance, 1e-6)
 
 	// Delete alpha.
-	requireNoError(t, idx.Delete("alpha"))
+	requireNoError(t, idx.Delete(10))
 
 	// Re-search — alpha must be gone.
 	results, err = idx.Search([]float32{1, 0, 0}, 3)
 	requireNoError(t, err)
 	requireLen(t, results, 2)
 	for _, r := range results {
-		assert.NotEqual(t, uint64(1), r.ID, "deleted node alpha should not appear")
+		assert.NotEqual(t, int64(10), r.DocID, "deleted node alpha should not appear")
 	}
 
 	// Verify remaining nodes are correct.
-	_, found, err := store.GetNodeId("alpha")
+	_, found, err := store.GetNodeId(10)
 	requireNoError(t, err)
 	assert.False(t, found, "alpha mapping should be deleted")
 
-	_, found, err = store.GetNodeId("beta")
+	_, found, err = store.GetNodeId(20)
 	requireNoError(t, err)
 	assert.True(t, found, "beta mapping should exist")
 }

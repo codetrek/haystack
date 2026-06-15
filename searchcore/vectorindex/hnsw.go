@@ -106,7 +106,7 @@ func (h *HNSWIndex) runInTxnLocked(apply func() error) error {
 
 // Insert adds (or replaces) a document's vector. Equivalent to a single-op
 // batch: it wraps one insert in a store transaction.
-func (h *HNSWIndex) Insert(docId string, vector []float32) error {
+func (h *HNSWIndex) Insert(docId int64, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.runInTxnLocked(func() error { return h.insertOneLocked(docId, vector) })
@@ -115,15 +115,15 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 // insertOneLocked performs upsert-delete (if docId exists) followed by a fresh
 // HNSW insert (Algorithm 1). Caller must hold h.mu AND have an open store
 // transaction; it performs no batch/transaction management itself.
-func (h *HNSWIndex) insertOneLocked(docId string, vector []float32) error {
+func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 	// Upsert: if docId already exists, delete the old node first to avoid
 	// orphan nodes and inconsistent mappings (HAY-005). This now runs inside
 	// the same transaction as the insert, so an upsert is atomic.
 	if existingId, found, err := h.store.GetNodeId(docId); err != nil {
-		return fmt.Errorf("failed to check existing docId %q: %v", docId, err)
+		return fmt.Errorf("failed to check existing docId %d: %v", docId, err)
 	} else if found {
-		if err := h.deleteNodeLocked(existingId, docId); err != nil {
-			return fmt.Errorf("failed to delete existing node for docId %q: %v", docId, err)
+		if err := h.deleteNodeLocked(existingId); err != nil {
+			return fmt.Errorf("failed to delete existing node for docId %d: %v", docId, err)
 		}
 	}
 
@@ -135,11 +135,8 @@ func (h *HNSWIndex) insertOneLocked(docId string, vector []float32) error {
 
 	l := h.randomLevel()
 
-	// Persist node and mapping.
-	if err := h.store.PutNode(nodeId, l, vector); err != nil {
-		return err
-	}
-	if err := h.store.SetNodeMapping(docId, nodeId); err != nil {
+	// Persist node (docId stored in slot).
+	if err := h.store.PutNode(nodeId, l, vector, docId); err != nil {
 		return err
 	}
 	// Initialize empty neighbor lists for all layers.
@@ -281,7 +278,7 @@ func (h *HNSWIndex) insertOneLocked(docId string, vector []float32) error {
 
 // deleteOneLocked removes a docId from the graph if present. Caller must hold
 // h.mu AND have an open store transaction.
-func (h *HNSWIndex) deleteOneLocked(docId string) error {
+func (h *HNSWIndex) deleteOneLocked(docId int64) error {
 	nodeId, found, err := h.store.GetNodeId(docId)
 	if err != nil {
 		return err
@@ -289,7 +286,7 @@ func (h *HNSWIndex) deleteOneLocked(docId string) error {
 	if !found {
 		return nil
 	}
-	return h.deleteNodeLocked(nodeId, docId)
+	return h.deleteNodeLocked(nodeId)
 }
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
@@ -354,25 +351,29 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 		results = results[:k]
 	}
 
-	out := make([]SearchResult, len(results))
-	for i, r := range results {
-		out[i] = SearchResult{
-			ID:       r.id,
-			Distance: r.dist,
+	out := make([]SearchResult, 0, len(results))
+	for _, r := range results {
+		docId, ok, err := h.store.GetDocId(r.id)
+		if err != nil || !ok {
+			continue // node may have been deleted concurrently
 		}
+		out = append(out, SearchResult{
+			DocID:    docId,
+			Distance: r.dist,
+		})
 	}
 	return out, nil
 }
 
 // Delete removes a document from the index inside a store transaction.
-func (h *HNSWIndex) Delete(docId string) error {
+func (h *HNSWIndex) Delete(docId int64) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.runInTxnLocked(func() error { return h.deleteOneLocked(docId) })
 }
 
 // deleteNodeLocked removes a node from the HNSW graph. Caller must hold h.mu.
-func (h *HNSWIndex) deleteNodeLocked(nodeId uint64, docId string) error {
+func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 	level, err := h.store.GetNodeLevel(nodeId)
 	if err != nil {
 		return err
@@ -477,11 +478,8 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64, docId string) error {
 		// so Search correctly returns empty results.
 	}
 
-	// Remove the node data.
-	if err := h.store.DeleteNode(nodeId); err != nil {
-		return err
-	}
-	return h.store.DeleteNodeMapping(docId)
+	// Remove the node data (also clears docId from slot and forward map).
+	return h.store.DeleteNode(nodeId)
 }
 
 // --- searchLayer: Algorithm 5 ---

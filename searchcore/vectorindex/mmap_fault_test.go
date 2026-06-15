@@ -230,7 +230,7 @@ func TestOpenWALScanError(t *testing.T) {
 func TestStoreSyncWALErrors(t *testing.T) {
 	s := openTestStore(t)
 	requireNoError(t, s.txnBegin())
-	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}, 0))
 	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
 	if err := s.txnCommit(); err == nil {
 		t.Fatal("expected WAL sync error from txnCommit")

@@ -159,7 +159,7 @@ func TestMemStoreBasicOperations(t *testing.T) {
 
 	// PutNode + GetVector
 	vec := []float32{1.0, 2.0, 3.0}
-	requireNoError(t, store.PutNode(id1, 2, vec))
+	requireNoError(t, store.PutNode(id1, 2, vec, 42))
 
 	got, err := store.GetVector(id1)
 	requireNoError(t, err)
@@ -181,7 +181,7 @@ func TestMemStoreBasicOperations(t *testing.T) {
 func TestMemStoreNeighbors(t *testing.T) {
 	store := NewMemNodeStore()
 
-	requireNoError(t, store.PutNode(1, 2, []float32{0.1}))
+	requireNoError(t, store.PutNode(1, 2, []float32{0.1}, 10))
 	requireNoError(t, store.SetNeighbors(1, 0, []uint64{2, 3, 4}))
 	requireNoError(t, store.SetNeighbors(1, 1, []uint64{3}))
 
@@ -216,36 +216,42 @@ func TestMemStoreEntryPoint(t *testing.T) {
 func TestMemStoreMapping(t *testing.T) {
 	store := NewMemNodeStore()
 
-	requireNoError(t, store.SetNodeMapping("doc-1", 1))
+	requireNoError(t, store.PutNode(1, 0, []float32{1.0}, 101))
 
-	nodeId, found, err := store.GetNodeId("doc-1")
+	nodeId, found, err := store.GetNodeId(101)
 	requireNoError(t, err)
 	assert.True(t, found)
 	assert.Equal(t, uint64(1), nodeId)
 
-	_, found, err = store.GetNodeId("nonexistent")
+	_, found, err = store.GetNodeId(999)
 	requireNoError(t, err)
 	assert.False(t, found)
 
-	requireNoError(t, store.DeleteNodeMapping("doc-1"))
-	_, found, err = store.GetNodeId("doc-1")
+	// GetDocId round-trip.
+	docId, found2, err := store.GetDocId(1)
 	requireNoError(t, err)
-	assert.False(t, found)
+	assert.True(t, found2)
+	assert.Equal(t, int64(101), docId)
+
+	// After delete, GetNodeId should return false.
+	requireNoError(t, store.DeleteNode(1))
+	_, found3, err := store.GetNodeId(101)
+	requireNoError(t, err)
+	assert.False(t, found3)
 }
 
 func TestMemStoreDeleteNode(t *testing.T) {
 	store := NewMemNodeStore()
 
-	requireNoError(t, store.PutNode(1, 1, []float32{1.0}))
+	requireNoError(t, store.PutNode(1, 1, []float32{1.0}, 101))
 	requireNoError(t, store.SetNeighbors(1, 0, []uint64{2}))
-	requireNoError(t, store.SetNodeMapping("doc-1", 1))
 
 	requireNoError(t, store.DeleteNode(1))
 
 	_, err := store.GetVector(1)
 	assert.Error(t, err)
 
-	_, found, _ := store.GetNodeId("doc-1")
+	_, found, _ := store.GetNodeId(101)
 	assert.False(t, found)
 
 	// Delete non-existent is a no-op
@@ -299,12 +305,12 @@ func TestHNSWSingleVector(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	requireNoError(t, idx.Insert("doc-1", []float32{1, 0, 0}))
+	requireNoError(t, idx.Insert(1, []float32{1, 0, 0}))
 
 	results, err := idx.Search([]float32{1, 0, 0}, 1)
 	requireNoError(t, err)
 	requireLen(t, results, 1)
-	assert.Equal(t, uint64(1), results[0].ID)
+	assert.Equal(t, int64(1), results[0].DocID)
 	assert.InDelta(t, 0.0, results[0].Distance, 1e-6)
 }
 
@@ -322,8 +328,9 @@ func TestHNSWRecallSmall(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
+	// Insert with docId = int64(i).
 	for i, v := range vecs {
-		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
+		requireNoError(t, idx.Insert(int64(i), v))
 	}
 
 	totalRecall := 0.0
@@ -333,14 +340,14 @@ func TestHNSWRecallSmall(t *testing.T) {
 		requireLen(t, results, k)
 
 		bfResults := bruteForceKNN(q, vecs, k, CosineDistance)
-		bfSet := make(map[uint64]bool)
+		bfSet := make(map[int64]bool)
 		for _, bfIdx := range bfResults {
-			bfSet[uint64(bfIdx+1)] = true // node IDs are 1-indexed
+			bfSet[int64(bfIdx)] = true // docId = i
 		}
 
 		hits := 0
 		for _, r := range results {
-			if bfSet[r.ID] {
+			if bfSet[r.DocID] {
 				hits++
 			}
 		}
@@ -400,7 +407,7 @@ func TestHNSWRecallLarger(t *testing.T) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(99))))
 
 	for i, v := range vecs {
-		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
+		requireNoError(t, idx.Insert(int64(i), v))
 	}
 
 	totalRecall := 0.0
@@ -410,14 +417,14 @@ func TestHNSWRecallLarger(t *testing.T) {
 		requireLen(t, results, k)
 
 		bfResults := bruteForceKNN(q, vecs, k, CosineDistance)
-		bfSet := make(map[uint64]bool)
+		bfSet := make(map[int64]bool)
 		for _, bfIdx := range bfResults {
-			bfSet[uint64(bfIdx+1)] = true
+			bfSet[int64(bfIdx)] = true
 		}
 
 		hits := 0
 		for _, r := range results {
-			if bfSet[r.ID] {
+			if bfSet[r.DocID] {
 				hits++
 			}
 		}
@@ -439,7 +446,7 @@ func TestHNSWNeighborLimits(t *testing.T) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(88))))
 
 	for i, v := range vecs {
-		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
+		requireNoError(t, idx.Insert(int64(i), v))
 	}
 
 	for nodeId := uint64(1); nodeId <= uint64(n); nodeId++ {
@@ -474,7 +481,7 @@ func TestHNSWEntryPointUpdate(t *testing.T) {
 		for j := range v {
 			v[j] = float32(i*8 + j)
 		}
-		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
+		requireNoError(t, idx.Insert(int64(i), v))
 
 		epId, epLevel, err := store.GetEntryPoint()
 		requireNoError(t, err)
@@ -512,14 +519,14 @@ func TestHNSWDelete(t *testing.T) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(100))))
 
 	for i, v := range vecs {
-		requireNoError(t, idx.Insert(fmt.Sprintf("doc-%d", i), v))
+		requireNoError(t, idx.Insert(int64(i), v))
 	}
 
-	// Delete the first nDelete vectors.
-	deletedIds := make(map[uint64]bool)
+	// Delete the first nDelete docIds (0..nDelete-1).
+	deletedDocIds := make(map[int64]bool)
 	for i := 0; i < nDelete; i++ {
-		requireNoError(t, idx.Delete(fmt.Sprintf("doc-%d", i)))
-		deletedIds[uint64(i+1)] = true
+		requireNoError(t, idx.Delete(int64(i)))
+		deletedDocIds[int64(i)] = true
 	}
 
 	// Search should not return deleted vectors.
@@ -528,8 +535,8 @@ func TestHNSWDelete(t *testing.T) {
 		results, err := idx.Search(q, 10)
 		requireNoError(t, err)
 		for _, r := range results {
-			assert.False(t, deletedIds[r.ID],
-				"search returned deleted node %d", r.ID)
+			assert.False(t, deletedDocIds[r.DocID],
+				"search returned deleted docId %d", r.DocID)
 		}
 	}
 
@@ -538,7 +545,7 @@ func TestHNSWDelete(t *testing.T) {
 		results, err := idx.Search(vecs[i], 1)
 		requireNoError(t, err)
 		requireNotEmpty(t, results, fmt.Sprintf("vector %d not found after deletions", i))
-		assert.Equal(t, uint64(i+1), results[0].ID)
+		assert.Equal(t, int64(i), results[0].DocID)
 	}
 }
 
@@ -546,17 +553,17 @@ func TestHNSWWithEuclideanDistance(t *testing.T) {
 	store := NewMemNodeStore(Euclidean)
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	requireNoError(t, idx.Insert("a", []float32{0, 0}))
-	requireNoError(t, idx.Insert("b", []float32{1, 0}))
-	requireNoError(t, idx.Insert("c", []float32{10, 10}))
+	requireNoError(t, idx.Insert(10, []float32{0, 0}))
+	requireNoError(t, idx.Insert(20, []float32{1, 0}))
+	requireNoError(t, idx.Insert(30, []float32{10, 10}))
 
 	results, err := idx.Search([]float32{0, 0}, 2)
 	requireNoError(t, err)
 	requireLen(t, results, 2)
 
-	// Closest should be "a" (id=1), then "b" (id=2).
-	assert.Equal(t, uint64(1), results[0].ID)
-	assert.Equal(t, uint64(2), results[1].ID)
+	// Closest should be docId=10, then docId=20.
+	assert.Equal(t, int64(10), results[0].DocID)
+	assert.Equal(t, int64(20), results[1].DocID)
 }
 
 func TestHNSWWithDotProductDistance(t *testing.T) {
@@ -565,39 +572,37 @@ func TestHNSWWithDotProductDistance(t *testing.T) {
 
 	// Normalized vectors.
 	sqrt2 := float32(1.0 / math.Sqrt(2))
-	requireNoError(t, idx.Insert("a", []float32{1, 0}))
-	requireNoError(t, idx.Insert("b", []float32{sqrt2, sqrt2}))
-	requireNoError(t, idx.Insert("c", []float32{-1, 0}))
+	requireNoError(t, idx.Insert(1, []float32{1, 0}))
+	requireNoError(t, idx.Insert(2, []float32{sqrt2, sqrt2}))
+	requireNoError(t, idx.Insert(3, []float32{-1, 0}))
 
 	results, err := idx.Search([]float32{1, 0}, 3)
 	requireNoError(t, err)
 	requireLen(t, results, 3)
 
-	// "a" is identical (dist=0), "b" is close, "c" is opposite (dist=2).
-	assert.Equal(t, uint64(1), results[0].ID)
+	// docId=1 is identical (dist=0), docId=2 is close, docId=3 is opposite (dist=2).
+	assert.Equal(t, int64(1), results[0].DocID)
 	assert.InDelta(t, 0.0, results[0].Distance, 1e-6)
-	assert.Equal(t, uint64(2), results[1].ID)
+	assert.Equal(t, int64(2), results[1].DocID)
 }
 
 func TestHNSWDeleteEntryPoint(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	requireNoError(t, idx.Insert("doc-0", []float32{1, 0}))
-	requireNoError(t, idx.Insert("doc-1", []float32{0, 1}))
-	requireNoError(t, idx.Insert("doc-2", []float32{1, 1}))
+	requireNoError(t, idx.Insert(10, []float32{1, 0}))
+	requireNoError(t, idx.Insert(20, []float32{0, 1}))
+	requireNoError(t, idx.Insert(30, []float32{1, 1}))
 
-	// Find and delete entry point.
+	// Find and delete the entry point.
 	epId, _, err := store.GetEntryPoint()
 	requireNoError(t, err)
 
-	for i := 0; i < 3; i++ {
-		nid, found, nerr := store.GetNodeId(fmt.Sprintf("doc-%d", i))
-		requireNoError(t, nerr)
-		if found && nid == epId {
-			requireNoError(t, idx.Delete(fmt.Sprintf("doc-%d", i)))
-			break
-		}
+	// Retrieve the docId for the entry point node, then delete it.
+	docId, found, err := store.GetDocId(epId)
+	requireNoError(t, err)
+	if found {
+		requireNoError(t, idx.Delete(docId))
 	}
 
 	// Index should still be searchable.
@@ -610,11 +615,11 @@ func TestHNSWDeleteAllVectors(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	requireNoError(t, idx.Insert("doc-0", []float32{1, 0}))
-	requireNoError(t, idx.Insert("doc-1", []float32{0, 1}))
+	requireNoError(t, idx.Insert(10, []float32{1, 0}))
+	requireNoError(t, idx.Insert(20, []float32{0, 1}))
 
-	requireNoError(t, idx.Delete("doc-0"))
-	requireNoError(t, idx.Delete("doc-1"))
+	requireNoError(t, idx.Delete(10))
+	requireNoError(t, idx.Delete(20))
 
 	// Search on empty index after deletions.
 	results, err := idx.Search([]float32{1, 0}, 1)
@@ -626,9 +631,9 @@ func TestHNSWSearchKGreaterThanN(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	requireNoError(t, idx.Insert("doc-0", []float32{1, 0, 0}))
-	requireNoError(t, idx.Insert("doc-1", []float32{0, 1, 0}))
-	requireNoError(t, idx.Insert("doc-2", []float32{0, 0, 1}))
+	requireNoError(t, idx.Insert(1, []float32{1, 0, 0}))
+	requireNoError(t, idx.Insert(2, []float32{0, 1, 0}))
+	requireNoError(t, idx.Insert(3, []float32{0, 0, 1}))
 
 	results, err := idx.Search([]float32{1, 0, 0}, 10)
 	requireNoError(t, err)
@@ -640,11 +645,11 @@ func TestHNSWInsertUpsert(t *testing.T) {
 	idx := NewHNSWIndex(store)
 
 	// Insert a vector
-	err := idx.Insert("doc1", []float32{1, 0, 0})
+	err := idx.Insert(1001, []float32{1, 0, 0})
 	assert.NoError(t, err)
 
 	// Insert same docId with different vector (upsert)
-	err = idx.Insert("doc1", []float32{0, 1, 0})
+	err = idx.Insert(1001, []float32{0, 1, 0})
 	assert.NoError(t, err)
 
 	// Search for the updated vector — should find it with near-zero distance
@@ -663,19 +668,19 @@ func TestHNSWInsertUpsertMultiple(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	// Insert 5 vectors
+	// Insert 5 vectors with different docIds.
 	for i := 0; i < 5; i++ {
 		v := make([]float32, 3)
 		v[i%3] = 1.0
-		err := idx.Insert(fmt.Sprintf("doc%d", i), v)
+		err := idx.Insert(int64(i+100), v)
 		assert.NoError(t, err)
 	}
 
-	// Update doc0 three times
+	// Update docId=100 three times.
 	for j := 0; j < 3; j++ {
 		v := make([]float32, 3)
 		v[j] = float32(j + 1)
-		err := idx.Insert("doc0", v)
+		err := idx.Insert(100, v)
 		assert.NoError(t, err)
 	}
 

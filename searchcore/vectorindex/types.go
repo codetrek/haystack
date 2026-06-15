@@ -12,7 +12,6 @@ type Vector = []float32
 
 // SearchResult holds the result of a nearest-neighbor search.
 type SearchResult struct {
-	ID       uint64
-	DocID    string
+	DocID    int64
 	Distance float32
 }

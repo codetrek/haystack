@@ -70,29 +70,13 @@ func TestCheckpointWALResetError(t *testing.T) {
 	}
 }
 
-func TestCheckpointCompactError(t *testing.T) {
-	s := openTestStore(t)
-	defer s.Close()
-	orig := fsCreate
-	defer func() { fsCreate = orig }()
-	fsCreate = func(name string) (osFile, error) {
-		if contains(name, "idmap.dat.tmp") {
-			return nil, errInjected
-		}
-		return orig(name)
-	}
-	if err := s.Checkpoint(); err == nil {
-		t.Fatal("expected idmap compact error from Checkpoint")
-	}
-}
-
 // --- txnCommit fault: msync error surfaces as faulted store ---
 
 func TestStoreSyncCheckpointError(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
 	requireNoError(t, s.txnBegin())
-	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}, 0))
 	orig := mmapSync
 	defer func() { mmapSync = orig }()
 	mmapSync = func([]byte) error { return errInjected }
@@ -150,7 +134,7 @@ func TestBatchCommitIOFaultReopensClean(t *testing.T) {
 
 	// Build an index with one doc so NodeCount == 1 before the faulted batch.
 	idx := NewHNSWIndex(s)
-	if err := idx.Insert("pre-existing", []float32{1, 0, 0, 0}); err != nil {
+	if err := idx.Insert(int64(1), []float32{1, 0, 0, 0}); err != nil {
 		t.Fatal(err)
 	}
 	preCount := s.meta.NodeCount // should be 1
@@ -161,7 +145,7 @@ func TestBatchCommitIOFaultReopensClean(t *testing.T) {
 
 	// A batch with a new doc: Commit must return an error.
 	b := idx.NewBatch()
-	b.Put("new-doc", []float32{0, 1, 0, 0})
+	b.Put(int64(2), []float32{0, 1, 0, 0})
 	commitErr := b.Commit()
 	if commitErr == nil {
 		t.Fatal("expected Batch.Commit to return an error after WAL write fault")
@@ -171,7 +155,7 @@ func TestBatchCommitIOFaultReopensClean(t *testing.T) {
 		t.Fatal("store must be faulted after failed Batch.Commit")
 	}
 	// A subsequent write must be rejected.
-	if err := idx.Insert("another", []float32{0, 0, 1, 0}); err == nil {
+	if err := idx.Insert(int64(3), []float32{0, 0, 1, 0}); err == nil {
 		t.Fatal("expected faulted store to reject further writes")
 	}
 

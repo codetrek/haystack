@@ -79,9 +79,9 @@ func TestBatchCommitMemStore(t *testing.T) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 	b := idx.NewBatch()
-	b.Put("doc-0", []float32{1, 0, 0})
-	b.Put("doc-1", []float32{0, 1, 0})
-	b.Put("doc-2", []float32{0, 0, 1})
+	b.Put(0, []float32{1, 0, 0})
+	b.Put(1, []float32{0, 1, 0})
+	b.Put(2, []float32{0, 0, 1})
 	err := b.Commit()
 	requireNoError(t, err)
 
@@ -90,8 +90,8 @@ func TestBatchCommitMemStore(t *testing.T) {
 	requireNoError(t, err)
 	assert.Len(t, results, 3)
 
-	// The closest to [1,0,0] should be doc-0 (id=1).
-	assert.Equal(t, uint64(1), results[0].ID)
+	// The closest to [1,0,0] should be docId=0 (distance ~0).
+	assert.Equal(t, int64(0), results[0].DocID)
 	assert.InDelta(t, 0.0, results[0].Distance, 1e-6)
 }
 
@@ -112,7 +112,7 @@ func TestBatchSinglePut(t *testing.T) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 	b := idx.NewBatch()
-	b.Put("only", []float32{1, 2, 3})
+	b.Put(42, []float32{1, 2, 3})
 	requireNoError(t, b.Commit())
 
 	results, err := idx.Search([]float32{1, 2, 3}, 1)
@@ -127,7 +127,7 @@ func TestMemNodeStoreSetNorm(t *testing.T) {
 	store := NewMemNodeStore()
 
 	// SetNorm for a node that has been created via PutNode (PutNode computes a norm automatically).
-	requireNoError(t, store.PutNode(1, 0, []float32{3, 4}))
+	requireNoError(t, store.PutNode(1, 0, []float32{3, 4}, 10))
 
 	// Override the norm with a custom value.
 	requireNoError(t, store.SetNorm(1, 99.0))
@@ -146,7 +146,7 @@ func TestMemNodeStoreGetNormNotFound(t *testing.T) {
 
 func TestMemNodeStoreGetVectorRef(t *testing.T) {
 	store := NewMemNodeStore(DotProduct)
-	requireNoError(t, store.PutNode(1, 0, []float32{1.5, 2.5, 3.5}))
+	requireNoError(t, store.PutNode(1, 0, []float32{1.5, 2.5, 3.5}, 100))
 
 	ref, err := store.GetVectorRef(1)
 	requireNoError(t, err)
@@ -335,7 +335,7 @@ func TestBatchWithCustomOptions(t *testing.T) {
 		for j := range v {
 			v[j] = float32(i*8+j) + 0.1
 		}
-		b.Put(fmt.Sprintf("doc-%d", i), v)
+		b.Put(int64(i), v)
 	}
 	requireNoError(t, b.Commit())
 
@@ -347,7 +347,7 @@ func TestBatchWithCustomOptions(t *testing.T) {
 	results, err := idx.Search(v0, 5)
 	requireNoError(t, err)
 	assert.NotEmpty(t, results)
-	assert.Equal(t, uint64(1), results[0].ID, "closest result should be the query itself")
+	assert.Equal(t, int64(0), results[0].DocID, "closest result should be docId=0")
 
 	// Verify neighbor limits with custom M=4.
 	for nodeId := uint64(1); nodeId <= 20; nodeId++ {
@@ -396,14 +396,14 @@ func TestHNSWWithMemStoreInsertAndSearch(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
-	requireNoError(t, idx.Insert("doc-0", []float32{1, 0, 0}))
-	requireNoError(t, idx.Insert("doc-1", []float32{0, 1, 0}))
-	requireNoError(t, idx.Insert("doc-2", []float32{0, 0, 1}))
+	requireNoError(t, idx.Insert(0, []float32{1, 0, 0}))
+	requireNoError(t, idx.Insert(1, []float32{0, 1, 0}))
+	requireNoError(t, idx.Insert(2, []float32{0, 0, 1}))
 
 	results, err := idx.Search([]float32{1, 0, 0}, 3)
 	requireNoError(t, err)
 	assert.Len(t, results, 3)
-	assert.Equal(t, uint64(1), results[0].ID)
+	assert.Equal(t, int64(0), results[0].DocID)
 }
 
 // requireNoError fails the test immediately if err is non-nil.

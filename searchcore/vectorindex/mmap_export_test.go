@@ -58,11 +58,18 @@ func exportMemStoreToMmap(ms *MemNodeStore, dir string, dim, m int) (*MmapStore,
 			}
 		}
 
+		// Look up the docId for this nodeId.
+		var docId int64
+		if d, ok := ms.nodeDoc[id]; ok {
+			docId = d
+		}
+
 		nodeOffset := pageSize + int(id)*nodeSlotSize
 		s.nodes[nodeOffset] = byte(level)
-		s.nodes[nodeOffset+1] = 0 // flags
+		s.nodes[nodeOffset+1] = nodeFlagOccupied // flags: occupied
 		binary.LittleEndian.PutUint32(s.nodes[nodeOffset+4:], math.Float32bits(norm))
 		binary.LittleEndian.PutUint32(s.nodes[nodeOffset+8:], upperSlot)
+		binary.LittleEndian.PutUint64(s.nodes[nodeOffset+16:], uint64(docId))
 
 		// Write L0 neighbors.
 		if layers, ok := ms.neighbors[id]; ok {
@@ -108,13 +115,11 @@ func exportMemStoreToMmap(ms *MemNodeStore, dir string, dim, m int) (*MmapStore,
 		s.meta.EntryLevel = uint32(ms.maxLayer)
 	}
 
-	// Copy ID mappings.
-	for doc, nodeId := range ms.docToNode {
-		s.docToNode[doc] = nodeId
+	// Copy ID mappings into the mmap store's docToNode map.
+	for docId, nodeId := range ms.docToNode {
+		s.docToNode[docId] = nodeId
 	}
-	for nodeId, doc := range ms.nodeToDoc {
-		s.nodeToDoc[nodeId] = doc
-	}
+	s.docToNodeBuilt = true
 
 	return s, nil
 }
@@ -126,15 +131,15 @@ func TestExportMemStoreToMmap(t *testing.T) {
 	n := 1000
 	rng := rand.New(rand.NewSource(42))
 
-	// Insert n vectors.
+	// Insert n vectors with int64 docIds.
 	for i := 0; i < n; i++ {
 		id := uint64(i)
+		docId := int64(i + 1000) // offset to distinguish docId from nodeId
 		vec := make([]float32, dim)
 		for j := range vec {
 			vec[j] = rng.Float32()
 		}
-		memStore.PutNode(id, 0, vec)
-		memStore.SetNodeMapping(fmt.Sprintf("doc%d", i), id)
+		memStore.PutNode(id, 0, vec, docId)
 		memStore.SetNeighbors(id, 0, []uint64{uint64((i + 1) % n), uint64((i + 2) % n)})
 	}
 	memStore.nextID = uint64(n)
@@ -200,15 +205,15 @@ func TestExportMemStoreToMmap(t *testing.T) {
 		t.Errorf("entry = (%d, %d), want (0, 0)", id, level)
 	}
 
-	// Verify ID mappings.
+	// Verify docId → nodeId mappings via GetNodeId.
 	for i := 0; i < n; i++ {
-		docId := fmt.Sprintf("doc%d", i)
+		docId := int64(i + 1000)
 		nodeId, ok, err := mmapS.GetNodeId(docId)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !ok || nodeId != uint64(i) {
-			t.Fatalf("GetNodeId(%s) = (%d, %v), want (%d, true)", docId, nodeId, ok, i)
+			t.Fatalf("GetNodeId(%d) = (%d, %v), want (%d, true)", docId, nodeId, ok, i)
 		}
 	}
 

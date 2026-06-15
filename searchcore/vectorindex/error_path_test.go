@@ -70,7 +70,7 @@ func TestNodeDistanceSuccess(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	requireNoError(t, store.PutNode(1, 0, []float32{1.0, 0.0}))
+	requireNoError(t, store.PutNode(1, 0, []float32{1.0, 0.0}, 1))
 
 	dist, err := idx.nodeDist(1, []float32{1.0, 0.0})
 	requireNoError(t, err)

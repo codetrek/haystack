@@ -30,7 +30,7 @@ func TestNodeDistance_ValidNode(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	err := idx.Insert("doc1", []float32{1, 0, 0})
+	err := idx.Insert(1, []float32{1, 0, 0})
 	assert.NoError(t, err)
 
 	dist, err := idx.nodeDist(1, []float32{0, 1, 0})

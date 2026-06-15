@@ -174,10 +174,32 @@ func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 	return ep, int(el), nil
 }
 
-// GetNodeId looks up the node ID for a document ID (in-memory map).
-func (s *MmapStore) GetNodeId(docId string) (uint64, bool, error) {
+// GetNodeId looks up the node ID for a document ID.
+// Triggers a lazy build of docToNode on first call (write-path only; held under muWrite).
+func (s *MmapStore) GetNodeId(docId int64) (uint64, bool, error) {
+	s.muWrite.Lock()
+	s.ensureDocToNode()
+	s.muWrite.Unlock()
+
 	s.muDoc.RLock()
 	id, ok := s.docToNode[docId]
 	s.muDoc.RUnlock()
 	return id, ok, nil
+}
+
+// GetDocId returns the document ID stored in the node's slot.
+func (s *MmapStore) GetDocId(id uint64) (int64, bool, error) {
+	s.muNodes.RLock()
+	defer s.muNodes.RUnlock()
+
+	if id >= s.nodeCapacity {
+		return 0, false, fmt.Errorf("MmapStore.GetDocId: id %d out of range (cap %d)", id, s.nodeCapacity)
+	}
+	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
+	flags := s.nodes[offset+1]
+	if flags&nodeFlagOccupied == 0 || flags&nodeFlagDeleted != 0 {
+		return 0, false, nil
+	}
+	docId := int64(binary.LittleEndian.Uint64(s.nodes[offset+16:]))
+	return docId, true, nil
 }

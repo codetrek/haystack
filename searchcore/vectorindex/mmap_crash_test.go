@@ -1,7 +1,6 @@
 package vectorindex
 
 import (
-	"fmt"
 	"testing"
 )
 
@@ -20,17 +19,14 @@ func TestKill9Recovery_E2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Build vectors and insert with doc mappings.
+	// Build vectors and insert with docId stored on the node slot.
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < N; i++ {
 		vec := make([]float32, dim)
 		for d := 0; d < dim; d++ {
 			vec[d] = float32(i*dim + d)
 		}
-		if err := s.PutNode(uint64(i), 0, vec); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)); err != nil {
+		if err := s.PutNode(uint64(i), 0, vec, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}

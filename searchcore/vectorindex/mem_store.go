@@ -13,8 +13,8 @@ type MemNodeStore struct {
 	levels    map[uint64]int
 	norms     map[uint64]float32          // original norm, used only to restore vectors
 	neighbors map[uint64]map[int][]uint64 // nodeId -> layer -> neighbor ids
-	docToNode map[string]uint64
-	nodeToDoc map[uint64]string
+	docToNode map[int64]uint64
+	nodeDoc   map[uint64]int64 // nodeDoc (not nodeToDoc) for GetDocId
 	entryID   uint64
 	maxLayer  int
 	hasEntry  bool
@@ -34,8 +34,8 @@ func NewMemNodeStore(metric ...Metric) *MemNodeStore {
 		levels:    make(map[uint64]int),
 		norms:     make(map[uint64]float32),
 		neighbors: make(map[uint64]map[int][]uint64),
-		docToNode: make(map[string]uint64),
-		nodeToDoc: make(map[uint64]string),
+		docToNode: make(map[int64]uint64),
+		nodeDoc:   make(map[uint64]int64),
 		nextID:    0,
 	}
 }
@@ -67,7 +67,7 @@ func (m *MemNodeStore) GetVectorRef(id uint64) ([]float32, error) {
 	return v, nil
 }
 
-func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32) error {
+func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32, docId int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	stored, norm := m.metric.prepare(vector)
@@ -79,6 +79,8 @@ func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32) error {
 	if _, ok := m.neighbors[id]; !ok {
 		m.neighbors[id] = make(map[int][]uint64)
 	}
+	m.docToNode[docId] = id
+	m.nodeDoc[id] = docId
 	return nil
 }
 
@@ -92,9 +94,9 @@ func (m *MemNodeStore) DeleteNode(id uint64) error {
 	delete(m.levels, id)
 	delete(m.norms, id)
 	delete(m.neighbors, id)
-	if doc, ok := m.nodeToDoc[id]; ok {
+	if doc, ok := m.nodeDoc[id]; ok {
 		delete(m.docToNode, doc)
-		delete(m.nodeToDoc, id)
+		delete(m.nodeDoc, id)
 	}
 	return nil
 }
@@ -155,29 +157,18 @@ func (m *MemNodeStore) GetNodeLevel(id uint64) (int, error) {
 	return level, nil
 }
 
-func (m *MemNodeStore) GetNodeId(docId string) (uint64, bool, error) {
+func (m *MemNodeStore) GetNodeId(docId int64) (uint64, bool, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	id, ok := m.docToNode[docId]
 	return id, ok, nil
 }
 
-func (m *MemNodeStore) SetNodeMapping(docId string, nodeId uint64) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.docToNode[docId] = nodeId
-	m.nodeToDoc[nodeId] = docId
-	return nil
-}
-
-func (m *MemNodeStore) DeleteNodeMapping(docId string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if nodeId, ok := m.docToNode[docId]; ok {
-		delete(m.nodeToDoc, nodeId)
-	}
-	delete(m.docToNode, docId)
-	return nil
+func (m *MemNodeStore) GetDocId(id uint64) (int64, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	docId, ok := m.nodeDoc[id]
+	return docId, ok, nil
 }
 
 func (m *MemNodeStore) NextNodeId() (uint64, error) {

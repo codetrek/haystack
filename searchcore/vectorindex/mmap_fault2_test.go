@@ -61,7 +61,7 @@ func TestMmapAllStatError(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		if contains(name, ".dat") && !contains(name, "idmap") {
+		if contains(name, ".dat") {
 			return &faultFile{osFile: f, failStat: true}, nil
 		}
 		return f, nil
@@ -96,20 +96,6 @@ func TestOpenMmapStoreWALError(t *testing.T) {
 	}
 	if _, err := OpenMmapStore(t.TempDir(), MmapStoreOptions{Dim: 4, M: 4}); err == nil {
 		t.Fatal("expected WAL open error")
-	}
-}
-
-func TestOpenMmapStoreIdmapError(t *testing.T) {
-	orig := fsOpenFile
-	defer func() { fsOpenFile = orig }()
-	fsOpenFile = func(name string, flag int, perm os.FileMode) (osFile, error) {
-		if contains(name, "idmap.dat") {
-			return nil, errInjected
-		}
-		return orig(name, flag, perm)
-	}
-	if _, err := OpenMmapStore(t.TempDir(), MmapStoreOptions{Dim: 4, M: 4}); err == nil {
-		t.Fatal("expected idmap open error")
 	}
 }
 
@@ -174,50 +160,5 @@ func TestRemapFileMmapError(t *testing.T) {
 	mmapAlloc = orig
 	if err == nil {
 		t.Fatal("expected mmap error")
-	}
-}
-
-// --- compactIdmap error paths ---
-
-func TestCompactIdmapCreateError(t *testing.T) {
-	s := openTestStore(t)
-	defer s.Close()
-	if err := s.SetNodeMapping("doc0", 0); err != nil {
-		t.Fatal(err)
-	}
-	orig := fsCreate
-	defer func() { fsCreate = orig }()
-	fsCreate = func(name string) (osFile, error) {
-		if contains(name, "idmap.dat.tmp") {
-			return nil, errInjected
-		}
-		return orig(name)
-	}
-	if err := s.compactIdmap(); err == nil {
-		t.Fatal("expected create error")
-	}
-}
-
-func TestCompactIdmapWriteError(t *testing.T) {
-	s := openTestStore(t)
-	defer s.Close()
-	if err := s.SetNodeMapping("doc0", 0); err != nil {
-		t.Fatal(err)
-	}
-	wrapNextCreate(t, "idmap.dat.tmp", faultFile{failWrite: true})
-	if err := s.compactIdmap(); err == nil {
-		t.Fatal("expected write error")
-	}
-}
-
-func TestCompactIdmapSyncError(t *testing.T) {
-	s := openTestStore(t)
-	defer s.Close()
-	if err := s.SetNodeMapping("doc0", 0); err != nil {
-		t.Fatal(err)
-	}
-	wrapNextCreate(t, "idmap.dat.tmp", faultFile{failSync: true})
-	if err := s.compactIdmap(); err == nil {
-		t.Fatal("expected sync error")
 	}
 }

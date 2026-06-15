@@ -1,7 +1,6 @@
 package vectorindex
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +18,7 @@ func TestCheckpoint_MetaAndWALTruncated(t *testing.T) {
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
 		vec := []float32{float32(i), 0, 0, 1}
-		if err := s.PutNode(uint64(i), 0, vec); err != nil {
+		if err := s.PutNode(uint64(i), 0, vec, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +68,7 @@ func TestCheckpoint_ContinueWriteAndReplay(t *testing.T) {
 	// Write 3 records, checkpoint.
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 3; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -83,7 +82,7 @@ func TestCheckpoint_ContinueWriteAndReplay(t *testing.T) {
 	// Write 2 more records after checkpoint.
 	requireNoError(t, s.txnBegin())
 	for i := 3; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -127,7 +126,7 @@ func TestClose_WALTruncated(t *testing.T) {
 	n := 5
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -164,7 +163,7 @@ func TestOpen_ReplayThenCheckpoint(t *testing.T) {
 	n := 5
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -174,7 +173,6 @@ func TestOpen_ReplayThenCheckpoint(t *testing.T) {
 
 	// Simulate crash: close WAL and files without calling Close().
 	s.wal.Close()
-	s.idmapFile.Close()
 	mmapFree(s.vectors)
 	mmapFree(s.nodes)
 	mmapFree(s.graphL0)
@@ -222,7 +220,7 @@ func TestAutoCheckpoint_TriggeredAtInterval(t *testing.T) {
 
 	// Write 15 records (non-txn, so each PutNode triggers maybeCheckpoint).
 	for i := 0; i < 15; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -260,7 +258,7 @@ func TestAutoCheckpoint_NotTriggeredBelowInterval(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -290,7 +288,7 @@ func TestAutoCheckpoint_TxnMode(t *testing.T) {
 	// Txn mode: checkpoint should trigger at txnCommit, not during writes.
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 10; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -320,10 +318,7 @@ func TestCrashRecovery_BasicReplay(t *testing.T) {
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
 		vec := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
-		if err := s.PutNode(uint64(i), 0, vec); err != nil {
-			t.Fatal(err)
-		}
-		if err := s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)); err != nil {
+		if err := s.PutNode(uint64(i), 0, vec, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -334,7 +329,6 @@ func TestCrashRecovery_BasicReplay(t *testing.T) {
 	// Simulate crash: close file handles without calling Close().
 	s.wal.Sync()
 	s.wal.Close()
-	s.idmapFile.Close()
 	mmapFree(s.vectors)
 	mmapFree(s.nodes)
 	mmapFree(s.graphL0)
@@ -382,7 +376,7 @@ func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
 	// Write N=10 records and checkpoint.
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 10; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -396,7 +390,7 @@ func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
 	// Write M=5 more records (post-checkpoint).
 	requireNoError(t, s.txnBegin())
 	for i := 10; i < 15; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -407,7 +401,6 @@ func TestCrashRecovery_AfterCheckpoint(t *testing.T) {
 	// Crash.
 	s.wal.Sync()
 	s.wal.Close()
-	s.idmapFile.Close()
 	mmapFree(s.vectors)
 	mmapFree(s.nodes)
 	mmapFree(s.graphL0)
@@ -450,7 +443,7 @@ func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -461,7 +454,7 @@ func TestCheckpoint_LSNMonotonic(t *testing.T) {
 	}
 
 	// Write after checkpoint: LSN must be > checkpoint LSN.
-	if err := s.PutNode(10, 0, []float32{10, 0, 0, 1}); err != nil {
+	if err := s.PutNode(10, 0, []float32{10, 0, 0, 1}, 10); err != nil {
 		t.Fatal(err)
 	}
 	lsnAfter := s.wal.LSN()
@@ -479,9 +472,6 @@ func TestCheckpoint_LSNMonotonic(t *testing.T) {
 func simulateCrash(s *MmapStore) {
 	s.wal.Sync()
 	s.wal.Close()
-	if s.idmapFile != nil {
-		s.idmapFile.Close()
-	}
 	mmapFree(s.vectors)
 	mmapFree(s.nodes)
 	mmapFree(s.graphL0)
@@ -505,7 +495,7 @@ func TestCrashPoint_AfterWALWrite(t *testing.T) {
 	// Write 5 nodes normally.
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -526,7 +516,7 @@ func TestCrashPoint_AfterWALWrite(t *testing.T) {
 
 	func() {
 		defer func() { recover() }()
-		s.PutNode(5, 0, []float32{5, 0, 0, 1})
+		s.PutNode(5, 0, []float32{5, 0, 0, 1}, 5)
 	}()
 
 	if !crashed {
@@ -562,7 +552,7 @@ func TestCrashPoint_AfterMsync(t *testing.T) {
 
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -609,7 +599,7 @@ func TestCrashPoint_AfterMeta(t *testing.T) {
 
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -654,7 +644,7 @@ func TestCrashPoint_BeforeTruncate(t *testing.T) {
 
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -699,7 +689,7 @@ func TestCrashPoint_PartialWALRecord(t *testing.T) {
 
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -714,7 +704,7 @@ func TestCrashPoint_PartialWALRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 5; i < 8; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -750,7 +740,7 @@ func TestCrashPoint_PartialMeta(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := 0; i < 3; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -778,7 +768,7 @@ func TestCrashPoint_GrowMidWrite(t *testing.T) {
 	n := 1030
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -815,7 +805,7 @@ func TestCrashPoint_SetNeighborsCrash(t *testing.T) {
 
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -853,7 +843,7 @@ func TestCrashPoint_DeleteNodeCrash(t *testing.T) {
 
 	requireNoError(t, s.txnBegin())
 	for i := 0; i < 5; i++ {
-		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}); err != nil {
+		if err := s.PutNode(uint64(i), 0, []float32{float32(i), 0, 0, 1}, int64(i)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -890,4 +880,18 @@ func TestCrashPoint_DeleteNodeCrash(t *testing.T) {
 	}
 
 	s2.Close()
+}
+
+// simulateCrashNoClose is like simulateCrash but without closing the WAL;
+// used when you want to leave the WAL in a state where meta has been corrupted.
+func (s *MmapStore) simulateCrashNoClose() {
+	mmapFree(s.vectors)
+	mmapFree(s.nodes)
+	mmapFree(s.graphL0)
+	mmapFree(s.graphUpper)
+	s.wal.Close()
+	s.vecFile.Close()
+	s.nodeFile.Close()
+	s.l0File.Close()
+	s.upperFile.Close()
 }

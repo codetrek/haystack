@@ -5,6 +5,8 @@ package vectorindex
 import (
 	"syscall"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
 
 func mmapPlatform(fd uintptr, offset int64, length int, flags int) ([]byte, error) {
@@ -20,6 +22,14 @@ func mmapPlatform(fd uintptr, offset int64, length int, flags int) ([]byte, erro
 
 func munmapPlatform(data []byte) error {
 	return syscall.Munmap(data)
+}
+
+// mmapAdviseSequential hints to the OS that this mmap region will be accessed
+// sequentially, triggering read-ahead to speed up linear scans.
+func mmapAdviseSequential(data []byte) {
+	if len(data) > 0 {
+		_ = unix.Madvise(data, unix.MADV_SEQUENTIAL)
+	}
 }
 
 // mmapSyncPlatform flushes mmap'd pages to disk using msync(2).

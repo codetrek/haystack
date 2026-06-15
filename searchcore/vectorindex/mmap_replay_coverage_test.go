@@ -19,10 +19,10 @@ func TestReplayWAL_UpperLevelInsert(t *testing.T) {
 	// Insert node 0 at level 0, node 1 at level 2.
 	vec0 := []float32{1, 0, 0, 0}
 	vec1 := []float32{0, 1, 0, 0}
-	if err := s.PutNode(0, 0, vec0); err != nil {
+	if err := s.PutNode(0, 0, vec0, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutNode(1, 2, vec1); err != nil {
+	if err := s.PutNode(1, 2, vec1, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -71,10 +71,10 @@ func TestReplayWAL_SetNeighborsUpper(t *testing.T) {
 
 	// Insert two nodes; node 0 at level 1 so it has an upper slot.
 	vec := []float32{1, 0, 0, 0}
-	if err := s.PutNode(0, 1, vec); err != nil {
+	if err := s.PutNode(0, 1, vec, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutNode(1, 0, vec); err != nil {
+	if err := s.PutNode(1, 0, vec, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -126,7 +126,7 @@ func TestReplayWAL_SetNorm(t *testing.T) {
 	}
 
 	vec := []float32{1, 0, 0, 0}
-	if err := s.PutNode(0, 0, vec); err != nil {
+	if err := s.PutNode(0, 0, vec, 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -166,7 +166,7 @@ func TestReplayWAL_SetEntry(t *testing.T) {
 	// Insert a few nodes so the store is non-trivial.
 	vec := []float32{1, 0, 0, 0}
 	for i := uint64(0); i < 3; i++ {
-		if err := s.PutNode(i, 0, vec); err != nil {
+		if err := s.PutNode(i, 0, vec, 0); err != nil {
 			t.Fatal(err)
 		}
 	}

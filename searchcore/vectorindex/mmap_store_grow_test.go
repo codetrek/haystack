@@ -15,7 +15,7 @@ func TestMmapStoreGrowOnInsert(t *testing.T) {
 
 	// Default initial capacity is 1024. Insert at id=1024 should trigger grow.
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(1024, 0, vec))
+	requireNoError(t, s.PutNode(1024, 0, vec, 0))
 
 	got, err := s.GetVector(1024)
 	requireNoError(t, err)
@@ -33,7 +33,7 @@ func TestMmapStoreGrowMultiple(t *testing.T) {
 
 	// Insert at id=5000 should require multiple doublings.
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(5000, 0, vec))
+	requireNoError(t, s.PutNode(5000, 0, vec, 0))
 
 	got, err := s.GetVector(5000)
 	requireNoError(t, err)
@@ -50,12 +50,12 @@ func TestMmapStoreGrowPreservesOldData(t *testing.T) {
 	// Write data within initial capacity.
 	for i := uint64(0); i < 10; i++ {
 		vec := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
-		requireNoError(t, s.PutNode(i, 0, vec))
+		requireNoError(t, s.PutNode(i, 0, vec, 0))
 	}
 
 	// Trigger grow.
 	vec := []float32{99.0, 98.0, 97.0, 96.0}
-	requireNoError(t, s.PutNode(1500, 0, vec))
+	requireNoError(t, s.PutNode(1500, 0, vec, 0))
 
 	// Old data should still be readable.
 	for i := uint64(0); i < 10; i++ {
@@ -77,7 +77,7 @@ func TestMmapStoreGrowConcurrent(t *testing.T) {
 	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < 100; i++ {
 		vec := []float32{float32(i), 0, 0, 0}
-		requireNoError(t, s.PutNode(i, 0, vec))
+		requireNoError(t, s.PutNode(i, 0, vec, 0))
 	}
 	requireNoError(t, s.txnCommit())
 
@@ -105,7 +105,7 @@ func TestMmapStoreGrowConcurrent(t *testing.T) {
 		defer wg.Done()
 		for i := uint64(1024); i < 1024+100; i++ {
 			vec := []float32{float32(i), 0, 0, 0}
-			if err := s.PutNode(i, 0, vec); err != nil {
+			if err := s.PutNode(i, 0, vec, 0); err != nil {
 				errCh <- err
 				return
 			}

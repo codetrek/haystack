@@ -14,11 +14,11 @@ func TestHNSWUpsertEntryPoint(t *testing.T) {
 	idx := NewHNSWIndex(store)
 
 	// Insert single node — becomes entry point
-	err := idx.Insert("doc1", []float32{1, 0, 0})
+	err := idx.Insert(int64(1), []float32{1, 0, 0})
 	assert.NoError(t, err)
 
 	// Upsert entry point node with different vector
-	err = idx.Insert("doc1", []float32{0, 0, 1})
+	err = idx.Insert(int64(1), []float32{0, 0, 1})
 	assert.NoError(t, err)
 
 	// Search should work and find updated vector
@@ -28,7 +28,7 @@ func TestHNSWUpsertEntryPoint(t *testing.T) {
 	assert.InDelta(t, 0.0, results[0].Distance, 0.01, "should find the updated vector")
 
 	// Insert another node and verify graph is healthy
-	err = idx.Insert("doc2", []float32{0, 1, 0})
+	err = idx.Insert(int64(2), []float32{0, 1, 0})
 	assert.NoError(t, err)
 
 	results, err = idx.Search([]float32{0, 1, 0}, 2)
@@ -41,9 +41,9 @@ func TestBatchDuplicateDocIdUpsert(t *testing.T) {
 	idx := NewHNSWIndex(store)
 
 	b := idx.NewBatch()
-	b.Put("doc1", []float32{1, 0, 0})
-	b.Put("doc2", []float32{0, 1, 0})
-	b.Put("doc1", []float32{0, 0, 1}) // duplicate — last-op-wins coalescing
+	b.Put(int64(1), []float32{1, 0, 0})
+	b.Put(int64(2), []float32{0, 1, 0})
+	b.Put(int64(1), []float32{0, 0, 1}) // duplicate — last-op-wins coalescing
 	err := b.Commit()
 	assert.NoError(t, err)
 
@@ -64,7 +64,7 @@ func TestBatchPartialFailure(t *testing.T) {
 	idx := NewHNSWIndex(es)
 
 	// Insert initial data
-	err := idx.Insert("existing", []float32{1, 0, 0})
+	err := idx.Insert(int64(1), []float32{1, 0, 0})
 	assert.NoError(t, err)
 
 	// Inject PutNode error
@@ -73,7 +73,7 @@ func TestBatchPartialFailure(t *testing.T) {
 	es.mu.Unlock()
 
 	// Insert should fail
-	err = idx.Insert("new_doc", []float32{0, 1, 0})
+	err = idx.Insert(int64(2), []float32{0, 1, 0})
 	assert.Error(t, err)
 
 	// Clear error

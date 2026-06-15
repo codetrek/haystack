@@ -3,7 +3,6 @@ package vectorindex
 import (
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"math"
 	"os"
 	"path/filepath"
@@ -25,9 +24,8 @@ type MmapStoreOptions struct {
 // Concurrency model:
 //
 //   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
-//     DeleteNode, SetNodeMapping, DeleteNodeMapping, NextNodeId, and the
-//     transaction primitive txnBegin, txnCommit, txnAbort) are serialised by
-//     muWrite.Lock().
+//     DeleteNode, NextNodeId, and the transaction primitive txnBegin,
+//     txnCommit, txnAbort) are serialised by muWrite.Lock().
 //   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
 //   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
 //   - Grow functions (ensureCapacity / growFile) are called under muWrite
@@ -55,10 +53,9 @@ type MmapStore struct {
 	opsSinceCheckpoint uint64
 	checkpointInterval uint64
 
-	// ID mapping (doc ↔ node)
-	docToNode map[string]uint64
-	nodeToDoc map[uint64]string
-	idmapFile osFile // idmap.dat append handle
+	// Forward mapping (docId → nodeId): built lazily on first write.
+	docToNode      map[int64]uint64
+	docToNodeBuilt bool // docToNode is built lazily on first write
 
 	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
 	muVec   sync.RWMutex
@@ -110,8 +107,7 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		vecSlotSize: opts.Dim * 4,
 		l0SlotSize:  graphL0SlotSize(opts.M * 2),
 		maxLayers:   defaultMaxLayers,
-		docToNode:   make(map[string]uint64),
-		nodeToDoc:   make(map[uint64]string),
+		docToNode:   make(map[int64]uint64),
 	}
 	s.upperSlotSz = graphUpperSlotSize(opts.M, s.maxLayers)
 	s.checkpointInterval = 1000
@@ -132,6 +128,9 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		h, err := readMetaHeader(dir)
 		if err != nil {
 			return nil, err
+		}
+		if h.Version != 2 {
+			return nil, fmt.Errorf("MmapStore: unsupported on-disk version %d (want 2)", h.Version)
 		}
 		if int(h.Dim) != opts.Dim {
 			return nil, fmt.Errorf("MmapStore: dim mismatch: file=%d, opts=%d", h.Dim, opts.Dim)
@@ -159,16 +158,8 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	}
 	s.wal = wal
 
-	// Load idmap.dat (docId ↔ nodeId mappings).
-	if err := s.loadIdmap(); err != nil {
-		wal.Close()
-		s.closeMmaps()
-		return nil, fmt.Errorf("MmapStore: idmap: %w", err)
-	}
-
 	// Replay WAL from checkpoint.
 	if err := s.replayWAL(); err != nil { // nocov: WAL replay error during Open
-		s.idmapFile.Close()
 		wal.Close()
 		s.closeMmaps()
 		return nil, fmt.Errorf("MmapStore: replay: %w", err)
@@ -178,7 +169,6 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	// so subsequent Opens don't re-replay the same records.
 	if s.wal.LSN() > s.meta.WalCheckpointLSN {
 		if err := s.checkpointLocked(); err != nil { // nocov: post-replay checkpoint failure requires msync/rename to fail
-			s.idmapFile.Close()
 			wal.Close()
 			s.closeMmaps()
 			return nil, fmt.Errorf("MmapStore: post-replay checkpoint: %w", err)
@@ -197,7 +187,7 @@ func (s *MmapStore) Close() error {
 		}
 	}
 
-	// 1. Checkpoint: msync + writeMeta + WAL truncate + idmap compact.
+	// 1. Checkpoint: msync + writeMeta + WAL truncate.
 	// A faulted store has uncommitted in-place writes; checkpointing here would
 	// persist them and truncate the WAL, defeating crash-recovery discard. Skip it.
 	if s.faulted == nil {
@@ -209,12 +199,7 @@ func (s *MmapStore) Close() error {
 		setErr(s.wal.Close())
 	}
 
-	// 3. Close idmap file (checkpoint already reopened it).
-	if s.idmapFile != nil {
-		setErr(s.idmapFile.Close())
-	}
-
-	// 4. munmap all.
+	// 3. munmap all.
 	setErr(mmapFree(s.vectors))
 	setErr(mmapFree(s.nodes))
 	setErr(mmapFree(s.graphL0))
@@ -225,7 +210,7 @@ func (s *MmapStore) Close() error {
 	s.graphL0 = nil
 	s.graphUpper = nil
 
-	// 5. Close all files.
+	// 4. Close all files.
 	setErr(s.vecFile.Close())
 	setErr(s.nodeFile.Close())
 	setErr(s.l0File.Close())
@@ -237,7 +222,7 @@ func (s *MmapStore) Close() error {
 // initAllFiles creates all data files for a new index.
 func (s *MmapStore) initAllFiles(cap uint64) error {
 	s.meta = MetaHeader{
-		Version:    1,
+		Version:    2,
 		Dim:        uint32(s.dim),
 		M:          uint32(s.m),
 		Metric:     uint32(s.metric),
@@ -366,53 +351,28 @@ func (s *MmapStore) closeMmaps() {
 	}
 }
 
-// loadIdmap reads idmap.dat and populates docToNode/nodeToDoc maps.
-func (s *MmapStore) loadIdmap() error {
-	path := filepath.Join(s.dir, "idmap.dat")
-	f, err := fsOpenFile(path, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		return err
+// ensureDocToNode builds docToNode from nodes.dat on first call.
+// Must be called under muWrite (guards docToNodeBuilt flag).
+// The map itself is populated under muDoc.
+func (s *MmapStore) ensureDocToNode() {
+	if s.docToNodeBuilt {
+		return
 	}
-	s.idmapFile = f
-
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if info.Size() == 0 {
-		return nil
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-
-	off := 0
-	for off+14 <= len(data) { // min entry: 8(nodeId) + 2(docIdLen) + 0(docId) + 4(crc) = 14
-		nodeId := binary.LittleEndian.Uint64(data[off:])
-		docIdLen := int(binary.LittleEndian.Uint16(data[off+8:]))
-		entryEnd := off + 10 + docIdLen + 4
-		if entryEnd > len(data) {
-			break
+	mmapAdviseSequential(s.nodes)
+	m := make(map[int64]uint64, s.meta.NodeCount)
+	for i := uint64(0); i < s.meta.TotalSlots; i++ {
+		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
+		flags := s.nodes[off+1]
+		if flags&nodeFlagOccupied == 0 || flags&nodeFlagDeleted != 0 {
+			continue
 		}
-
-		entryData := data[off : off+10+docIdLen]
-		storedCRC := binary.LittleEndian.Uint32(data[off+10+docIdLen:])
-
-		h := crc32.NewIEEE()
-		h.Write(entryData)
-		if h.Sum32() != storedCRC {
-			break
-		}
-
-		docId := string(data[off+10 : off+10+docIdLen])
-		s.docToNode[docId] = nodeId
-		s.nodeToDoc[nodeId] = docId
-		off = entryEnd
+		docId := int64(binary.LittleEndian.Uint64(s.nodes[off+16:]))
+		m[docId] = i
 	}
-
-	return nil
+	s.muDoc.Lock()
+	s.docToNode = m
+	s.muDoc.Unlock()
+	s.docToNodeBuilt = true
 }
 
 // applyWALRecord applies a single decoded WAL record to mmap + meta state.
@@ -421,7 +381,7 @@ func (s *MmapStore) loadIdmap() error {
 func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 	switch typ {
 	case WalInsert:
-		nodeId, level, vec, norm, _ := DecodeInsert(payload)
+		nodeId, level, vec, norm, docId := DecodeInsert(payload)
 		if err := s.ensureVecCapacity(nodeId); err != nil {
 			return err
 		}
@@ -450,6 +410,7 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 		} else {
 			binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
 		}
+		binary.LittleEndian.PutUint64(s.nodes[nodeOff+16:], uint64(docId)) // DocId at offset 16
 		if nodeId >= s.meta.TotalSlots {
 			s.meta.TotalSlots = nodeId + 1
 		}
@@ -489,7 +450,7 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 		}
 
 	case WalDelete:
-		nodeId, _ := DecodeDelete(payload)
+		nodeId := DecodeDelete(payload)
 		if nodeId < s.nodeCapacity {
 			offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
 			s.nodes[offset+1] |= nodeFlagDeleted
@@ -497,18 +458,6 @@ func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
 		if s.meta.NodeCount > 0 {
 			s.meta.NodeCount--
 		}
-
-	case WalSetMapping:
-		nodeId, docId := DecodeSetMapping(payload)
-		s.docToNode[docId] = nodeId
-		s.nodeToDoc[nodeId] = docId
-
-	case WalDeleteMapping:
-		docId := DecodeDeleteMapping(payload)
-		if nodeId, ok := s.docToNode[docId]; ok {
-			delete(s.nodeToDoc, nodeId)
-		}
-		delete(s.docToNode, docId)
 	}
 	return nil
 }

@@ -10,7 +10,7 @@ const (
 
 type batchOp struct {
 	kind   batchOpKind
-	docId  string
+	docId  int64
 	vector []float32 // populated for opPut (already copied); nil for opDelete
 }
 
@@ -23,25 +23,25 @@ type batchOp struct {
 type Batch struct {
 	idx  *HNSWIndex
 	ops  []batchOp
-	seen map[string]int // docId -> index in ops (coalescing)
+	seen map[int64]int // docId -> index in ops (coalescing)
 }
 
 // NewBatch returns an empty Batch bound to this index.
 func (h *HNSWIndex) NewBatch() *Batch {
-	return &Batch{idx: h, seen: make(map[string]int)}
+	return &Batch{idx: h, seen: make(map[int64]int)}
 }
 
 // Put buffers an insert/replace of docId with vector. The vector is copied, so
 // the caller may reuse its slice. A later Put/Delete of the same docId in this
 // batch supersedes this one.
-func (b *Batch) Put(docId string, vector []float32) {
+func (b *Batch) Put(docId int64, vector []float32) {
 	cp := make([]float32, len(vector))
 	copy(cp, vector)
 	b.set(batchOp{kind: opPut, docId: docId, vector: cp})
 }
 
 // Delete buffers a removal of docId. Coalesces with any prior op for docId.
-func (b *Batch) Delete(docId string) {
+func (b *Batch) Delete(docId int64) {
 	b.set(batchOp{kind: opDelete, docId: docId})
 }
 
@@ -62,7 +62,7 @@ func (b *Batch) Len() int { return len(b.ops) }
 // applied), so no rollback is needed. The batch is reusable afterward.
 func (b *Batch) Discard() {
 	b.ops = b.ops[:0]
-	b.seen = make(map[string]int)
+	b.seen = make(map[int64]int)
 }
 
 // Commit applies all buffered operations to the graph atomically inside one
@@ -94,6 +94,6 @@ func (b *Batch) Commit() error {
 	})
 
 	b.ops = b.ops[:0]
-	b.seen = make(map[string]int)
+	b.seen = make(map[int64]int)
 	return err
 }

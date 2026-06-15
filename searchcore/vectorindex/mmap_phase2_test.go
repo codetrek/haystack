@@ -3,8 +3,6 @@ package vectorindex
 import (
 	"encoding/binary"
 	"math"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,7 +17,7 @@ func TestMmapStorePutNodeWritesMmapContents(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 42))
 
 	// Read raw vector bytes from mmap.
 	for i, v := range vec {
@@ -35,6 +33,10 @@ func TestMmapStorePutNodeWritesMmapContents(t *testing.T) {
 	assert.Equal(t, uint8(nodeFlagOccupied), s.nodes[nodeOff+1]) // flags: occupied, not deleted
 	norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[nodeOff+4:]))
 	assert.Equal(t, float32(0), norm) // raw metric: no norm persisted
+
+	// Verify docId written at byte offset 16 in the node slot.
+	docIdBytes := binary.LittleEndian.Uint64(s.nodes[nodeOff+16:])
+	assert.Equal(t, int64(42), int64(docIdBytes), "docId should be written at offset 16")
 }
 
 func TestMmapStorePutNodeWithUpperLevel(t *testing.T) {
@@ -42,7 +44,7 @@ func TestMmapStorePutNodeWithUpperLevel(t *testing.T) {
 	defer s.Close()
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 3, vec))
+	requireNoError(t, s.PutNode(0, 3, vec, 99))
 
 	// Node should have an upper slot allocated.
 	nodeOff := pageSize + 0*nodeSlotSize
@@ -60,9 +62,9 @@ func TestMmapStoreSetNeighborsUpperMultipleLayers(t *testing.T) {
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
 	// Create node at level=3 so layers 1,2,3 are available.
-	requireNoError(t, s.PutNode(0, 3, vec))
-	requireNoError(t, s.PutNode(1, 0, vec))
-	requireNoError(t, s.PutNode(2, 0, vec))
+	requireNoError(t, s.PutNode(0, 3, vec, 0))
+	requireNoError(t, s.PutNode(1, 0, vec, 1))
+	requireNoError(t, s.PutNode(2, 0, vec, 2))
 
 	// Set neighbors on layers 1, 2, 3.
 	requireNoError(t, s.SetNeighbors(0, 1, []uint64{1}))
@@ -101,7 +103,7 @@ func TestMmapStoreGrowUpperGraph(t *testing.T) {
 	// without paying a per-insert msync (the heaviest cost on Windows).
 	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < initialUpperCap+10; i++ {
-		requireNoError(t, s.PutNode(i, 1, vec))
+		requireNoError(t, s.PutNode(i, 1, vec, int64(i)))
 	}
 	requireNoError(t, s.txnCommit())
 
@@ -109,7 +111,7 @@ func TestMmapStoreGrowUpperGraph(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Close → Reopen: verify full data persistence
+// Close → Reopen: verify full data persistence (docId stored on node slot)
 // ---------------------------------------------------------------------------
 
 func TestMmapStoreCloseReopenPersistence(t *testing.T) {
@@ -119,16 +121,14 @@ func TestMmapStoreCloseReopenPersistence(t *testing.T) {
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
 
-	// Write data.
+	// Write data with docIds embedded in node slots.
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.SetNodeMapping("doc-a", 0))
-	requireNoError(t, s.PutNode(0, 2, vec))
+	requireNoError(t, s.PutNode(0, 2, vec, 100))
 	requireNoError(t, s.SetNeighbors(0, 0, []uint64{1}))
 	requireNoError(t, s.SetNeighbors(0, 1, []uint64{2}))
 	requireNoError(t, s.SetEntryPoint(0, 2))
 
-	requireNoError(t, s.PutNode(1, 0, vec))
-	requireNoError(t, s.SetNodeMapping("doc-b", 1))
+	requireNoError(t, s.PutNode(1, 0, vec, 200))
 
 	requireNoError(t, s.Close())
 
@@ -153,81 +153,21 @@ func TestMmapStoreCloseReopenPersistence(t *testing.T) {
 	assert.Equal(t, uint64(0), epId)
 	assert.Equal(t, 2, epLevel)
 
-	// Verify node mapping persistence.
-	id, ok, err := s2.GetNodeId("doc-a")
+	// Verify docId persistence via GetDocId (reads from node slot).
+	docId0, ok0, err := s2.GetDocId(0)
 	requireNoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, uint64(0), id)
+	assert.True(t, ok0)
+	assert.Equal(t, int64(100), docId0)
 
-	id2, ok2, err := s2.GetNodeId("doc-b")
+	docId1, ok1, err := s2.GetDocId(1)
 	requireNoError(t, err)
-	assert.True(t, ok2)
-	assert.Equal(t, uint64(1), id2)
+	assert.True(t, ok1)
+	assert.Equal(t, int64(200), docId1)
 
 	// Verify L0 neighbors persist via WAL replay.
 	nbs, err := s2.GetNeighbors(0, 0)
 	requireNoError(t, err)
 	assert.Equal(t, []uint64{1}, nbs)
-}
-
-// ---------------------------------------------------------------------------
-// loadIdmap: verify idmap.dat is correctly loaded
-// ---------------------------------------------------------------------------
-
-func TestMmapStoreLoadIdmap(t *testing.T) {
-	dir := t.TempDir()
-	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
-
-	// Write multiple mappings, close, reopen — all should be present.
-	s, err := OpenMmapStore(dir, opts)
-	requireNoError(t, err)
-
-	for i := uint64(0); i < 20; i++ {
-		requireNoError(t, s.SetNodeMapping("doc-"+string(rune('A'+i)), i))
-	}
-	requireNoError(t, s.Close())
-
-	s2, err := OpenMmapStore(dir, opts)
-	requireNoError(t, err)
-	defer s2.Close()
-
-	for i := uint64(0); i < 20; i++ {
-		id, ok, err := s2.GetNodeId("doc-" + string(rune('A'+i)))
-		requireNoError(t, err)
-		assert.True(t, ok, "doc-%c should exist", rune('A'+i))
-		assert.Equal(t, i, id)
-	}
-}
-
-func TestMmapStoreLoadIdmapCorrupt(t *testing.T) {
-	dir := t.TempDir()
-	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
-
-	s, err := OpenMmapStore(dir, opts)
-	requireNoError(t, err)
-	requireNoError(t, s.SetNodeMapping("doc-good", 0))
-	requireNoError(t, s.SetNodeMapping("doc-bad", 1))
-	requireNoError(t, s.Close())
-
-	// Corrupt the last byte of idmap.dat to invalidate CRC of the 2nd entry.
-	path := filepath.Join(dir, "idmap.dat")
-	data, err := os.ReadFile(path)
-	requireNoError(t, err)
-	data[len(data)-1] ^= 0xFF
-	requireNoError(t, os.WriteFile(path, data, 0644))
-
-	s2, err := OpenMmapStore(dir, opts)
-	requireNoError(t, err)
-	defer s2.Close()
-
-	// First mapping should survive; second is corrupt.
-	_, ok, err := s2.GetNodeId("doc-good")
-	requireNoError(t, err)
-	assert.True(t, ok)
-
-	_, ok2, err := s2.GetNodeId("doc-bad")
-	requireNoError(t, err)
-	assert.False(t, ok2, "corrupt entry should be skipped")
 }
 
 // ---------------------------------------------------------------------------
@@ -240,7 +180,7 @@ func TestMmapStoreSyncAll(t *testing.T) {
 
 	// Write some data so the regions are non-trivial.
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 0))
 
 	err := s.syncAll()
 	assert.NoError(t, err)
@@ -258,8 +198,8 @@ func TestMmapStoreDeleteNodeAndReopen(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
-	requireNoError(t, s.PutNode(0, 0, vec))
-	requireNoError(t, s.PutNode(1, 0, vec))
+	requireNoError(t, s.PutNode(0, 0, vec, 0))
+	requireNoError(t, s.PutNode(1, 0, vec, 1))
 	requireNoError(t, s.DeleteNode(0))
 	requireNoError(t, s.Close())
 
@@ -290,7 +230,7 @@ func TestMmapStoreRebuildNodeCount(t *testing.T) {
 
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
 	for i := uint64(0); i < 5; i++ {
-		requireNoError(t, s.PutNode(i, 0, vec))
+		requireNoError(t, s.PutNode(i, 0, vec, int64(i)))
 	}
 	requireNoError(t, s.DeleteNode(2))
 	requireNoError(t, s.Close())
@@ -319,7 +259,7 @@ func TestMmapStoreTxnCommitSyncs(t *testing.T) {
 	requireNoError(t, s.txnBegin())
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
 	for i := uint64(0); i < 5; i++ {
-		requireNoError(t, s.PutNode(i, 0, vec))
+		requireNoError(t, s.PutNode(i, 0, vec, int64(i)))
 	}
 	requireNoError(t, s.txnCommit())
 
