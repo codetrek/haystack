@@ -23,7 +23,7 @@ const (
 	WalSetNorm      WalRecordType = 5
 	WalTxnBegin     WalRecordType = 6 // transaction start marker (empty payload)
 	WalTxnCommit    WalRecordType = 7 // transaction commit marker (empty payload)
-	// record types 8 (WalSetMapping) and 9 (WalDeleteMapping) are retired.
+	// record types 8 and 9 (the retired docId-mapping records) must not be reused.
 )
 
 // WAL record disk layout: LSN(8) + Length(4) + Type(1) + Payload(var) + CRC32(4)
@@ -388,5 +388,3 @@ func DecodeSetNorm(payload []byte) (nodeId uint64, norm float32) {
 	norm = math.Float32frombits(binary.LittleEndian.Uint32(payload[8:]))
 	return
 }
-
-

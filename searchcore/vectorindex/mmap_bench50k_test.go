@@ -58,7 +58,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 				b := idx.NewBatch()
 				for j := 0; j < bs; j++ {
 					vecIdx := i*bs + j
-					b.Put(fmt.Sprintf("%d", vecIdx), base[vecIdx])
+					b.Put(int64(vecIdx), base[vecIdx])
 				}
 				if err := b.Commit(); err != nil {
 					t.Fatalf("batch Commit at batch %d: %v", i, err)
@@ -72,7 +72,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 				b := idx.NewBatch()
 				for j := 0; j < remainder; j++ {
 					vecIdx := nBatches*bs + j
-					b.Put(fmt.Sprintf("%d", vecIdx), base[vecIdx])
+					b.Put(int64(vecIdx), base[vecIdx])
 				}
 				if err := b.Commit(); err != nil {
 					t.Fatalf("batch Commit remainder: %v", err)
@@ -126,7 +126,7 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 		b := idx.NewBatch()
 		start := time.Now()
 		for i, v := range base {
-			b.Put(fmt.Sprintf("%d", i), v)
+			b.Put(int64(i), v)
 			if (i+1)%10000 == 0 {
 				t.Logf("  staged %d/%d vectors (elapsed %v)",
 					i+1, len(base), time.Since(start).Round(time.Millisecond))

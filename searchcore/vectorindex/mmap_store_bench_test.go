@@ -149,11 +149,7 @@ func BenchmarkMmapStore50KInsert(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			docId := fmt.Sprintf("doc-%d", id)
-			if err := s.SetNodeMapping(docId, id); err != nil {
-				b.Fatal(err)
-			}
-			if err := s.PutNode(id, 0, vectors[i]); err != nil {
+			if err := s.PutNode(id, 0, vectors[i], int64(id)); err != nil {
 				b.Fatal(err)
 			}
 
@@ -189,8 +185,7 @@ func BenchmarkMmapStore50KInsert(b *testing.B) {
 			}
 			assert.Equal(b, vectors[idx], got)
 
-			docId := fmt.Sprintf("doc-%d", idx)
-			nodeId, ok, err := s.GetNodeId(docId)
+			nodeId, ok, err := s.GetNodeId(int64(idx))
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -231,7 +226,7 @@ func BenchmarkHNSW_MemStore_50K_Insert(b *testing.B) {
 
 		start := time.Now()
 		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			if err := idx.Insert(int64(i), v); err != nil {
 				b.Fatalf("Insert %d: %v", i, err)
 			}
 		}
@@ -264,7 +259,7 @@ func BenchmarkHNSW_MmapStore_50K_Insert(b *testing.B) {
 			WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+			if err := idx.Insert(int64(i), v); err != nil {
 				b.Fatalf("Insert %d: %v", i, err)
 			}
 		}
@@ -307,7 +302,7 @@ func BenchmarkHNSW_Search_MemStore_vs_MmapStore(b *testing.B) {
 	memIdx := NewHNSWIndex(memStore,
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range vecs {
-		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+		if err := memIdx.Insert(int64(i), v); err != nil {
 			b.Fatalf("MemStore insert %d: %v", i, err)
 		}
 	}
@@ -323,7 +318,7 @@ func BenchmarkHNSW_Search_MemStore_vs_MmapStore(b *testing.B) {
 	mmapIdx := NewHNSWIndex(mmapStore,
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range vecs {
-		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+		if err := mmapIdx.Insert(int64(i), v); err != nil {
 			b.Fatalf("MmapStore insert %d: %v", i, err)
 		}
 	}
@@ -396,19 +391,18 @@ func TestRecallAt10_SIFT(t *testing.T) {
 	memIdx := NewHNSWIndex(memStore,
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range baseVecs {
-		if err := memIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+		if err := memIdx.Insert(int64(i), v); err != nil {
 			t.Fatalf("MemStore insert %d: %v", i, err)
 		}
 	}
 
-	memMapping := buildNodeToBaseIdxMap(memStore, len(baseVecs), "doc-%d")
 	var memRecallSum float64
 	for i, q := range queryVecs {
 		res, err := memIdx.Search(q, k)
 		if err != nil {
 			t.Fatal(err)
 		}
-		memRecallSum += recallAtKMapped(groundTruth[i], res, k, memMapping)
+		memRecallSum += recallAtKByDocID(groundTruth[i], res, k)
 	}
 	memRecall := memRecallSum / float64(len(queryVecs))
 	t.Logf("MemStore recall@10 = %.4f", memRecall)
@@ -425,19 +419,18 @@ func TestRecallAt10_SIFT(t *testing.T) {
 	mmapIdx := NewHNSWIndex(mmapStore,
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 	for i, v := range baseVecs {
-		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+		if err := mmapIdx.Insert(int64(i), v); err != nil {
 			t.Fatalf("MmapStore insert %d: %v", i, err)
 		}
 	}
 
-	mmapMapping := buildNodeToBaseIdxMap(mmapStore, len(baseVecs), "doc-%d")
 	var mmapRecallSum float64
 	for i, q := range queryVecs {
 		res, err := mmapIdx.Search(q, k)
 		if err != nil {
 			t.Fatal(err)
 		}
-		mmapRecallSum += recallAtKMapped(groundTruth[i], res, k, mmapMapping)
+		mmapRecallSum += recallAtKByDocID(groundTruth[i], res, k)
 	}
 	mmapRecall := mmapRecallSum / float64(len(queryVecs))
 	t.Logf("MmapStore recall@10 = %.4f", mmapRecall)

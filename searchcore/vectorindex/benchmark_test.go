@@ -65,7 +65,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 	t.Log("Inserting vectors into HNSW index...")
 	insertStart := time.Now()
 	for i, v := range vectors {
-		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+		if err := idx.Insert(int64(i), v); err != nil {
 			t.Fatalf("insert vector %d: %v", i, err)
 		}
 		if (i+1)%10000 == 0 {
@@ -77,7 +77,6 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 
 	// Search and measure latency.
 	t.Log("Running search queries...")
-	nodeMapping := buildNodeToBaseIdxMap(store, len(vectors), "%d")
 	gtInt := make([][]int, len(groundTruth))
 	for i, gt := range groundTruth {
 		gtInt[i] = make([]int, len(gt))
@@ -97,7 +96,7 @@ func TestBenchmarkSearchLatency(t *testing.T) {
 			t.Fatalf("search query %d: %v", qi, err)
 		}
 
-		recalls[qi] = recallAtKMapped(gtInt[qi], results, benchmarkK, nodeMapping)
+		recalls[qi] = recallAtKByDocID(gtInt[qi], results, benchmarkK)
 	}
 
 	// Compute latency percentiles.
@@ -159,7 +158,7 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 	t.Log("Inserting 10K vectors into HNSW index (in-memory)...")
 	insertStart := time.Now()
 	for i, v := range vectors {
-		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+		if err := idx.Insert(int64(i), v); err != nil {
 			t.Fatalf("insert vector %d: %v", i, err)
 		}
 	}
@@ -167,7 +166,6 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 
 	// Search and measure latency.
 	t.Log("Running search queries...")
-	nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 	latencies := make([]time.Duration, numQueries)
 	recalls := make([]float64, numQueries)
 
@@ -179,7 +177,7 @@ func TestBenchmarkSearchLatency10K(t *testing.T) {
 			t.Fatalf("search query %d: %v", qi, err)
 		}
 
-		recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
+		recalls[qi] = recallAtKByDocID(groundTruth[qi], results, k)
 	}
 
 	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -240,7 +238,7 @@ func BenchmarkHNSWInsert(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := idx.Insert(fmt.Sprintf("%d", i), vecs[i]); err != nil {
+		if err := idx.Insert(int64(i), vecs[i]); err != nil {
 			b.Fatalf("insert %d: %v", i, err)
 		}
 	}
@@ -262,7 +260,7 @@ func BenchmarkHNSWSearch(b *testing.B) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(99))))
 
 	for i, v := range vecs {
-		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+		if err := idx.Insert(int64(i), v); err != nil {
 			b.Fatalf("insert %d: %v", i, err)
 		}
 	}
@@ -292,7 +290,7 @@ func BenchmarkHNSWBatchInsert(b *testing.B) {
 	b.ResetTimer()
 	batch := idx.NewBatch()
 	for i := 0; i < b.N; i++ {
-		batch.Put(fmt.Sprintf("%d", i), vecs[i])
+		batch.Put(int64(i), vecs[i])
 	}
 	if err := batch.Commit(); err != nil {
 		b.Fatalf("commit: %v", err)
@@ -309,14 +307,14 @@ func BenchmarkHNSWDelete(b *testing.B) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(99))))
 	for i := 0; i < b.N; i++ {
-		if err := idx.Insert(fmt.Sprintf("%d", i), vecs[i]); err != nil {
+		if err := idx.Insert(int64(i), vecs[i]); err != nil {
 			b.Fatalf("setup insert %d: %v", i, err)
 		}
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if err := idx.Delete(fmt.Sprintf("%d", i)); err != nil {
+		if err := idx.Delete(int64(i)); err != nil {
 			b.Fatalf("delete %d: %v", i, err)
 		}
 	}
@@ -345,12 +343,11 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 	)
 
 	for i, v := range vecs {
-		if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+		if err := idx.Insert(int64(i), v); err != nil {
 			t.Fatalf("insert vector %d: %v", i, err)
 		}
 	}
 
-	nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 	var totalRecall float64
 	for i, v := range vecs {
 		results, err := idx.Search(v, k)
@@ -359,7 +356,7 @@ func TestRecallAt10_1000Vectors(t *testing.T) {
 		}
 
 		gt := bruteForceKNN(v, vecs, k, CosineDistance)
-		totalRecall += recallAtKMapped(gt, results, k, nodeMapping)
+		totalRecall += recallAtKByDocID(gt, results, k)
 	}
 
 	meanRecall := totalRecall / float64(n)
@@ -386,7 +383,7 @@ func TestEdgeCases(t *testing.T) {
 		idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+			if err := idx.Insert(int64(i), v); err != nil {
 				t.Fatalf("insert %d: %v", i, err)
 			}
 		}
@@ -427,14 +424,14 @@ func TestEdgeCases(t *testing.T) {
 		idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(42))))
 
 		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+			if err := idx.Insert(int64(i), v); err != nil {
 				t.Fatalf("insert %d: %v", i, err)
 			}
 		}
 
 		// Delete first 5 vectors.
 		for i := 0; i < nDelete; i++ {
-			if err := idx.Delete(fmt.Sprintf("%d", i)); err != nil {
+			if err := idx.Delete(int64(i)); err != nil {
 				t.Fatalf("delete %d: %v", i, err)
 			}
 		}
@@ -444,13 +441,13 @@ func TestEdgeCases(t *testing.T) {
 		assert.NoError(t, err)
 
 		// Should only return non-deleted vectors.
-		deletedIDs := make(map[uint64]bool, nDelete)
+		deletedIDs := make(map[int64]bool, nDelete)
 		for i := 0; i < nDelete; i++ {
-			deletedIDs[uint64(i+1)] = true // node IDs are 1-indexed
+			deletedIDs[int64(i)] = true // docId == insertion index
 		}
 		for _, r := range results {
-			assert.False(t, deletedIDs[r.ID],
-				"search returned deleted node %d", r.ID)
+			assert.False(t, deletedIDs[r.DocID],
+				"search returned deleted doc %d", r.DocID)
 		}
 	})
 }
@@ -508,7 +505,7 @@ func TestBenchmarkParametric(t *testing.T) {
 		t.Run(fmt.Sprintf("N=%d/insert", n), func(t *testing.T) {
 			start := time.Now()
 			for i, v := range vectors {
-				err := idx.Insert(fmt.Sprintf("%d", i), v)
+				err := idx.Insert(int64(i), v)
 				if err != nil {
 					t.Fatalf("insert %d: %v", i, err)
 				}
@@ -516,8 +513,6 @@ func TestBenchmarkParametric(t *testing.T) {
 			elapsed := time.Since(start)
 			t.Logf("Insert %d vectors: %v (%.2fms/op)", n, elapsed, float64(elapsed.Milliseconds())/float64(n))
 		})
-
-		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 
 		for _, ef := range efSearchValues {
 			t.Run(fmt.Sprintf("N=%d/efSearch=%d", n, ef), func(t *testing.T) {
@@ -536,7 +531,7 @@ func TestBenchmarkParametric(t *testing.T) {
 						t.Fatalf("search %d: %v", qi, err)
 					}
 
-					recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
+					recalls[qi] = recallAtKByDocID(groundTruth[qi], results, k)
 				}
 
 				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -611,15 +606,13 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 		t.Run(fmt.Sprintf("efC=%d/insert", efc), func(t *testing.T) {
 			start := time.Now()
 			for i, v := range vectors {
-				if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+				if err := idx.Insert(int64(i), v); err != nil {
 					t.Fatalf("insert %d: %v", i, err)
 				}
 			}
 			elapsed := time.Since(start)
 			t.Logf("efConstruction=%d insert 40K: %v (%.2fms/op)", efc, elapsed, float64(elapsed.Milliseconds())/float64(n))
 		})
-
-		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 
 		for _, efs := range efSearchValues {
 			t.Run(fmt.Sprintf("efC=%d/efS=%d", efc, efs), func(t *testing.T) {
@@ -638,7 +631,7 @@ func TestBenchmarkEfConstructionCompare(t *testing.T) {
 						t.Fatalf("search %d: %v", qi, err)
 					}
 
-					recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
+					recalls[qi] = recallAtKByDocID(groundTruth[qi], results, k)
 				}
 
 				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -711,15 +704,13 @@ func TestBenchmarkMCompare(t *testing.T) {
 		t.Run(fmt.Sprintf("M=%d/insert", m), func(t *testing.T) {
 			start := time.Now()
 			for i, v := range vectors {
-				if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+				if err := idx.Insert(int64(i), v); err != nil {
 					t.Fatalf("insert %d: %v", i, err)
 				}
 			}
 			elapsed := time.Since(start)
 			t.Logf("M=%d insert 40K: %v (%.2fms/op)", m, elapsed, float64(elapsed.Milliseconds())/float64(n))
 		})
-
-		nodeMapping := buildNodeToBaseIdxMap(store, n, "%d")
 
 		for _, efs := range efSearchValues {
 			t.Run(fmt.Sprintf("M=%d/efS=%d", m, efs), func(t *testing.T) {
@@ -738,7 +729,7 @@ func TestBenchmarkMCompare(t *testing.T) {
 						t.Fatalf("search %d: %v", qi, err)
 					}
 
-					recalls[qi] = recallAtKMapped(groundTruth[qi], results, k, nodeMapping)
+					recalls[qi] = recallAtKByDocID(groundTruth[qi], results, k)
 				}
 
 				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -855,7 +846,7 @@ func TestBenchmarkSIFT(t *testing.T) {
 	t.Run("insert", func(t *testing.T) {
 		start := time.Now()
 		for i, v := range base {
-			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
+			if err := idx.Insert(int64(i), v); err != nil {
 				t.Fatalf("insert %d: %v", i, err)
 			}
 			if (i+1)%10000 == 0 {
@@ -865,8 +856,6 @@ func TestBenchmarkSIFT(t *testing.T) {
 		elapsed := time.Since(start)
 		t.Logf("Insert %d SIFT vectors: %v (%.2fms/op)", nBase, elapsed, float64(elapsed.Milliseconds())/float64(nBase))
 	})
-
-	nodeMapping := buildNodeToBaseIdxMap(store, nBase, "%d")
 
 	for _, efs := range efSearchValues {
 		t.Run(fmt.Sprintf("efSearch=%d", efs), func(t *testing.T) {
@@ -885,7 +874,7 @@ func TestBenchmarkSIFT(t *testing.T) {
 					t.Fatalf("search %d: %v", qi, err)
 				}
 
-				recalls[qi] = recallAtKMapped(gt[qi], results, k, nodeMapping)
+				recalls[qi] = recallAtKByDocID(gt[qi], results, k)
 			}
 
 			sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
@@ -916,9 +905,8 @@ func BenchmarkMmapStoreGetVector(b *testing.B) {
 		for j := range v {
 			v[j] = float32(i*128 + j)
 		}
-		store.PutNode(uint64(i), 0, v)
+		store.PutNode(uint64(i), 0, v, int64(i))
 		store.SetNeighbors(uint64(i), 0, nil)
-		store.SetNodeMapping(fmt.Sprintf("doc%d", i), uint64(i))
 	}
 
 	dir := b.TempDir()

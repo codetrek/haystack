@@ -14,7 +14,7 @@ type MemNodeStore struct {
 	norms     map[uint64]float32          // original norm, used only to restore vectors
 	neighbors map[uint64]map[int][]uint64 // nodeId -> layer -> neighbor ids
 	docToNode map[int64]uint64
-	nodeDoc   map[uint64]int64 // nodeDoc (not nodeToDoc) for GetDocId
+	nodeDoc   map[uint64]int64 // nodeId -> docId, backs GetDocId
 	entryID   uint64
 	maxLayer  int
 	hasEntry  bool

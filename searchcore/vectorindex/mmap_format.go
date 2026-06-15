@@ -103,6 +103,10 @@ type NodeSlot struct {
 	DocId     int64
 }
 
+// Compile-time size check: NodeSlot must be exactly nodeSlotSize (24) bytes,
+// matching the on-disk slot stride used by the unsafe mmap reinterpretation.
+var _ [24]byte = [unsafe.Sizeof(NodeSlot{})]byte{}
+
 const (
 	nodeFlagDeleted  = 0x01 // slot's node was tombstoned by DeleteNode
 	nodeFlagOccupied = 0x02 // slot holds a real node (set on PutNode / WAL replay)

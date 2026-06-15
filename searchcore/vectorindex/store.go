@@ -27,7 +27,8 @@ type NodeStore interface {
 	GetNodeLevel(id uint64) (int, error)
 	GetNodeId(docId int64) (uint64, bool, error)
 	GetDocId(id uint64) (int64, bool, error)
-	// (SetNodeMapping / DeleteNodeMapping are removed.)
+	// docId↔nodeId is carried inline on the node slot; there are no separate
+	// mapping mutators on this interface.
 	NextNodeId() (uint64, error)
 	// GetNorm returns the precomputed L2 norm for a node's vector.
 	GetNorm(id uint64) (float32, error)

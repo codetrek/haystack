@@ -160,21 +160,35 @@ func TestMmapHNSW_DeleteReinsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// ANN with soft-delete may return fewer than k results when the graph search
-	// path encounters deleted nodes; require at least 1 result and valid ordering.
+	// Sanity: a generic query returns results, none from the deleted docIds (0–9),
+	// and in nondecreasing distance order. With soft-delete, the count may be < k
+	// when the ANN path crosses still-reachable deleted nodes that are then filtered.
 	if len(results) == 0 {
 		t.Fatalf("expected at least 1 result, got 0")
 	}
-
-	// All returned docIds must be from live nodes (not deleted 0–9).
 	for _, r := range results {
 		if r.DocID >= 0 && r.DocID < 10 {
 			t.Errorf("got deleted docId %d in results", r.DocID)
 		}
 	}
-
 	for i := 1; i < len(results); i++ {
 		assert.LessOrEqual(t, results[i-1].Distance, results[i].Distance)
+	}
+
+	// Strong property: every reinserted doc is findable by its own vector and is
+	// returned as the exact nearest neighbor with ~0 distance. This proves the
+	// delete-then-reinsert path produced fully searchable nodes (not just that the
+	// graph stayed non-empty), and is robust to the query-seed sensitivity above.
+	for i := 0; i < 10; i++ {
+		res, err := idx.Search(newVecs[i], 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res) == 0 || res[0].DocID != int64(1000+i) {
+			t.Fatalf("reinserted doc %d not found as nearest: got %+v", 1000+i, res)
+		}
+		assert.InDelta(t, 0.0, res[0].Distance, 1e-4,
+			"reinserted doc %d should match its own vector at ~0 distance", 1000+i)
 	}
 }
 

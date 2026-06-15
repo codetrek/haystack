@@ -3,7 +3,6 @@
 package vectorindex
 
 import (
-	"fmt"
 	"math/rand"
 	"testing"
 )
@@ -30,7 +29,7 @@ func TestHNSWRecallDebug10K(t *testing.T) {
 	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(seed))))
 
 	for i, v := range vecs {
-		if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
+		if err := idx.Insert(int64(i), v); err != nil {
 			t.Fatalf("Insert doc-%d: %v", i, err)
 		}
 	}
@@ -52,14 +51,14 @@ func TestHNSWRecallDebug10K(t *testing.T) {
 			}
 
 			bfResults := bruteForceKNN(q, vecs, k, CosineDistance)
-			bfSet := make(map[uint64]bool, k)
+			bfSet := make(map[int64]bool, k)
 			for _, bfIdx := range bfResults {
-				bfSet[uint64(bfIdx+1)] = true
+				bfSet[int64(bfIdx)] = true
 			}
 
 			hits := 0
 			for _, r := range hnswResults {
-				if bfSet[r.ID] {
+				if bfSet[r.DocID] {
 					hits++
 				}
 			}
