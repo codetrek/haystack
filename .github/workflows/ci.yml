@@ -25,16 +25,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          # Pin to go.mod's toolchain version. go-version-file would install the
+          # `go` directive (1.23.0) and then trigger a second toolchain download
+          # (go1.24.2) at build time — slow, especially on Windows (NTFS + AV).
+          # Keep this in sync with the `toolchain` line in go.mod.
+          go-version: '1.24.2'
+          # Caches both the module cache and the build cache, with correct
+          # per-OS paths — so no separate actions/cache step is needed.
           cache: true
-
-      - name: Cache Go build
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/go-build
-          key: go-build-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum', '**/*.go') }}
-          restore-keys: |
-            go-build-${{ runner.os }}-
 
       - name: Verify Go version
         run: go version
@@ -90,16 +88,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: 'go.mod'
+          # See the searchcore job: pin to go.mod's toolchain version to avoid a
+          # redundant SDK install. Keep in sync with the `toolchain` line.
+          go-version: '1.24.2'
           cache: true
-
-      - name: Cache Go build
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/go-build
-          key: go-build-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum', '**/*.go') }}
-          restore-keys: |
-            go-build-${{ runner.os }}-
 
       - name: Verify Go version
         run: go version
