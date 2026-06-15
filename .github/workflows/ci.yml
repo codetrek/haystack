@@ -43,14 +43,9 @@ jobs:
 
       - name: Coverage gate (Linux)
         # go-cov runs core's full suite and enforces the same bar as the
-        # root module (func 80 / package 85 / total 90).
+        # core module.
         if: matrix.os == 'ubuntu-latest'
         working-directory: core
-        env:
-          THRESHOLD_FUNC: "80"
-          THRESHOLD_PACKAGE: "85"
-          THRESHOLD_PRINT: "85"
-          THRESHOLD_TOTAL: "90"
         run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2
 
       - name: Test (macOS/Windows)
