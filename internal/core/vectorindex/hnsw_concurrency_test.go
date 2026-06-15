@@ -104,6 +104,107 @@ func TestConcurrentSearchOnly(t *testing.T) {
 	wg.Wait()
 }
 
+func TestConcurrentBatchCommitsAndSearch(t *testing.T) {
+	store := NewMemNodeStore()
+	idx := NewHNSWIndex(store)
+
+	const dim = 24
+	var wg sync.WaitGroup
+
+	// 8 goroutines each committing its own batches (no shared batch state).
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(gid)))
+			for round := 0; round < 5; round++ {
+				b := idx.NewBatch()
+				for i := 0; i < 5; i++ {
+					vec := make([]float32, dim)
+					for d := range vec {
+						vec[d] = rng.Float32()
+					}
+					b.Put(fmt.Sprintf("doc-%d-%d-%d", gid, round, i), vec)
+				}
+				if err := b.Commit(); err != nil {
+					t.Errorf("commit g=%d round=%d: %v", gid, round, err)
+					return
+				}
+			}
+		}(g)
+	}
+
+	// 4 concurrent searchers.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			rng := rand.New(rand.NewSource(int64(1000 + gid)))
+			for i := 0; i < 30; i++ {
+				q := make([]float32, dim)
+				for d := range q {
+					q[d] = rng.Float32()
+				}
+				if _, err := idx.Search(q, 5); err != nil {
+					t.Errorf("search: %v", err)
+					return
+				}
+			}
+		}(g)
+	}
+
+	wg.Wait()
+}
+
+func TestSearchNeverSeesPartialBatch(t *testing.T) {
+	store := NewMemNodeStore()
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(3))))
+
+	const dim, batch = 16, 40
+	rng := rand.New(rand.NewSource(9))
+	q := make([]float32, dim)
+	for d := range q {
+		q[d] = rng.Float32()
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		b := idx.NewBatch()
+		for i := 0; i < batch; i++ {
+			v := make([]float32, dim)
+			for d := range v {
+				v[d] = rng.Float32()
+			}
+			b.Put(fmt.Sprintf("doc-%d", i), v)
+		}
+		_ = b.Commit() // one transaction; either all 40 visible or none
+	}()
+
+	// Hammer Search during the commit. Because Commit holds h.mu (write) and
+	// Search holds h.mu (read), Search never overlaps a commit: result count is
+	// the pre-state (0) or the post-state (batch), never in between.
+	for {
+		res, err := idx.Search(q, batch)
+		if err != nil {
+			t.Fatalf("search: %v", err)
+		}
+		if n := len(res); n != 0 && n != batch {
+			t.Fatalf("partial batch observed: %d results (want 0 or %d)", n, batch)
+		}
+		select {
+		case <-done:
+			final, err := idx.Search(q, batch)
+			requireNoError(t, err)
+			if len(final) != batch {
+				t.Fatalf("after commit: %d results, want %d", len(final), batch)
+			}
+			return
+		default:
+		}
+	}
+}
+
 func TestConcurrentInsertDeleteSearch(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)

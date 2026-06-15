@@ -1,6 +1,7 @@
 package vectorindex
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -124,5 +125,148 @@ func TestMmapStoreInitSmallCap(t *testing.T) {
 	// With defaultInitialCapacity=1024, upperCap = 1024/4 = 256.
 	if s.upperCapacity < 64 {
 		t.Errorf("upperCapacity = %d, want >= 64", s.upperCapacity)
+	}
+}
+
+func TestFaultedStoreRejectsWrites(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	// Simulate a recorded fault.
+	s.muWrite.Lock()
+	s.fault(fmt.Errorf("disk on fire"))
+	s.muWrite.Unlock()
+
+	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}); err == nil {
+		t.Fatal("PutNode on a faulted store must return an error")
+	}
+	if err := s.SetNeighbors(0, 0, []uint64{1}); err == nil {
+		t.Fatal("SetNeighbors on a faulted store must return an error")
+	}
+}
+
+func TestTxnCommitDurableAfterCrash(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(0, 0, []float32{1, 2, 3, 4}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetNodeMapping("doc-0", 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.txnCommit(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("committed node must survive crash: %v", err)
+	}
+	if vec[0] != 1 || vec[3] != 4 {
+		t.Fatalf("vec = %v, want [1 2 3 4]", vec)
+	}
+	if s2.meta.NodeCount != 1 {
+		t.Fatalf("NodeCount = %d, want 1", s2.meta.NodeCount)
+	}
+}
+
+func TestTxnAbortFaultsAndDiscardsOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}); err != nil {
+		t.Fatal(err)
+	}
+	// Abort: records a fault, writes NO commit marker.
+	if err := s.txnAbort(fmt.Errorf("boom")); err == nil {
+		t.Fatal("txnAbort must return the fault error")
+	}
+	// Subsequent writes are rejected.
+	if err := s.PutNode(1, 0, []float32{1, 1, 1, 1}); err == nil {
+		t.Fatal("writes after abort must be rejected")
+	}
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if s2.meta.NodeCount != 0 {
+		t.Fatalf("NodeCount = %d, want 0 (aborted txn must not persist)", s2.meta.NodeCount)
+	}
+	if s2.meta.NextNodeId != 0 {
+		t.Fatalf("NextNodeId = %d, want 0", s2.meta.NextNodeId)
+	}
+}
+
+func TestTxnAbortDiscardedAfterGracefulClose(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutNode(0, 0, []float32{9, 9, 9, 9}); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.txnAbort(fmt.Errorf("boom"))
+	// Graceful Close (NOT a crash) must NOT persist the aborted txn.
+	_ = s.Close()
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if s2.meta.NodeCount != 0 {
+		t.Fatalf("NodeCount = %d, want 0 (aborted txn must not survive graceful Close)", s2.meta.NodeCount)
+	}
+	if s2.meta.NextNodeId != 0 {
+		t.Fatalf("NextNodeId = %d, want 0", s2.meta.NextNodeId)
+	}
+}
+
+func TestTxnBeginRejectsNested(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	if err := s.txnBegin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.txnBegin(); err == nil {
+		t.Fatal("nested txnBegin must error (single-level transactions)")
+	}
+	if err := s.txnCommit(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -204,6 +204,17 @@ func (m *MemNodeStore) SetNorm(id uint64, norm float32) error {
 	return nil
 }
 
+// txnBegin is a no-op: MemNodeStore is in-memory and not a durability target.
+func (m *MemNodeStore) txnBegin() error { return nil }
+
+// txnCommit is a no-op. Atomicity for MemNodeStore is bounded by the index
+// write lock held across Batch.Commit (no crash recovery to provide).
+func (m *MemNodeStore) txnCommit() error { return nil }
+
+// txnAbort returns the cause so callers propagate the original error. There is
+// no in-memory rollback (the spec scopes crash-atomicity to MmapStore).
+func (m *MemNodeStore) txnAbort(cause error) error { return cause }
+
 func (m *MemNodeStore) Close() error {
 	return nil
 }

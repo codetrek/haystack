@@ -90,33 +90,41 @@ func (h *HNSWIndex) randomLevel() int {
 	return int(math.Floor(-math.Log(r) * h.mL))
 }
 
-// Insert adds a document's vector to the index (Algorithm 1).
+// runInTxnLocked brackets apply() in a store transaction. On apply error it
+// aborts (which faults a persistent store) and returns the original error;
+// otherwise it commits. Caller must hold h.mu.
+func (h *HNSWIndex) runInTxnLocked(apply func() error) error {
+	if err := h.store.txnBegin(); err != nil {
+		return err
+	}
+	if err := apply(); err != nil {
+		_ = h.store.txnAbort(err)
+		return err
+	}
+	return h.store.txnCommit()
+}
+
+// Insert adds (or replaces) a document's vector. Equivalent to a single-op
+// batch: it wraps one insert in a store transaction.
 func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	return h.runInTxnLocked(func() error { return h.insertOneLocked(docId, vector) })
+}
 
+// insertOneLocked performs upsert-delete (if docId exists) followed by a fresh
+// HNSW insert (Algorithm 1). Caller must hold h.mu AND have an open store
+// transaction; it performs no batch/transaction management itself.
+func (h *HNSWIndex) insertOneLocked(docId string, vector []float32) error {
 	// Upsert: if docId already exists, delete the old node first to avoid
-	// orphan nodes and inconsistent mappings (HAY-005).
+	// orphan nodes and inconsistent mappings (HAY-005). This now runs inside
+	// the same transaction as the insert, so an upsert is atomic.
 	if existingId, found, err := h.store.GetNodeId(docId); err != nil {
 		return fmt.Errorf("failed to check existing docId %q: %v", docId, err)
 	} else if found {
 		if err := h.deleteNodeLocked(existingId, docId); err != nil {
 			return fmt.Errorf("failed to delete existing node for docId %q: %v", docId, err)
 		}
-	}
-
-	// If the store supports batching, wrap this insert in a batch.
-	// Nested calls (e.g. from InsertBatch) just increment depth.
-	bs, batchable := h.store.(BatchableStore)
-	batchStarted := false
-	if batchable {
-		bs.BeginBatch()
-		batchStarted = true
-		defer func() {
-			if batchStarted {
-				bs.DiscardBatch()
-			}
-		}()
 	}
 
 	// Allocate a new node ID.
@@ -145,26 +153,12 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 	epId, maxLayer, err := h.store.GetEntryPoint()
 	if err != nil {
 		// First node — set as entry point and return.
-		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
-			return err
-		}
-		if batchable {
-			batchStarted = false
-			return bs.CommitBatch(true)
-		}
-		return nil
+		return h.store.SetEntryPoint(nodeId, l)
 	}
 
 	// Verify entry point node still exists (may have been deleted).
 	if _, err := h.store.GetVectorRef(epId); err != nil {
-		if err := h.store.SetEntryPoint(nodeId, l); err != nil {
-			return err
-		}
-		if batchable {
-			batchStarted = false
-			return bs.CommitBatch(true)
-		}
-		return nil
+		return h.store.SetEntryPoint(nodeId, l)
 	}
 
 	// Phase 1: From top layer down to l+1, greedy search with ef=1.
@@ -282,37 +276,20 @@ func (h *HNSWIndex) Insert(docId string, vector []float32) error {
 			return err
 		}
 	}
-
-	if batchable {
-		batchStarted = false
-		return bs.CommitBatch(true)
-	}
 	return nil
 }
 
-// InsertItem holds a document ID and its vector for batch insertion.
-type InsertItem struct {
-	DocId  string
-	Vector []float32
-}
-
-// InsertBatch inserts multiple items in a single batch when the store
-// supports batching. The outer batch commits once at the end.
-func (h *HNSWIndex) InsertBatch(items []InsertItem) error {
-	bs, batchable := h.store.(BatchableStore)
-	if batchable {
-		bs.BeginBatch()
-		defer bs.DiscardBatch()
+// deleteOneLocked removes a docId from the graph if present. Caller must hold
+// h.mu AND have an open store transaction.
+func (h *HNSWIndex) deleteOneLocked(docId string) error {
+	nodeId, found, err := h.store.GetNodeId(docId)
+	if err != nil {
+		return err
 	}
-	for _, item := range items {
-		if err := h.Insert(item.DocId, item.Vector); err != nil {
-			return err
-		}
+	if !found {
+		return nil
 	}
-	if batchable {
-		return bs.CommitBatch(true)
-	}
-	return nil
+	return h.deleteNodeLocked(nodeId, docId)
 }
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
@@ -387,20 +364,11 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	return out, nil
 }
 
-// Delete removes a document from the index.
+// Delete removes a document from the index inside a store transaction.
 func (h *HNSWIndex) Delete(docId string) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-
-	nodeId, found, err := h.store.GetNodeId(docId)
-	if err != nil {
-		return err
-	}
-	if !found {
-		return nil
-	}
-
-	return h.deleteNodeLocked(nodeId, docId)
+	return h.runInTxnLocked(func() error { return h.deleteOneLocked(docId) })
 }
 
 // deleteNodeLocked removes a node from the HNSW graph. Caller must hold h.mu.

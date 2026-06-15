@@ -278,6 +278,50 @@ func BenchmarkHNSWSearch(b *testing.B) {
 	}
 }
 
+// BenchmarkHNSWBatchInsert measures per-item throughput of inserting b.N items
+// through a single NewBatch + Commit (one transaction, one fsync). It is the
+// batch-throughput counterpart to BenchmarkHNSWInsert (one txn per item).
+func BenchmarkHNSWBatchInsert(b *testing.B) {
+	const dim = 128
+	rng := rand.New(rand.NewSource(42))
+	vecs := randomVectors(rng, b.N, dim)
+
+	store := NewMemNodeStore()
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(99))))
+
+	b.ResetTimer()
+	batch := idx.NewBatch()
+	for i := 0; i < b.N; i++ {
+		batch.Put(fmt.Sprintf("%d", i), vecs[i])
+	}
+	if err := batch.Commit(); err != nil {
+		b.Fatalf("commit: %v", err)
+	}
+}
+
+// BenchmarkHNSWDelete measures the latency of deleting existing nodes. The
+// index is pre-built with b.N nodes (untimed); the timed loop deletes each.
+func BenchmarkHNSWDelete(b *testing.B) {
+	const dim = 128
+	rng := rand.New(rand.NewSource(42))
+	vecs := randomVectors(rng, b.N, dim)
+
+	store := NewMemNodeStore()
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(99))))
+	for i := 0; i < b.N; i++ {
+		if err := idx.Insert(fmt.Sprintf("%d", i), vecs[i]); err != nil {
+			b.Fatalf("setup insert %d: %v", i, err)
+		}
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := idx.Delete(fmt.Sprintf("%d", i)); err != nil {
+			b.Fatalf("delete %d: %v", i, err)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Recall@10 test with 1000 vectors
 // ---------------------------------------------------------------------------

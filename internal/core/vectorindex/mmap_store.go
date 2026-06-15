@@ -12,14 +12,6 @@ import (
 
 const defaultInitialCapacity = 1024
 
-// SyncMode controls fsync behavior in CommitBatch.
-type SyncMode int
-
-const (
-	SyncImmediate SyncMode = 0 // WAL flush + file sync + msync (default, durable)
-	SyncDeferred  SyncMode = 1 // WAL flush only (caller must call Sync() later)
-)
-
 // MmapStoreOptions configures OpenMmapStore.
 type MmapStoreOptions struct {
 	Dim                int    // vector dimension (required)
@@ -33,8 +25,9 @@ type MmapStoreOptions struct {
 // Concurrency model:
 //
 //   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
-//     DeleteNode, SetNodeMapping, NextNodeId, BeginBatch, CommitBatch,
-//     DiscardBatch) are serialised by muWrite.Lock().
+//     DeleteNode, SetNodeMapping, DeleteNodeMapping, NextNodeId, and the
+//     transaction primitive txnBegin, txnCommit, txnAbort) are serialised by
+//     muWrite.Lock().
 //   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
 //   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
 //   - Grow functions (ensureCapacity / growFile) are called under muWrite
@@ -55,10 +48,10 @@ type MmapStore struct {
 	l0File    osFile
 	upperFile osFile
 
-	// WAL and batch support
+	// WAL and transaction support
 	wal                *WAL
-	batchMode          bool
-	batchDepth         int
+	inTxn              bool  // a store transaction (txnBegin..txnCommit) is open
+	faulted            error // first fatal write error; once set, writes are rejected
 	opsSinceCheckpoint uint64
 	checkpointInterval uint64
 
@@ -66,8 +59,6 @@ type MmapStore struct {
 	docToNode map[string]uint64
 	nodeToDoc map[uint64]string
 	idmapFile osFile // idmap.dat append handle
-
-	syncMode SyncMode
 
 	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
 	muVec   sync.RWMutex
@@ -207,7 +198,11 @@ func (s *MmapStore) Close() error {
 	}
 
 	// 1. Checkpoint: msync + writeMeta + WAL truncate + idmap compact.
-	setErr(s.checkpointLocked())
+	// A faulted store has uncommitted in-place writes; checkpointing here would
+	// persist them and truncate the WAL, defeating crash-recovery discard. Skip it.
+	if s.faulted == nil {
+		setErr(s.checkpointLocked())
+	}
 
 	// 2. Close WAL.
 	if s.wal != nil {
@@ -417,8 +412,103 @@ func (s *MmapStore) loadIdmap() error {
 		off = entryEnd
 	}
 
-	if _, err := f.Seek(0, 2); err != nil {
-		return err
+	return nil
+}
+
+// applyWALRecord applies a single decoded WAL record to mmap + meta state.
+// Caller must hold muWrite (replay holds it implicitly: single-threaded Open).
+// It contains exactly the logic previously inlined in the replayWAL callback.
+func (s *MmapStore) applyWALRecord(typ WalRecordType, payload []byte) error {
+	switch typ {
+	case WalInsert:
+		nodeId, level, vec, norm, _ := DecodeInsert(payload)
+		if err := s.ensureVecCapacity(nodeId); err != nil {
+			return err
+		}
+		if err := s.ensureNodeCapacity(nodeId); err != nil {
+			return err
+		}
+		if err := s.ensureL0Capacity(nodeId); err != nil {
+			return err
+		}
+		vecOff := int64(pageSize) + int64(nodeId)*int64(s.vecSlotSize)
+		for i, v := range vec {
+			binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
+		}
+		nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+		s.nodes[nodeOff] = uint8(level)
+		s.nodes[nodeOff+1] = nodeFlagOccupied
+		s.nodes[nodeOff+2] = 0
+		s.nodes[nodeOff+3] = 0
+		binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
+		if level > 0 {
+			if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
+				return err
+			}
+			slot := s.allocUpperSlot()
+			binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], slot)
+		} else {
+			binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
+		}
+		if nodeId >= s.meta.TotalSlots {
+			s.meta.TotalSlots = nodeId + 1
+		}
+		if nodeId+1 > s.meta.NextNodeId {
+			s.meta.NextNodeId = nodeId + 1
+		}
+		s.meta.NodeCount++
+		if uint32(level) > s.meta.MaxLevel {
+			s.meta.MaxLevel = uint32(level)
+		}
+
+	case WalSetNeighbors:
+		nodeId, layer, neighbors := DecodeSetNeighbors(payload)
+		if layer == 0 {
+			if err := s.setNeighborsL0(nodeId, neighbors); err != nil {
+				return err
+			}
+		} else {
+			if err := s.setNeighborsUpper(nodeId, layer, neighbors); err != nil {
+				return err
+			}
+		}
+
+	case WalSetNorm:
+		nodeId, norm := DecodeSetNorm(payload)
+		if nodeId < s.nodeCapacity {
+			offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+			binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
+		}
+
+	case WalSetEntry:
+		entryId, maxLevel := DecodeSetEntry(payload)
+		s.meta.EntryPoint = entryId
+		s.meta.EntryLevel = uint32(maxLevel)
+		if uint32(maxLevel) > s.meta.MaxLevel {
+			s.meta.MaxLevel = uint32(maxLevel)
+		}
+
+	case WalDelete:
+		nodeId, _ := DecodeDelete(payload)
+		if nodeId < s.nodeCapacity {
+			offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
+			s.nodes[offset+1] |= nodeFlagDeleted
+		}
+		if s.meta.NodeCount > 0 {
+			s.meta.NodeCount--
+		}
+
+	case WalSetMapping:
+		nodeId, docId := DecodeSetMapping(payload)
+		s.docToNode[docId] = nodeId
+		s.nodeToDoc[nodeId] = docId
+
+	case WalDeleteMapping:
+		docId := DecodeDeleteMapping(payload)
+		if nodeId, ok := s.docToNode[docId]; ok {
+			delete(s.nodeToDoc, nodeId)
+		}
+		delete(s.docToNode, docId)
 	}
 	return nil
 }
@@ -428,106 +518,64 @@ func (s *MmapStore) loadIdmap() error {
 // recovery fully reconstructs the index.
 func (s *MmapStore) replayWAL() error {
 	var replayed int
-	prevBatchMode := s.batchMode
-	s.batchMode = true
-	defer func() { s.batchMode = prevBatchMode }()
+	prevInTxn := s.inTxn
+	s.inTxn = true
+	defer func() { s.inTxn = prevInTxn }()
+
+	// Transaction framing: records between WalTxnBegin and its matching
+	// WalTxnCommit are buffered and applied atomically on COMMIT. An
+	// unterminated trailing transaction (BEGIN with no COMMIT) is discarded.
+	// Un-framed records (no open transaction) apply immediately — this keeps
+	// pre-redesign WAL files and single-record streams working.
+	//
+	// Nested BEGIN contract: a WalTxnBegin while a transaction is already open
+	// discards the prior (un-committed) buffer and restarts — consistent with
+	// "uncommitted ⇒ discarded". The write side never emits nested BEGINs
+	// (txnBegin rejects nesting); this is purely defensive on replay.
+	type pending struct {
+		typ     WalRecordType
+		payload []byte
+	}
+	var inTxn bool
+	var buf []pending
 
 	err := s.wal.Replay(s.meta.WalCheckpointLSN, func(lsn uint64, typ WalRecordType, payload []byte) error {
-		replayed++
 		switch typ {
-		case WalInsert:
-			nodeId, level, vec, norm, _ := DecodeInsert(payload)
-
-			// Ensure capacity for all regions before writing.
-			if err := s.ensureVecCapacity(nodeId); err != nil {
-				return err
+		case WalTxnBegin:
+			inTxn = true
+			buf = buf[:0]
+			return nil
+		case WalTxnCommit:
+			if !inTxn {
+				return nil // stray commit — ignore
 			}
-			if err := s.ensureNodeCapacity(nodeId); err != nil {
-				return err
-			}
-			if err := s.ensureL0Capacity(nodeId); err != nil {
-				return err
-			}
-
-			// Write vector to vectors.dat.
-			vecOff := int64(pageSize) + int64(nodeId)*int64(s.vecSlotSize)
-			for i, v := range vec {
-				binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
-			}
-
-			// Write node metadata to nodes.dat (level, flags, norm).
-			nodeOff := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
-			s.nodes[nodeOff] = uint8(level)
-			s.nodes[nodeOff+1] = nodeFlagOccupied // flags: occupied, not deleted
-			s.nodes[nodeOff+2] = 0
-			s.nodes[nodeOff+3] = 0
-			binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
-
-			// If level > 0, allocate an upper slot.
-			if level > 0 {
-				if err := s.ensureUpperCapacity(s.readGraphUpperNextSlot()); err != nil {
+			for _, p := range buf {
+				if err := s.applyWALRecord(p.typ, p.payload); err != nil {
 					return err
 				}
-				slot := s.allocUpperSlot()
-				binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], slot)
-			} else {
-				binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], 0)
+				replayed++
 			}
-
-			// Update meta.
-			if nodeId >= s.meta.TotalSlots {
-				s.meta.TotalSlots = nodeId + 1
+			inTxn = false
+			buf = buf[:0]
+			return nil
+		default:
+			if inTxn {
+				// Defensive copy: Replay currently allocates a fresh payload per
+				// record, but we don't depend on that — own the slice so a future
+				// Replay change cannot silently alias buffered payloads.
+				cp := make([]byte, len(payload))
+				copy(cp, payload)
+				buf = append(buf, pending{typ, cp})
+				return nil
 			}
-			if nodeId+1 > s.meta.NextNodeId {
-				s.meta.NextNodeId = nodeId + 1
-			}
-			s.meta.NodeCount++
-			if uint32(level) > s.meta.MaxLevel {
-				s.meta.MaxLevel = uint32(level)
-			}
-
-		case WalSetNeighbors:
-			nodeId, layer, neighbors := DecodeSetNeighbors(payload)
-			if layer == 0 {
-				if err := s.setNeighborsL0(nodeId, neighbors); err != nil {
-					return err
-				}
-			} else {
-				if err := s.setNeighborsUpper(nodeId, layer, neighbors); err != nil {
-					return err
-				}
-			}
-
-		case WalSetNorm:
-			nodeId, norm := DecodeSetNorm(payload)
-			if nodeId < s.nodeCapacity {
-				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
-				binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
-			}
-
-		case WalSetEntry:
-			entryId, maxLevel := DecodeSetEntry(payload)
-			s.meta.EntryPoint = entryId
-			s.meta.EntryLevel = uint32(maxLevel)
-			if uint32(maxLevel) > s.meta.MaxLevel {
-				s.meta.MaxLevel = uint32(maxLevel)
-			}
-
-		case WalDelete:
-			nodeId, _ := DecodeDelete(payload)
-			if nodeId < s.nodeCapacity {
-				offset := int64(pageSize) + int64(nodeId)*int64(nodeSlotSize)
-				s.nodes[offset+1] |= nodeFlagDeleted
-			}
-			if s.meta.NodeCount > 0 {
-				s.meta.NodeCount--
-			}
+			replayed++
+			return s.applyWALRecord(typ, payload)
 		}
-		return nil
 	})
 	if err != nil {
 		return err
 	}
+	// Unterminated trailing transaction (inTxn still true): buf is dropped.
 	if replayed > 0 {
 		s.rebuildNodeCount()
 		if err := s.syncAll(); err != nil {

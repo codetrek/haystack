@@ -175,17 +175,13 @@ func TestMmapStoreBatchWriteAndRead(t *testing.T) {
 	s := openTestMmapStore(t)
 	defer s.Close()
 
-	s.BeginBatch()
-	assert.Equal(t, 1, s.BatchDepth())
-
+	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < 10; i++ {
 		vec := []float32{float32(i), 0, 0, 0}
 		requireNoError(t, s.PutNode(i, 0, vec))
 		requireNoError(t, s.SetNeighbors(i, 0, []uint64{(i + 1) % 10}))
 	}
-
-	requireNoError(t, s.CommitBatch(true))
-	assert.Equal(t, 0, s.BatchDepth())
+	requireNoError(t, s.txnCommit())
 
 	// Verify all data is readable.
 	for i := uint64(0); i < 10; i++ {
@@ -197,38 +193,6 @@ func TestMmapStoreBatchWriteAndRead(t *testing.T) {
 		requireNoError(t, err)
 		assert.Equal(t, []uint64{(i + 1) % 10}, nbs)
 	}
-}
-
-func TestMmapStoreBatchNesting(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
-
-	s.BeginBatch()
-	assert.Equal(t, 1, s.BatchDepth())
-
-	s.BeginBatch()
-	assert.Equal(t, 2, s.BatchDepth())
-
-	requireNoError(t, s.CommitBatch(false))
-	assert.Equal(t, 1, s.BatchDepth())
-	assert.True(t, s.batchMode) // still in batch
-
-	requireNoError(t, s.CommitBatch(true))
-	assert.Equal(t, 0, s.BatchDepth())
-	assert.False(t, s.batchMode)
-}
-
-func TestMmapStoreDiscardBatch(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
-
-	s.BeginBatch()
-	s.BeginBatch()
-	assert.Equal(t, 2, s.BatchDepth())
-
-	s.DiscardBatch()
-	assert.Equal(t, 0, s.BatchDepth())
-	assert.False(t, s.batchMode)
 }
 
 func TestMmapStoreNextNodeId(t *testing.T) {
@@ -271,23 +235,21 @@ func TestMmapStoreNextNodeIdPersistence(t *testing.T) {
 	assert.Equal(t, uint64(5), id)
 }
 
-func TestDeferredSync_InsertSyncReopen(t *testing.T) {
+func TestTxnInsertSurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
 	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
 	s, err := OpenMmapStore(dir, opts)
 	requireNoError(t, err)
 
-	requireNoError(t, s.SetSyncMode(SyncDeferred))
-
 	const n = 100
+	requireNoError(t, s.txnBegin())
 	for i := 0; i < n; i++ {
 		v := []float32{float32(i), float32(i + 1), float32(i + 2), float32(i + 3)}
 		requireNoError(t, s.SetNodeMapping(fmt.Sprintf("doc-%d", i), uint64(i)))
 		requireNoError(t, s.PutNode(uint64(i), 0, v))
 	}
-
-	requireNoError(t, s.Sync())
+	requireNoError(t, s.txnCommit())
 	requireNoError(t, s.Close())
 
 	s2, err := OpenMmapStore(dir, opts)
@@ -300,25 +262,64 @@ func TestDeferredSync_InsertSyncReopen(t *testing.T) {
 		requireNoError(t, err)
 		assert.Equal(t, v, got, "vector %d mismatch after reopen", i)
 	}
-
 	nodeId, ok, err := s2.GetNodeId("doc-50")
 	requireNoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, uint64(50), nodeId)
 }
 
-func TestSetSyncMode_ErrorDuringActiveBatch(t *testing.T) {
-	s := openTestMmapStore(t)
-	defer s.Close()
+func TestMappingDiscardedOnAbortReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	_ = s.txnAbort(fmt.Errorf("boom"))
+	_ = s.Close() // graceful close of a faulted store must not persist
 
-	requireNoError(t, s.SetSyncMode(SyncDeferred))
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	requireNoError(t, err)
+	defer s2.Close()
+	if _, ok, _ := s2.GetNodeId("doc-0"); ok {
+		t.Fatal("aborted batch's docId mapping must NOT survive reopen (D1 closed)")
+	}
+}
 
-	s.BeginBatch()
-	err := s.SetSyncMode(SyncImmediate)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "batch is active")
+func TestMappingCommittedSurvivesCrash(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	requireNoError(t, s.txnCommit())
+	simulateCrash(s)
 
-	requireNoError(t, s.CommitBatch(false))
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	requireNoError(t, err)
+	defer s2.Close()
+	id, ok, _ := s2.GetNodeId("doc-0")
+	if !ok || id != 0 {
+		t.Fatalf("committed mapping must survive crash: got (%d,%v)", id, ok)
+	}
+}
 
-	requireNoError(t, s.SetSyncMode(SyncImmediate))
+func TestMappingSetThenDeleteInTxnSurvivesAsDeleted(t *testing.T) {
+	dir := t.TempDir()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	requireNoError(t, s.txnBegin())
+	requireNoError(t, s.PutNode(0, 0, []float32{1, 2, 3, 4}))
+	requireNoError(t, s.SetNodeMapping("doc-0", 0))
+	requireNoError(t, s.DeleteNodeMapping("doc-0"))
+	requireNoError(t, s.txnCommit())
+	simulateCrash(s)
+
+	s2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
+	requireNoError(t, err)
+	defer s2.Close()
+	if _, ok, _ := s2.GetNodeId("doc-0"); ok {
+		t.Fatal("set-then-delete in same committed txn must not survive as a mapping")
+	}
 }

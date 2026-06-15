@@ -55,15 +55,13 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 			nBatches := nBase / bs
 			remainder := nBase % bs
 			for i := 0; i < nBatches; i++ {
-				store.BeginBatch()
+				b := idx.NewBatch()
 				for j := 0; j < bs; j++ {
 					vecIdx := i*bs + j
-					if err := idx.Insert(fmt.Sprintf("%d", vecIdx), base[vecIdx]); err != nil {
-						t.Fatalf("insert vector %d: %v", vecIdx, err)
-					}
+					b.Put(fmt.Sprintf("%d", vecIdx), base[vecIdx])
 				}
-				if err := store.CommitBatch(true); err != nil {
-					t.Fatalf("CommitBatch at batch %d: %v", i, err)
+				if err := b.Commit(); err != nil {
+					t.Fatalf("batch Commit at batch %d: %v", i, err)
 				}
 				if (i+1)%200 == 0 {
 					t.Logf("  completed %d/%d batches (%d vectors, elapsed %v)",
@@ -71,15 +69,13 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 				}
 			}
 			if remainder > 0 {
-				store.BeginBatch()
+				b := idx.NewBatch()
 				for j := 0; j < remainder; j++ {
 					vecIdx := nBatches*bs + j
-					if err := idx.Insert(fmt.Sprintf("%d", vecIdx), base[vecIdx]); err != nil {
-						t.Fatalf("insert vector %d: %v", vecIdx, err)
-					}
+					b.Put(fmt.Sprintf("%d", vecIdx), base[vecIdx])
 				}
-				if err := store.CommitBatch(true); err != nil {
-					t.Fatalf("CommitBatch remainder: %v", err)
+				if err := b.Commit(); err != nil {
+					t.Fatalf("batch Commit remainder: %v", err)
 				}
 			}
 			insertElapsed := time.Since(start)
@@ -126,26 +122,19 @@ func TestBenchmark50K_MmapStore(t *testing.T) {
 
 		idx := NewHNSWIndex(store)
 
-		t.Log("Inserting 50K vectors: deferred sync (single bulk)...")
-		if err := store.SetSyncMode(SyncDeferred); err != nil {
-			t.Fatalf("SetSyncMode(Deferred): %v", err)
-		}
+		t.Log("Inserting 50K vectors: single batch bulk insert...")
+		b := idx.NewBatch()
 		start := time.Now()
 		for i, v := range base {
-			if err := idx.Insert(fmt.Sprintf("%d", i), v); err != nil {
-				t.Fatalf("insert vector %d: %v", i, err)
-			}
+			b.Put(fmt.Sprintf("%d", i), v)
 			if (i+1)%10000 == 0 {
-				t.Logf("  inserted %d/%d vectors (elapsed %v)",
+				t.Logf("  staged %d/%d vectors (elapsed %v)",
 					i+1, len(base), time.Since(start).Round(time.Millisecond))
 			}
 		}
 		insertElapsed := time.Since(start)
-		if err := store.Sync(); err != nil {
-			t.Fatalf("store.Sync: %v", err)
-		}
-		if err := store.SetSyncMode(SyncImmediate); err != nil {
-			t.Fatalf("SetSyncMode(Immediate): %v", err)
+		if err := b.Commit(); err != nil {
+			t.Fatalf("batch Commit: %v", err)
 		}
 
 		t.Logf("Insert complete: %v (%.4fms/op)",

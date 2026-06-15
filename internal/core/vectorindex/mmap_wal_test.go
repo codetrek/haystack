@@ -14,23 +14,23 @@ func TestWALAppendAndReplay(t *testing.T) {
 	requireNoError(t, err)
 
 	vec := []float32{1.0, 2.0, 3.0}
-	lsn1, err := w.Append(WalInsert, EncodeInsert(0, 1, vec, 3.74, "doc-0"), false)
+	lsn1, err := w.Append(WalInsert, EncodeInsert(0, 1, vec, 3.74, "doc-0"))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(1), lsn1)
 
-	lsn2, err := w.Append(WalSetNeighbors, EncodeSetNeighbors(0, 0, []uint64{1, 2, 3}), false)
+	lsn2, err := w.Append(WalSetNeighbors, EncodeSetNeighbors(0, 0, []uint64{1, 2, 3}))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(2), lsn2)
 
-	lsn3, err := w.Append(WalSetEntry, EncodeSetEntry(0, 1), false)
+	lsn3, err := w.Append(WalSetEntry, EncodeSetEntry(0, 1))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(3), lsn3)
 
-	lsn4, err := w.Append(WalSetNorm, EncodeSetNorm(0, 5.5), false)
+	lsn4, err := w.Append(WalSetNorm, EncodeSetNorm(0, 5.5))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(4), lsn4)
 
-	lsn5, err := w.Append(WalDelete, EncodeDelete(0, "doc-0"), false)
+	lsn5, err := w.Append(WalDelete, EncodeDelete(0, "doc-0"))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(5), lsn5)
 
@@ -89,7 +89,7 @@ func TestWALReplayAfterLSN(t *testing.T) {
 	requireNoError(t, err)
 
 	for i := 0; i < 10; i++ {
-		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)), false)
+		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)))
 		requireNoError(t, err)
 	}
 	requireNoError(t, w.Close())
@@ -114,7 +114,7 @@ func TestWALTruncatedRecord(t *testing.T) {
 	requireNoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)), false)
+		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)))
 		requireNoError(t, err)
 	}
 	requireNoError(t, w.Close())
@@ -143,7 +143,7 @@ func TestWALCorruptedCRC(t *testing.T) {
 	requireNoError(t, err)
 
 	for i := 0; i < 5; i++ {
-		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)), false)
+		_, err := w.Append(WalSetNorm, EncodeSetNorm(uint64(i), float32(i)))
 		requireNoError(t, err)
 	}
 	requireNoError(t, w.Close())
@@ -296,21 +296,219 @@ func TestWALReplayGrowsDuringReplay(t *testing.T) {
 	assert.Greater(t, s2.vecCapacity, uint64(1500))
 }
 
+func TestWalTxnMarkerConstants(t *testing.T) {
+	// Markers must be distinct from the five data record types and from
+	// each other; replay switches on these exact values.
+	got := map[WalRecordType]string{
+		WalInsert: "insert", WalDelete: "delete", WalSetNeighbors: "neighbors",
+		WalSetEntry: "entry", WalSetNorm: "norm",
+		WalTxnBegin: "begin", WalTxnCommit: "commit",
+	}
+	if len(got) != 7 {
+		t.Fatalf("record type values collide: %v", got)
+	}
+	if WalTxnBegin != 6 || WalTxnCommit != 7 {
+		t.Fatalf("marker values: begin=%d commit=%d, want 6 and 7", WalTxnBegin, WalTxnCommit)
+	}
+}
+
+// openStoreForReplay opens a fresh DotProduct store with the given dim/M.
+func openStoreForReplay(t *testing.T, dir string, dim, m int) *MmapStore {
+	t.Helper()
+	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: dim, M: m, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	return s
+}
+
+// appendRaw appends one WAL record in buffered mode (no fsync), so tests can
+// hand-build txn-framed WAL streams.
+func appendRaw(t *testing.T, s *MmapStore, typ WalRecordType, payload []byte) {
+	t.Helper()
+	if _, err := s.wal.Append(typ, payload); err != nil {
+		t.Fatalf("append %d: %v", typ, err)
+	}
+}
+
+func TestReplayCommittedTxnApplies(t *testing.T) {
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 2, 3, 4}, 0, "doc-0"))
+	appendRaw(t, s, WalTxnCommit, nil)
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s) // skip Close, keep WAL on disk
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("committed insert must be visible: %v", err)
+	}
+	if vec[0] != 1 || vec[3] != 4 {
+		t.Fatalf("vec = %v, want [1 2 3 4]", vec)
+	}
+	if s2.meta.NodeCount != 1 {
+		t.Fatalf("NodeCount = %d, want 1", s2.meta.NodeCount)
+	}
+}
+
+func TestReplayUnterminatedTxnDiscarded(t *testing.T) {
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{9, 9, 9, 9}, 0, "doc-0"))
+	// NO WalTxnCommit — simulates a crash mid-commit.
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	// NOTE: GetVector does NOT check the occupied flag (it returns raw mmap
+	// bytes), so "not visible" is asserted via committed meta state, which is
+	// what the index actually relies on: NextNodeId/NodeCount only ever account
+	// for committed nodes, and Search reaches nodes only via those.
+	if s2.meta.NodeCount != 0 {
+		t.Fatalf("NodeCount = %d, want 0 (uncommitted insert must not apply)", s2.meta.NodeCount)
+	}
+	if s2.meta.NextNodeId != 0 {
+		t.Fatalf("NextNodeId = %d, want 0 (uncommitted insert must not advance allocator)", s2.meta.NextNodeId)
+	}
+}
+
+func TestReplayLegacyUnframedRecordsApply(t *testing.T) {
+	// Records with no surrounding BEGIN/COMMIT (pre-redesign WAL) still apply.
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{5, 6, 7, 8}, 0, "doc-0"))
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("legacy unframed insert must apply: %v", err)
+	}
+	if vec[0] != 5 {
+		t.Fatalf("vec = %v, want [5 6 7 8]", vec)
+	}
+}
+
+func TestReplayTwoConsecutiveCommittedTxns(t *testing.T) {
+	// Primary production sequence: back-to-back framed transactions. The replay
+	// state machine must reset between them so BOTH commits apply.
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{1, 1, 1, 1}, 0, "doc-0"))
+	appendRaw(t, s, WalTxnCommit, nil)
+	appendRaw(t, s, WalTxnBegin, nil)
+	appendRaw(t, s, WalInsert, EncodeInsert(1, 0, []float32{2, 2, 2, 2}, 0, "doc-1"))
+	appendRaw(t, s, WalTxnCommit, nil)
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	v0, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("first committed insert must be visible: %v", err)
+	}
+	if v0[0] != 1 {
+		t.Fatalf("vec0 = %v, want [1 1 1 1]", v0)
+	}
+	v1, err := s2.GetVector(1)
+	if err != nil {
+		t.Fatalf("second committed insert must be visible: %v", err)
+	}
+	if v1[0] != 2 {
+		t.Fatalf("vec1 = %v, want [2 2 2 2]", v1)
+	}
+	if s2.meta.NodeCount != 2 {
+		t.Fatalf("NodeCount = %d, want 2", s2.meta.NodeCount)
+	}
+}
+
+func TestReplayStrayCommitIgnored(t *testing.T) {
+	// A lone WalTxnCommit with no preceding BEGIN must not panic or corrupt
+	// state. A following legacy unframed insert still applies normally.
+	dir := t.TempDir()
+	s := openStoreForReplay(t, dir, 4, 8)
+
+	appendRaw(t, s, WalTxnCommit, nil) // stray commit, no open txn
+	appendRaw(t, s, WalInsert, EncodeInsert(0, 0, []float32{7, 7, 7, 7}, 0, "doc-0"))
+	if err := s.wal.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	simulateCrash(s)
+
+	s2 := openStoreForReplay(t, dir, 4, 8)
+	defer s2.Close()
+
+	vec, err := s2.GetVector(0)
+	if err != nil {
+		t.Fatalf("legacy insert after stray commit must apply: %v", err)
+	}
+	if vec[0] != 7 {
+		t.Fatalf("vec = %v, want [7 7 7 7]", vec)
+	}
+	if s2.meta.NodeCount != 1 {
+		t.Fatalf("NodeCount = %d, want 1 (stray commit must not add a node)", s2.meta.NodeCount)
+	}
+}
+
 func TestWALContinueLSNAfterReopen(t *testing.T) {
 	dir := t.TempDir()
 	w, err := OpenWAL(dir)
 	requireNoError(t, err)
 
-	_, err = w.Append(WalSetNorm, EncodeSetNorm(0, 1.0), false)
+	_, err = w.Append(WalSetNorm, EncodeSetNorm(0, 1.0))
 	requireNoError(t, err)
-	_, err = w.Append(WalSetNorm, EncodeSetNorm(1, 2.0), false)
+	_, err = w.Append(WalSetNorm, EncodeSetNorm(1, 2.0))
 	requireNoError(t, err)
 	requireNoError(t, w.Close())
 
 	w2, err := OpenWAL(dir)
 	requireNoError(t, err)
-	lsn, err := w2.Append(WalSetNorm, EncodeSetNorm(2, 3.0), false)
+	lsn, err := w2.Append(WalSetNorm, EncodeSetNorm(2, 3.0))
 	requireNoError(t, err)
 	assert.Equal(t, uint64(3), lsn)
 	requireNoError(t, w2.Close())
+}
+
+func TestEncodeDecodeMappingRecords(t *testing.T) {
+	nid, doc := uint64(123), "doc-abc"
+	gotID, gotDoc := DecodeSetMapping(EncodeSetMapping(nid, doc))
+	if gotID != nid || gotDoc != doc {
+		t.Fatalf("SetMapping roundtrip: got (%d,%q) want (%d,%q)", gotID, gotDoc, nid, doc)
+	}
+	if got := DecodeDeleteMapping(EncodeDeleteMapping(doc)); got != doc {
+		t.Fatalf("DeleteMapping roundtrip: got %q want %q", got, doc)
+	}
+	// empty docId edge case
+	id2, d2 := DecodeSetMapping(EncodeSetMapping(7, ""))
+	if id2 != 7 || d2 != "" {
+		t.Fatalf("empty-doc roundtrip: got (%d,%q)", id2, d2)
+	}
+	if WalSetMapping != 8 || WalDeleteMapping != 9 {
+		t.Fatalf("marker values: set=%d del=%d want 8,9", WalSetMapping, WalDeleteMapping)
+	}
 }

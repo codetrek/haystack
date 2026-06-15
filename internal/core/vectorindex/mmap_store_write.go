@@ -18,6 +18,10 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	// Convert to stored form (cosine: unit vector) and keep the original norm
 	// for GetVector restore. norm never participates in distance computation.
 	stored, norm := s.metric.prepare(vector)
@@ -26,7 +30,7 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	docId := s.nodeToDoc[id]
 
 	// WAL — record the stored form so replay writes it back verbatim.
-	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, stored, norm, docId), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalInsert, EncodeInsert(id, level, stored, norm, docId)); err != nil {
 		return fmt.Errorf("MmapStore.PutNode: WAL: %w", err)
 	}
 	if s.crashAfterWALWrite != nil {
@@ -49,9 +53,6 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	for i, v := range stored {
 		binary.LittleEndian.PutUint32(s.vectors[vecOff+int64(i*4):], math.Float32bits(v))
 	}
-	if !s.batchMode {
-		mmapSync(s.vectors)
-	}
 
 	// If level > 0, allocate an upper slot.
 	var upperSlotVal uint32
@@ -71,10 +72,6 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32) error {
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+4:], math.Float32bits(norm))
 	binary.LittleEndian.PutUint32(s.nodes[nodeOff+8:], upperSlotVal)
 
-	if !s.batchMode {
-		mmapSync(s.nodes)
-	}
-
 	// Update meta.
 	if id >= s.meta.TotalSlots {
 		s.meta.TotalSlots = id + 1
@@ -92,7 +89,11 @@ func (s *MmapStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
-	if _, err := s.wal.Append(WalSetNeighbors, EncodeSetNeighbors(id, layer, neighbors), s.batchMode); err != nil {
+	if s.faulted != nil {
+		return s.faulted
+	}
+
+	if _, err := s.wal.Append(WalSetNeighbors, EncodeSetNeighbors(id, layer, neighbors)); err != nil {
 		return fmt.Errorf("MmapStore.SetNeighbors: WAL: %w", err)
 	}
 
@@ -123,9 +124,6 @@ func (s *MmapStore) setNeighborsL0(id uint64, neighbors []uint64) error {
 		binary.LittleEndian.PutUint64(s.graphL0[offset+4+int64(i*8):], neighbors[i])
 	}
 
-	if !s.batchMode {
-		mmapSync(s.graphL0)
-	}
 	return nil
 }
 
@@ -160,9 +158,6 @@ func (s *MmapStore) setNeighborsUpper(id uint64, layer int, neighbors []uint64) 
 		binary.LittleEndian.PutUint64(s.graphUpper[layerOffset+4+int64(i*8):], neighbors[i])
 	}
 
-	if !s.batchMode {
-		mmapSync(s.graphUpper)
-	}
 	return nil
 }
 
@@ -171,7 +166,11 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
-	if _, err := s.wal.Append(WalSetNorm, EncodeSetNorm(id, norm), s.batchMode); err != nil {
+	if s.faulted != nil {
+		return s.faulted
+	}
+
+	if _, err := s.wal.Append(WalSetNorm, EncodeSetNorm(id, norm)); err != nil {
 		return fmt.Errorf("MmapStore.SetNorm: WAL: %w", err)
 	}
 
@@ -181,9 +180,6 @@ func (s *MmapStore) SetNorm(id uint64, norm float32) error {
 	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	binary.LittleEndian.PutUint32(s.nodes[offset+4:], math.Float32bits(norm))
 
-	if !s.batchMode {
-		mmapSync(s.nodes)
-	}
 	return s.maybeCheckpoint()
 }
 
@@ -192,7 +188,11 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
-	if _, err := s.wal.Append(WalSetEntry, EncodeSetEntry(id, maxLayer), s.batchMode); err != nil {
+	if s.faulted != nil {
+		return s.faulted
+	}
+
+	if _, err := s.wal.Append(WalSetEntry, EncodeSetEntry(id, maxLayer)); err != nil {
 		return fmt.Errorf("MmapStore.SetEntryPoint: WAL: %w", err)
 	}
 
@@ -204,47 +204,44 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	return s.maybeCheckpoint()
 }
 
-// SetNodeMapping adds a docId ↔ nodeId mapping and persists it to idmap.dat.
+// SetNodeMapping adds a docId ↔ nodeId mapping. The mapping is journaled to the
+// WAL (committed atomically with its transaction); idmap.dat is rewritten only
+// at checkpoint (compactIdmap). Crash recovery rebuilds the maps from the WAL.
 func (s *MmapStore) SetNodeMapping(docId string, nodeId uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
-
+	if s.faulted != nil {
+		return s.faulted
+	}
+	if _, err := s.wal.Append(WalSetMapping, EncodeSetMapping(nodeId, docId)); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.SetNodeMapping: WAL: %w", err))
+	}
 	s.muDoc.Lock()
-	defer s.muDoc.Unlock()
-
 	s.docToNode[docId] = nodeId
 	s.nodeToDoc[nodeId] = docId
-
-	// Append to idmap.dat: NodeId(8) + DocIdLen(2) + DocId(var) + CRC32(4)
-	docBytes := []byte(docId)
-	entry := make([]byte, 10+len(docBytes)+4)
-	binary.LittleEndian.PutUint64(entry[0:], nodeId)
-	binary.LittleEndian.PutUint16(entry[8:], uint16(len(docBytes)))
-	copy(entry[10:], docBytes)
-
-	h := crc32.NewIEEE()
-	h.Write(entry[:10+len(docBytes)])
-	binary.LittleEndian.PutUint32(entry[10+len(docBytes):], h.Sum32())
-
-	if _, err := s.idmapFile.Write(entry); err != nil {
-		return fmt.Errorf("MmapStore.SetNodeMapping: write idmap: %w", err)
-	}
+	s.muDoc.Unlock()
 	return nil
 }
 
-// DeleteNodeMapping removes a docId mapping from memory.
-// idmap.dat is not updated (Phase 3 compact will clean it up).
+// DeleteNodeMapping removes a docId mapping. Journaled to the WAL so the removal
+// is transactional and replayable; idmap.dat is reconciled at checkpoint.
 func (s *MmapStore) DeleteNodeMapping(docId string) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
-	s.muDoc.Lock()
-	defer s.muDoc.Unlock()
+	if s.faulted != nil {
+		return s.faulted
+	}
 
+	if _, err := s.wal.Append(WalDeleteMapping, EncodeDeleteMapping(docId)); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.DeleteNodeMapping: WAL: %w", err))
+	}
+	s.muDoc.Lock()
 	if nodeId, ok := s.docToNode[docId]; ok {
 		delete(s.nodeToDoc, nodeId)
 	}
 	delete(s.docToNode, docId)
+	s.muDoc.Unlock()
 	return nil
 }
 
@@ -253,10 +250,14 @@ func (s *MmapStore) DeleteNode(id uint64) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
 
+	if s.faulted != nil {
+		return s.faulted
+	}
+
 	// Look up docId for WAL record.
 	docId := s.nodeToDoc[id]
 
-	if _, err := s.wal.Append(WalDelete, EncodeDelete(id, docId), s.batchMode); err != nil {
+	if _, err := s.wal.Append(WalDelete, EncodeDelete(id, docId)); err != nil {
 		return fmt.Errorf("MmapStore.DeleteNode: WAL: %w", err)
 	}
 
@@ -285,40 +286,59 @@ func (s *MmapStore) allocUpperSlot() uint32 {
 	return uint32(slot)
 }
 
-// --- BatchableStore implementation ---
+// --- Transaction primitive (internal; used by Batch.Commit) ---
 
-// BeginBatch enters batch mode, deferring sync until CommitBatch.
-func (s *MmapStore) BeginBatch() {
-	s.muWrite.Lock()
-	defer s.muWrite.Unlock()
-
-	s.batchDepth++
-	s.batchMode = true
+// fault records the first fatal write error and returns it. Once faulted, all
+// write methods reject. Recovery is via reopen (transaction-aware replay
+// restores the last committed state). Caller holds muWrite.
+func (s *MmapStore) fault(err error) error {
+	if s.faulted == nil {
+		s.faulted = err
+	}
+	return s.faulted
 }
 
-// CommitBatch exits one level of batch nesting. When depth reaches 0,
-// flushes WAL. In SyncImmediate mode (default), also syncs WAL and msync's
-// all mmap regions. In SyncDeferred mode, only flushes the WAL buffer.
-func (s *MmapStore) CommitBatch(sync bool) error {
+// txnBegin opens a single-level store transaction: writes a WalTxnBegin marker
+// (buffered) and defers all syncing until txnCommit. Nesting is a programming
+// error and returns an error. The caller (Batch.Commit) serializes via the
+// index write lock; muWrite guards store state.
+func (s *MmapStore) txnBegin() error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
-
-	s.batchDepth--
-	if s.batchDepth > 0 {
-		return nil
+	if s.faulted != nil {
+		return s.faulted
 	}
-	s.batchMode = false
-
-	if err := s.wal.Flush(); err != nil {
-		return fmt.Errorf("MmapStore.CommitBatch: WAL flush: %w", err)
+	if s.inTxn {
+		return fmt.Errorf("MmapStore.txnBegin: transaction already open")
 	}
-	if sync && s.syncMode == SyncImmediate {
-		if err := s.wal.Sync(); err != nil {
-			return fmt.Errorf("MmapStore.CommitBatch: WAL sync: %w", err)
-		}
-		if err := s.syncAll(); err != nil {
-			return fmt.Errorf("MmapStore.CommitBatch: mmap sync: %w", err)
-		}
+	if _, err := s.wal.Append(WalTxnBegin, nil); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.txnBegin: WAL: %w", err))
+	}
+	s.inTxn = true
+	return nil
+}
+
+// txnCommit closes the transaction durably: writes a WalTxnCommit marker, then
+// fsyncs the WAL (the atomic commit point), msyncs all mmap regions, and
+// maybe-checkpoints. Any failure faults the store.
+func (s *MmapStore) txnCommit() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+	if s.faulted != nil {
+		return s.faulted
+	}
+	if !s.inTxn {
+		return fmt.Errorf("MmapStore.txnCommit: no open transaction")
+	}
+	s.inTxn = false // the transaction is ending regardless of success/failure
+	if _, err := s.wal.Append(WalTxnCommit, nil); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.txnCommit: WAL append: %w", err))
+	}
+	if err := s.wal.Sync(); err != nil { // flush + fsync = commit point
+		return s.fault(fmt.Errorf("MmapStore.txnCommit: WAL sync: %w", err))
+	}
+	if err := s.syncAll(); err != nil {
+		return s.fault(fmt.Errorf("MmapStore.txnCommit: msync: %w", err))
 	}
 	if s.opsSinceCheckpoint >= s.checkpointInterval {
 		return s.checkpointLocked()
@@ -326,18 +346,16 @@ func (s *MmapStore) CommitBatch(sync bool) error {
 	return nil
 }
 
-// DiscardBatch resets batch state. Note: mmap writes cannot be rolled back.
-func (s *MmapStore) DiscardBatch() {
+// txnAbort records a fault and clears the open-transaction flag WITHOUT writing
+// a commit marker. In-place mmap writes from the partial transaction are not
+// rolled back here; reopening recovers to the pre-transaction state because the
+// unterminated WAL transaction is discarded on replay. Returns the
+// fault error so callers can propagate it.
+func (s *MmapStore) txnAbort(cause error) error {
 	s.muWrite.Lock()
 	defer s.muWrite.Unlock()
-
-	s.batchDepth = 0
-	s.batchMode = false
-}
-
-// BatchDepth returns the current batch nesting depth.
-func (s *MmapStore) BatchDepth() int {
-	return s.batchDepth
+	s.inTxn = false
+	return s.fault(fmt.Errorf("MmapStore.txnAbort: %w", cause))
 }
 
 // syncAll syncs all mmap regions to disk.
@@ -354,36 +372,11 @@ func (s *MmapStore) syncAll() error {
 	return mmapSync(s.graphUpper)
 }
 
-// SetSyncMode sets the sync strategy for CommitBatch.
-// Returns an error if a batch is currently active.
-func (s *MmapStore) SetSyncMode(mode SyncMode) error {
-	s.muWrite.Lock()
-	defer s.muWrite.Unlock()
-	if s.batchDepth > 0 {
-		return fmt.Errorf("MmapStore.SetSyncMode: cannot change sync mode while batch is active (depth=%d)", s.batchDepth)
-	}
-	s.syncMode = mode
-	return nil
-}
-
-// Sync forces WAL sync + msync + checkpoint. Use after bulk inserts with SyncDeferred.
-func (s *MmapStore) Sync() error {
-	s.muWrite.Lock()
-	defer s.muWrite.Unlock()
-	if err := s.wal.Flush(); err != nil {
-		return fmt.Errorf("MmapStore.Sync: WAL flush: %w", err)
-	}
-	if err := s.wal.Sync(); err != nil {
-		return fmt.Errorf("MmapStore.Sync: WAL sync: %w", err)
-	}
-	return s.checkpointLocked()
-}
-
 // maybeCheckpoint increments the ops counter and triggers a checkpoint
 // if the threshold is reached. Caller must hold muWrite.
 func (s *MmapStore) maybeCheckpoint() error {
 	s.opsSinceCheckpoint++
-	if !s.batchMode && s.opsSinceCheckpoint >= s.checkpointInterval {
+	if !s.inTxn && s.opsSinceCheckpoint >= s.checkpointInterval {
 		return s.checkpointLocked()
 	}
 	return nil
@@ -489,8 +482,8 @@ func (s *MmapStore) compactIdmap() error {
 		return err
 	}
 
-	// Reopen idmap for append.
-	nf, err := fsOpenFile(path, os.O_RDWR|os.O_APPEND, 0644)
+	// Reopen idmap handle (lifecycle/Close tracking only; writes go through compactIdmap).
+	nf, err := fsOpenFile(path, os.O_RDWR, 0644)
 	if err != nil {
 		s.muDoc.Unlock()
 		return err

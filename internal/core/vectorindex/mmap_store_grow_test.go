@@ -74,12 +74,12 @@ func TestMmapStoreGrowConcurrent(t *testing.T) {
 
 	// Pre-populate some data (batched: this is just setup, the concurrent grow
 	// below is what's under test, so avoid a per-insert msync here).
-	s.BeginBatch()
+	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < 100; i++ {
 		vec := []float32{float32(i), 0, 0, 0}
 		requireNoError(t, s.PutNode(i, 0, vec))
 	}
-	requireNoError(t, s.CommitBatch(true))
+	requireNoError(t, s.txnCommit())
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, 20)

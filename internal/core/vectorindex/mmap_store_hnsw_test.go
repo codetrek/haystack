@@ -232,19 +232,18 @@ func TestMmapHNSW_Upsert(t *testing.T) {
 // Task 2: Persistence verification tests
 // ---------------------------------------------------------------------------
 
-// mmapHNSWSearchResults runs search and returns results for comparison.
-// insertAllBatch builds an index from vecs via a single InsertBatch using doc
+// insertAllBatch builds an index from vecs via a single batch using doc
 // IDs "doc-%d". For MmapStore this collapses ~N per-insert WAL syncs into one,
 // which is far faster than a serial Insert loop while producing an identical
 // graph (same insertion order → same random levels → same topology).
 func insertAllBatch(t *testing.T, idx *HNSWIndex, vecs [][]float32) {
 	t.Helper()
-	items := make([]InsertItem, len(vecs))
+	b := idx.NewBatch()
 	for i, v := range vecs {
-		items[i] = InsertItem{DocId: fmt.Sprintf("doc-%d", i), Vector: v}
+		b.Put(fmt.Sprintf("doc-%d", i), v)
 	}
-	if err := idx.InsertBatch(items); err != nil {
-		t.Fatalf("InsertBatch (%d items): %v", len(vecs), err)
+	if err := b.Commit(); err != nil {
+		t.Fatalf("Batch.Commit (%d items): %v", len(vecs), err)
 	}
 }
 
@@ -507,17 +506,13 @@ func TestMmapHNSW_WALReplayE2E(t *testing.T) {
 		idx := NewHNSWIndex(store,
 			WithRand(rand.New(rand.NewSource(hnswSeed))))
 
-		// Build under a batch: defers the per-op msync (the dominant cost on
-		// Windows) without weakening the test — CommitBatch(false) flushes the
-		// WAL but does NOT msync the mmaps, so recovery still has to replay.
-		store.BeginBatch()
+		// Build using a single index batch: all inserts committed as one durable txn.
+		b := idx.NewBatch()
 		for i, v := range vecs {
-			if err := idx.Insert(fmt.Sprintf("doc-%d", i), v); err != nil {
-				t.Fatalf("Insert doc-%d: %v", i, err)
-			}
+			b.Put(fmt.Sprintf("doc-%d", i), v)
 		}
-		if err := store.CommitBatch(false); err != nil {
-			t.Fatalf("CommitBatch: %v", err)
+		if err := b.Commit(); err != nil {
+			t.Fatalf("batch Commit: %v", err)
 		}
 
 		preResults = mmapHNSWSearchResults(t, idx, queries, k)
@@ -999,7 +994,55 @@ func TestMmapHNSW_ExportRecall(t *testing.T) {
 	assert.Greater(t, recall, 0.95, "exported MmapStore recall@10 should be > 0.95")
 }
 
-// TestMmapHNSW_ExportThenInsertDelete verifies incremental ops work after export.
+func TestBatchCommitDurableAfterCrash(t *testing.T) {
+	dir := t.TempDir()
+	const N, dim = 60, 16
+	store, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: dim, M: 16, CheckpointInterval: 1_000_000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(7))))
+
+	rng := rand.New(rand.NewSource(1))
+	vecs := make([][]float32, N)
+	b := idx.NewBatch()
+	for i := 0; i < N; i++ {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		vecs[i] = v
+		b.Put(fmt.Sprintf("doc-%d", i), v)
+	}
+	if err := b.Commit(); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	simulateCrash(store) // no Close — committed WAL transaction must survive
+
+	store2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: dim, M: 16})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store2.Close()
+	idx2 := NewHNSWIndex(store2, WithRand(rand.New(rand.NewSource(7))))
+
+	// Every committed doc is its own nearest neighbor after recovery.
+	for i := 0; i < N; i++ {
+		res, err := idx2.Search(vecs[i], 1)
+		if err != nil {
+			t.Fatalf("search %d: %v", i, err)
+		}
+		if len(res) == 0 {
+			t.Fatalf("doc-%d not found after crash recovery", i)
+		}
+		if res[0].Distance > 1e-4 {
+			t.Fatalf("doc-%d nearest distance %f, want ~0", i, res[0].Distance)
+		}
+	}
+	if store2.meta.NodeCount != N {
+		t.Fatalf("NodeCount = %d, want %d", store2.meta.NodeCount, N)
+	}
+}
 func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 	const (
 		n       = 500
@@ -1034,23 +1077,18 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 		WithEfConstruction(200),
 		WithRand(rand.New(rand.NewSource(hnswSeed))))
 
-	// Batch the post-export inserts + deletes: each HNSW op is a PutNode plus
-	// several SetNeighbors, and a per-op msync makes this ~13s on Windows.
-	// Batching defers the sync (one CommitBatch) without changing what's tested.
-	mmapStore.BeginBatch()
+	// Use an index-level batch to group post-export inserts + deletes: each HNSW op
+	// is a PutNode plus several SetNeighbors. One batch Commit defers all syncing.
+	b := mmapIdx.NewBatch()
 	for i := n; i < n+nExtra; i++ {
-		if err := mmapIdx.Insert(fmt.Sprintf("doc-%d", i), baseVecs[i]); err != nil {
-			t.Fatalf("Post-export insert doc-%d: %v", i, err)
-		}
+		b.Put(fmt.Sprintf("doc-%d", i), baseVecs[i])
 	}
 
 	for i := 0; i < nDelete; i++ {
-		if err := mmapIdx.Delete(fmt.Sprintf("doc-%d", i)); err != nil {
-			t.Fatalf("Post-export delete doc-%d: %v", i, err)
-		}
+		b.Delete(fmt.Sprintf("doc-%d", i))
 	}
-	if err := mmapStore.CommitBatch(true); err != nil {
-		t.Fatalf("CommitBatch: %v", err)
+	if err := b.Commit(); err != nil {
+		t.Fatalf("batch Commit: %v", err)
 	}
 
 	for i := 0; i < nDelete; i++ {
@@ -1068,4 +1106,38 @@ func TestMmapHNSW_ExportThenInsertDelete(t *testing.T) {
 	expectedCount := uint64(n + nExtra - nDelete)
 	assert.Equal(t, expectedCount, mmapStore.meta.NodeCount,
 		"node count should reflect inserts and deletes")
+}
+
+func TestIndexBatchAbortNoPhantomMapping(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: 8, M: 16, CheckpointInterval: 1_000_000})
+	requireNoError(t, err)
+	idx := NewHNSWIndex(store, WithRand(rand.New(rand.NewSource(11))))
+
+	// Commit one doc.
+	requireNoError(t, idx.Insert("doc-keep", []float32{1, 0, 0, 0, 0, 0, 0, 0}))
+
+	// A batch that will crash before commit (simulate via a fresh batch whose
+	// records we leave uncommitted): drive the store directly to model a crash.
+	requireNoError(t, store.txnBegin())
+	id, _ := store.NextNodeId()
+	requireNoError(t, store.PutNode(id, 0, []float32{0, 1, 0, 0, 0, 0, 0, 0}))
+	requireNoError(t, store.SetNodeMapping("doc-crash", id))
+	// crash WITHOUT txnCommit
+	simulateCrash(store)
+
+	store2, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: 8, M: 16})
+	requireNoError(t, err)
+	defer store2.Close()
+	idx2 := NewHNSWIndex(store2, WithRand(rand.New(rand.NewSource(11))))
+
+	if _, ok, _ := store2.GetNodeId("doc-crash"); ok {
+		t.Fatal("uncommitted mapping doc-crash must not survive (D1 closed)")
+	}
+	if _, ok, _ := store2.GetNodeId("doc-keep"); !ok {
+		t.Fatal("previously committed mapping doc-keep must survive")
+	}
+	res, err := idx2.Search([]float32{1, 0, 0, 0, 0, 0, 0, 0}, 1)
+	requireNoError(t, err)
+	requireLen(t, res, 1)
 }

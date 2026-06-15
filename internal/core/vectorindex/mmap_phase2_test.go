@@ -99,11 +99,11 @@ func TestMmapStoreGrowUpperGraph(t *testing.T) {
 	// Each level>0 node allocates one upper slot. Upper starts at cap/4 = 256 (for default 1024).
 	// We need ~256+ upper slots to trigger a grow. Batched so the grow still fires
 	// without paying a per-insert msync (the heaviest cost on Windows).
-	s.BeginBatch()
+	requireNoError(t, s.txnBegin())
 	for i := uint64(0); i < initialUpperCap+10; i++ {
 		requireNoError(t, s.PutNode(i, 1, vec))
 	}
-	requireNoError(t, s.CommitBatch(true))
+	requireNoError(t, s.txnCommit())
 
 	assert.Greater(t, s.upperCapacity, initialUpperCap, "upper capacity should have grown")
 }
@@ -305,10 +305,10 @@ func TestMmapStoreRebuildNodeCount(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CommitBatch exercises WAL flush + syncAll paths
+// txnCommit exercises WAL flush + syncAll paths
 // ---------------------------------------------------------------------------
 
-func TestMmapStoreCommitBatchSyncs(t *testing.T) {
+func TestMmapStoreTxnCommitSyncs(t *testing.T) {
 	dir := t.TempDir()
 	opts := MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4}
 
@@ -316,12 +316,12 @@ func TestMmapStoreCommitBatchSyncs(t *testing.T) {
 	requireNoError(t, err)
 	defer s.Close()
 
-	s.BeginBatch()
+	requireNoError(t, s.txnBegin())
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
 	for i := uint64(0); i < 5; i++ {
 		requireNoError(t, s.PutNode(i, 0, vec))
 	}
-	requireNoError(t, s.CommitBatch(true))
+	requireNoError(t, s.txnCommit())
 
 	// After commit, data should be readable.
 	for i := uint64(0); i < 5; i++ {

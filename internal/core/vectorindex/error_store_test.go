@@ -150,6 +150,10 @@ func (e *errorStore) SetNorm(id uint64, norm float32) error {
 	return e.inner.SetNorm(id, norm)
 }
 
+func (e *errorStore) txnBegin() error            { return e.inner.txnBegin() }
+func (e *errorStore) txnCommit() error           { return e.inner.txnCommit() }
+func (e *errorStore) txnAbort(cause error) error { return e.inner.txnAbort(cause) }
+
 func (e *errorStore) Close() error {
 	if err := e.getErr(e.CloseErr); err != nil {
 		return err
@@ -378,22 +382,22 @@ func TestInsertWithCosineDistanceMultiNode(t *testing.T) {
 }
 
 // =====================================================================
-// InsertBatch error paths
+// Batch error paths
 // =====================================================================
 
-func TestInsertBatchPropagatesError(t *testing.T) {
+func TestBatchCommitPropagatesError(t *testing.T) {
 	es := newErrorStore()
 	idx := NewHNSWIndex(es)
 
-	items := []InsertItem{
-		{DocId: "a", Vector: []float32{1, 0}},
-		{DocId: "b", Vector: []float32{0, 1}},
-	}
+	b := idx.NewBatch()
+	b.Put("a", []float32{1, 0})
+	b.Put("b", []float32{0, 1})
 
 	es.PutNodeErr = fmt.Errorf("injected: PutNode in batch")
-	err := idx.InsertBatch(items)
+	err := b.Commit()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "PutNode")
+	assert.Equal(t, 0, b.Len(), "batch must be drained after a failed Commit")
 }
 
 // Delete a doc that was never inserted — should be a no-op.
