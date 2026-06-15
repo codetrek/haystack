@@ -51,7 +51,7 @@ jobs:
           THRESHOLD_PACKAGE: "85"
           THRESHOLD_PRINT: "85"
           THRESHOLD_TOTAL: "90"
-        run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.1
+        run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2
 
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
