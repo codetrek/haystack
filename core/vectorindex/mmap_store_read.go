@@ -53,6 +53,15 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 // algorithm's skip-on-error logic keeps dead nodes out of search navigation and
 // entry-point selection (mirrors GetDocId's guard).
 func (s *MmapStore) nodeLive(id uint64) bool {
+	// A faulted store has un-rolled-back in-place writes from an aborted/crashed
+	// transaction (inflated TotalSlots, leaked Occupied bytes), so no node can be
+	// trusted as live until a reopen replays only committed records. Recovery is
+	// via reopen; reject every node here so the live instance stops serving
+	// uncommitted state (VEC-009). Safe to read s.faulted: every nodeLive caller
+	// holds muWrite.RLock, which excludes fault() (muWrite.Lock).
+	if s.faulted != nil {
+		return false
+	}
 	if id >= s.nodeCapacity || id >= s.meta.TotalSlots {
 		return false
 	}
@@ -89,6 +98,15 @@ func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
 }
 
 // GetNeighbors returns the neighbor list for the given node and layer.
+//
+// Unlike the other read accessors, this is intentionally NOT gated on a faulted
+// store (the VEC-009 guard). It reads under muGraph.RLock, not muWrite, so
+// testing s.faulted here would either race with fault() (muWrite.Lock) or need a
+// lock-order-inverting muWrite acquisition (writers take muWrite then muGraph in
+// grow → deadlock). Every in-tree caller is already gated upstream on a faulted
+// store: Search returns at GetEntryPoint (faulted) before reaching GetNeighbors,
+// and write paths reject at txnBegin. A direct external caller on a faulted
+// store may still observe uncommitted edges; recovery is via reopen.
 func (s *MmapStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 	s.muGraph.RLock()
 	defer s.muGraph.RUnlock()
@@ -203,20 +221,72 @@ func (s *MmapStore) GetNodeLevel(id uint64) (int, error) {
 // GetEntryPoint returns the entry point node ID and its level.
 func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 	s.muWrite.RLock()
+	if s.faulted != nil {
+		s.muWrite.RUnlock()
+		return 0, 0, s.faulted // VEC-009: don't serve an aborted/uncommitted entry point
+	}
 	ep := s.meta.EntryPoint
 	el := s.meta.EntryLevel
 	s.muWrite.RUnlock()
 
 	if ep == ^uint64(0) {
-		return 0, 0, fmt.Errorf("MmapStore.GetEntryPoint: no entry point set")
+		return 0, 0, errNoEntryPoint
 	}
 	return ep, int(el), nil
+}
+
+// HighestLiveNodeExcluding scans nodes.dat for the highest-level live node other
+// than `exclude`. Live == occupied && !deleted && id < TotalSlots (same liveness
+// test as nodeLive / GetDocId; rejects zombie/aborted-txn slots). The scan is
+// inlined under muWrite.RLock and deliberately does NOT call nodeLive/
+// GetNodeLevel — those re-take muWrite.RLock, and a re-entrant RLock can deadlock
+// against a queued writer. The ascending-index scan keeps the lowest id at the
+// max level (deterministic, matching MemNodeStore's tie-break).
+func (s *MmapStore) HighestLiveNodeExcluding(exclude uint64) (uint64, int, bool, error) {
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
+
+	if s.faulted != nil {
+		return 0, 0, false, s.faulted // VEC-009: don't surface aborted-txn nodes on a faulted store
+	}
+
+	bestID := uint64(0)
+	bestLevel := -1
+	found := false
+	total := s.meta.TotalSlots
+	if total > s.nodeCapacity {
+		total = s.nodeCapacity // defensive: TotalSlots <= capacity normally
+	}
+	for i := uint64(0); i < total; i++ {
+		if i == exclude {
+			continue
+		}
+		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
+		flags := s.nodes[off+1] // Flags is byte 1
+		if flags&nodeFlagOccupied == 0 || flags&nodeFlagDeleted != 0 {
+			continue
+		}
+		lvl := int(s.nodes[off]) // Level is byte 0
+		if !found || lvl > bestLevel {
+			bestID = i
+			bestLevel = lvl
+			found = true
+		}
+	}
+	if !found {
+		return 0, 0, false, nil
+	}
+	return bestID, bestLevel, true, nil
 }
 
 // GetNodeId looks up the node ID for a document ID.
 // Triggers a lazy build of docToNode on first call (write-path only; held under muWrite).
 func (s *MmapStore) GetNodeId(docId int64) (uint64, bool, error) {
 	s.muWrite.Lock()
+	if s.faulted != nil {
+		s.muWrite.Unlock()
+		return 0, false, s.faulted // VEC-009: don't map docIds on a faulted store
+	}
 	s.ensureDocToNode()
 	s.muWrite.Unlock()
 
@@ -239,6 +309,9 @@ func (s *MmapStore) GetDocId(id uint64) (int64, bool, error) {
 	s.muWrite.RLock()
 	defer s.muWrite.RUnlock()
 
+	if s.faulted != nil {
+		return 0, false, s.faulted // VEC-009: don't surface aborted-txn docIds
+	}
 	if id >= s.nodeCapacity {
 		return 0, false, fmt.Errorf("MmapStore.GetDocId: id %d out of range (cap %d)", id, s.nodeCapacity)
 	}
