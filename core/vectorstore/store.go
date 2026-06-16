@@ -131,7 +131,15 @@ func (s *Store) recover() error {
 	m, err := readManifest(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s.replay() // fresh / Phase-1 store: head-only WAL replay
+			// Fresh / Phase-1 store, OR a crash during the very FIRST seal (segment
+			// dir written, manifest not yet committed). Sweep orphans before the
+			// head-only WAL replay: with no committed manifest, every seg-* dir is
+			// unreferenced and must be reclaimed, else a first-seal crash leaks a
+			// half-written segment dir forever (appendix #3).
+			if serr := s.sweepOrphansLocked(&manifest{}); serr != nil {
+				return serr
+			}
+			return s.replay()
 		}
 		return err
 	}
