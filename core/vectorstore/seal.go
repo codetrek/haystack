@@ -7,6 +7,13 @@ import (
 	"os"
 )
 
+// maxSealRows caps the row count an opener will trust from a (possibly corrupt)
+// vectors.dat header before allocating slices sized from it. A real segment is
+// the dumped in-memory head, so this is far above any legitimate seal while
+// still rejecting a garbage Count that would otherwise drive a bogus-size make()
+// or overflow the required-size arithmetic. ~1.07e9 rows.
+const maxSealRows = 1 << 30
+
 // writeSealedSegment dumps a (frozen) head segment into segDir as four fsynced
 // data files: vectors.dat, slotdoc.dat, tomb.dat, payload.dat. Files are written
 // and fsynced individually, then the directory is fsynced so the entries are
@@ -168,13 +175,28 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Header guard: need >=4 bytes for the magic slice and >=16 bytes to read
+	// Dim (uint32) + Count (uint64). A torn/short file must error, not panic.
+	if len(vmap) < 16 {
+		_ = mmapFree(vmap)
+		return nil, fmt.Errorf("seal: vectors.dat too short (%d bytes, need >=16) in %s", len(vmap), segDir)
+	}
 	if string(vmap[0:4]) != string(magicVectors[:]) {
 		_ = mmapFree(vmap)
 		return nil, fmt.Errorf("seal: bad vectors magic in %s", segDir)
 	}
+	dim := int(binary.LittleEndian.Uint32(vmap[4:8]))
+	nRows := binary.LittleEndian.Uint64(vmap[8:16])
+	// Reject bogus dim/count that would overflow or index past the map. Compute
+	// the required size in uint64 so a corrupt huge Count cannot wrap on int.
+	need := uint64(segPageSize) + nRows*uint64(dim+1)*4
+	if dim < 0 || nRows > uint64(maxSealRows) || need < uint64(segPageSize) || uint64(len(vmap)) < need {
+		_ = mmapFree(vmap)
+		return nil, fmt.Errorf("seal: vectors.dat truncated/corrupt in %s (dim=%d count=%d size=%d need=%d)", segDir, dim, nRows, len(vmap), need)
+	}
 	s.vecMap = vmap
-	s.dim = int(binary.LittleEndian.Uint32(vmap[4:8]))
-	s.n = int(binary.LittleEndian.Uint64(vmap[8:16]))
+	s.dim = dim
+	s.n = int(nRows)
 	s.rowF32 = s.dim + 1
 	s.vecBase = segPageSize
 
@@ -184,9 +206,24 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 		s.close()
 		return nil, err
 	}
+	if len(sd) < 16 {
+		s.close()
+		return nil, fmt.Errorf("seal: slotdoc.dat too short (%d bytes, need >=16) in %s", len(sd), segDir)
+	}
 	if string(sd[0:4]) != string(magicSlotDoc[:]) {
 		s.close()
 		return nil, fmt.Errorf("seal: bad slotdoc magic in %s", segDir)
+	}
+	// slotdoc declares its own Count; it must agree with vectors' count and the
+	// file must be long enough to hold n int64 docIds after the header.
+	sdCount := binary.LittleEndian.Uint64(sd[8:16])
+	if sdCount != nRows {
+		s.close()
+		return nil, fmt.Errorf("seal: slotdoc.dat count %d != vectors count %d in %s", sdCount, nRows, segDir)
+	}
+	if uint64(len(sd)) < uint64(segPageSize)+nRows*8 {
+		s.close()
+		return nil, fmt.Errorf("seal: slotdoc.dat truncated in %s (size=%d need=%d)", segDir, len(sd), uint64(segPageSize)+nRows*8)
 	}
 	s.slotDocs = make([]int64, s.n)
 	for i := 0; i < s.n; i++ {
@@ -211,13 +248,31 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 		s.close()
 		return nil, err
 	}
+	if len(tmap) < 16 {
+		_ = mmapFree(tmap)
+		s.close()
+		return nil, fmt.Errorf("seal: tomb.dat too short (%d bytes, need >=16) in %s", len(tmap), segDir)
+	}
 	if string(tmap[0:4]) != string(magicTomb[:]) {
 		_ = mmapFree(tmap)
 		s.close()
 		return nil, fmt.Errorf("seal: bad tomb magic in %s", segDir)
 	}
+	tWords := binary.LittleEndian.Uint64(tmap[8:16])
+	// The bitmap must cover every slot AND the mapped file must actually hold the
+	// declared words, else tombGet would index past the map and panic.
+	needWords := (nRows + 63) / 64
+	if needWords == 0 {
+		needWords = 1
+	}
+	tNeed := uint64(segPageSize) + tWords*8
+	if tWords < needWords || tNeed < uint64(segPageSize) || uint64(len(tmap)) < tNeed {
+		_ = mmapFree(tmap)
+		s.close()
+		return nil, fmt.Errorf("seal: tomb.dat truncated/corrupt in %s (words=%d needWords=%d size=%d need=%d)", segDir, tWords, needWords, len(tmap), tNeed)
+	}
 	s.tombMap = tmap
-	s.tombWords = int(binary.LittleEndian.Uint64(tmap[8:16]))
+	s.tombWords = int(tWords)
 
 	// payload.dat (read-only mmap)
 	pf, err := fsOpenFile(segFilePath(segDir, "payload.dat"), os.O_RDONLY, 0)
@@ -237,22 +292,48 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 		s.close()
 		return nil, err
 	}
+	if len(pmap) < 16 {
+		_ = mmapFree(pmap)
+		s.close()
+		return nil, fmt.Errorf("seal: payload.dat too short (%d bytes, need >=16) in %s", len(pmap), segDir)
+	}
 	if string(pmap[0:4]) != string(magicPayload[:]) {
 		_ = mmapFree(pmap)
 		s.close()
 		return nil, fmt.Errorf("seal: bad payload magic in %s", segDir)
 	}
+	plCount := binary.LittleEndian.Uint64(pmap[8:16])
+	if plCount != nRows {
+		_ = mmapFree(pmap)
+		s.close()
+		return nil, fmt.Errorf("seal: payload.dat count %d != vectors count %d in %s", plCount, nRows, segDir)
+	}
+	// The lengths array (n uint32) must fit after the header before we prefix-sum.
+	lensNeed := uint64(segPageSize) + nRows*4
+	if lensNeed < uint64(segPageSize) || uint64(len(pmap)) < lensNeed {
+		_ = mmapFree(pmap)
+		s.close()
+		return nil, fmt.Errorf("seal: payload.dat truncated lens in %s (size=%d need=%d)", segDir, len(pmap), lensNeed)
+	}
 	s.plMap = pmap
 	s.plLens = make([]uint32, s.n)
 	s.plOffsets = make([]int, s.n)
-	off := 0
+	var off uint64
 	for i := 0; i < s.n; i++ {
 		l := binary.LittleEndian.Uint32(pmap[segPageSize+i*4:])
 		s.plLens[i] = l
-		s.plOffsets[i] = off
-		off += int(l)
+		s.plOffsets[i] = int(off)
+		off += uint64(l)
 	}
 	s.plBase = segPageSize + s.n*4
+	// The concatenated payload bytes must actually be present: data region must
+	// hold sum(lens) bytes after the lens array, else payload() panics on a short
+	// or torn file.
+	plNeed := uint64(s.plBase) + off
+	if plNeed < uint64(s.plBase) || uint64(len(pmap)) < plNeed {
+		s.close()
+		return nil, fmt.Errorf("seal: payload.dat truncated bytes in %s (size=%d need=%d)", segDir, len(pmap), plNeed)
+	}
 	return s, nil
 }
 
