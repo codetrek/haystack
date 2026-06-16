@@ -1,6 +1,9 @@
 package vectorstore
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestStore_OpenClose(t *testing.T) {
 	s := openTestStore(t, Cosine)
@@ -283,5 +286,94 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 	requireNoError(t, s2.Put("c", []float32{1, 0, 0}, nil))
 	if s2.idToDoc["c"] == docA {
 		t.Fatalf("new id c collided with recovered docId %d — nextId not resynced", docA)
+	}
+}
+
+func TestStore_CloseSurfacesWALError(t *testing.T) {
+	dir := t.TempDir()
+	store := newTestKV(t)
+	withOpenFileFault(t, func(f *faultFile) { f.failClose = true })
+	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	if err := s.Close(); err == nil {
+		t.Fatal("Close should surface the injected WAL close error")
+	}
+}
+
+func TestStore_OpenWALScanError(t *testing.T) {
+	dir := t.TempDir()
+	store := newTestKV(t)
+	withOpenFileFault(t, func(f *faultFile) { f.failTruncate = true }) // scanLSN truncates
+	if _, err := Open(Options{Dir: dir, KV: store, Metric: Cosine}); err == nil {
+		t.Fatal("Open should fail when WAL scan truncate fails")
+	}
+}
+
+func TestStore_PutSyncError(t *testing.T) {
+	dir := t.TempDir()
+	store := newTestKV(t)
+	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	defer s.Close()
+	// Replace the WAL's file with a Sync-faulting wrapper after open so the
+	// Put's fsync fails.
+	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
+	if err := s.Put("a", []float32{1, 0}, nil); err == nil {
+		t.Fatal("Put should surface a WAL Sync failure")
+	}
+}
+
+func TestStore_DeleteSyncError(t *testing.T) {
+	dir := t.TempDir()
+	store := newTestKV(t)
+	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	defer s.Close()
+	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
+	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
+	if err := s.Delete("a"); err == nil {
+		t.Fatal("Delete should surface a WAL Sync failure")
+	}
+}
+
+func TestStore_OpenIdtableError(t *testing.T) {
+	dir := t.TempDir()
+	kvStore := &faultKV{Store: newTestKV(t), getErr: errors.New("kv get boom")}
+	// idtable.New issues a startup Get for nextId; faulting it fails Open before
+	// the WAL is even opened.
+	if _, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine}); err == nil {
+		t.Fatal("Open should fail when the idtable startup read fails")
+	}
+}
+
+func TestStore_PutAllocError(t *testing.T) {
+	dir := t.TempDir()
+	kvStore := &faultKV{Store: newTestKV(t)}
+	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	defer s.Close()
+	// Now make GetId fail (IsClosed) so docIDForAlloc errors on the Put path.
+	kvStore.isClosed = true
+	if err := s.Put("a", []float32{1, 0}, nil); err == nil {
+		t.Fatal("Put should surface a docId-allocation failure")
+	}
+}
+
+func TestStore_OpenReplayError(t *testing.T) {
+	dir := t.TempDir()
+	base := newTestKV(t)
+	kvStore := &faultKV{Store: base}
+
+	// Seed the WAL with one record so replay has work to do.
+	s1, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	requireNoError(t, s1.Put("a", []float32{1, 0}, nil))
+	requireNoError(t, s1.wal.Close()) // leave the record on disk; do not commit alloc
+
+	// Reopen: idtable.New's startup Get and OpenWAL/scanLSN succeed, but replay
+	// drives docIDForAlloc -> GetId, which fails because the KV reports closed.
+	kvStore.isClosed = true
+	if _, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine}); err == nil {
+		t.Fatal("Open should fail when replay's docId re-allocation fails")
 	}
 }

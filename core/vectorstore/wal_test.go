@@ -1,6 +1,9 @@
 package vectorstore
 
 import (
+	"encoding/binary"
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -115,5 +118,89 @@ func TestWAL_OpenTruncateFault(t *testing.T) {
 	withOpenFileFault(t, func(f *faultFile) { f.failTruncate = true }) // scanLSN truncates
 	if _, err := OpenWAL(dir); err == nil {
 		t.Fatal("OpenWAL should fail when scanLSN truncate fails")
+	}
+}
+
+func TestWAL_ResetTruncateFault(t *testing.T) {
+	dir := t.TempDir()
+	w, err := OpenWAL(dir)
+	requireNoError(t, err)
+	defer w.Close()
+	// Swap in a Truncate-faulting file AFTER open so Reset's own Truncate fails
+	// (not scanLSN's).
+	w.file = &faultFile{osFile: w.file, failTruncate: true}
+	if err := w.Reset(); err == nil {
+		t.Fatal("Reset should surface a Truncate failure")
+	}
+}
+
+func TestWAL_ResetFlushFault(t *testing.T) {
+	dir := t.TempDir()
+	// Open with a Write-faulting file so the WAL's buffered writer wraps it from
+	// the start; scanLSN only reads/truncates/seeks (no Write), so open succeeds.
+	withOpenFileFault(t, func(f *faultFile) { f.failWrite = true })
+	w, err := OpenWAL(dir)
+	requireNoError(t, err)
+	defer w.Close()
+	// Leave buffered, unflushed bytes, then Reset's buf.Flush() surfaces the write
+	// fault.
+	_, _ = w.Append(recDelete, encodeDelete("a", 1, 0))
+	if err := w.Reset(); err == nil {
+		t.Fatal("Reset should surface a flush (write) failure")
+	}
+}
+
+func TestWAL_ReplayFnError(t *testing.T) {
+	dir := t.TempDir()
+	w, err := OpenWAL(dir)
+	requireNoError(t, err)
+	defer w.Close()
+	_, err = w.Append(recDelete, encodeDelete("a", 1, 0))
+	requireNoError(t, err)
+	requireNoError(t, w.Sync())
+	if err := w.Replay(func(recType, []byte) error { return errInjected }); err == nil {
+		t.Fatal("Replay should surface an error returned by the apply callback")
+	}
+}
+
+func TestWAL_ReplayTruncateFault(t *testing.T) {
+	dir := t.TempDir()
+	w, err := OpenWAL(dir)
+	requireNoError(t, err)
+	defer w.Close()
+	_, err = w.Append(recDelete, encodeDelete("a", 1, 0))
+	requireNoError(t, err)
+	requireNoError(t, w.Sync())
+	// Fault the post-scan Truncate that Replay performs after the loop.
+	w.file = &faultFile{osFile: w.file, failTruncate: true}
+	if err := w.Replay(func(recType, []byte) error { return nil }); err == nil {
+		t.Fatal("Replay should surface its post-loop Truncate failure")
+	}
+}
+
+func TestWAL_ReplayRejectsOversizedFrame(t *testing.T) {
+	dir := t.TempDir()
+	// Hand-write a frame whose declared payload length exceeds the max, which
+	// scanLSN tolerates (treats as a torn tail) but Replay must reject.
+	path := filepath.Join(dir, "records.wal")
+	header := make([]byte, walHeaderSize)
+	binary.LittleEndian.PutUint64(header[0:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], maxWalPayloadSize+1)
+	header[12] = byte(recPut)
+	requireNoError(t, os.WriteFile(path, header, 0644))
+
+	w, err := OpenWAL(dir)
+	requireNoError(t, err)
+	defer w.Close()
+	// OpenWAL's scanLSN truncated the oversized torn tail, so re-append it raw to
+	// the file the WAL holds, bypassing the buffer, then replay.
+	if _, err := w.file.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.file.Write(header); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Replay(func(recType, []byte) error { return nil }); err == nil {
+		t.Fatal("Replay should reject an oversized payload length")
 	}
 }

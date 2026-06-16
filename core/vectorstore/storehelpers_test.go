@@ -56,3 +56,28 @@ func bruteForceKNN(m Metric, q []float32, vecs map[int64][]float32, k int) []int
 	}
 	return out
 }
+
+// faultKV wraps a kv.Store to inject failures into the two operations the
+// vectorstore relies on through idtable: a Get error (to fail idtable.New's
+// startup read) and an IsClosed() == true (to fail Allocator.GetId, which the
+// store reaches via docIDForAlloc on the Put and replay paths). All other Store
+// methods are promoted from the embedded real store.
+type faultKV struct {
+	kv.Store
+	getErr   error
+	isClosed bool
+}
+
+func (f *faultKV) Get(key []byte) ([]byte, error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	return f.Store.Get(key)
+}
+
+func (f *faultKV) IsClosed() bool {
+	if f.isClosed {
+		return true
+	}
+	return f.Store.IsClosed()
+}
