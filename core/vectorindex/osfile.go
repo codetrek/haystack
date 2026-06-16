@@ -1,6 +1,9 @@
 package vectorindex
 
-import "os"
+import (
+	"os"
+	"runtime"
+)
 
 // osFile is the subset of *os.File the mmap store and WAL use, abstracted behind
 // an interface so tests can inject IO failures (a healthy descriptor's
@@ -47,3 +50,22 @@ var (
 	fsRename = os.Rename
 	fsRemove = os.Remove
 )
+
+// fsyncDir fsyncs a directory so that a rename or file creation within it is
+// durable across a crash (POSIX does not guarantee the directory entry is
+// persisted just because the file's contents were fsynced). On Windows a
+// directory handle cannot be fsynced, so it is a no-op there.
+func fsyncDir(dir string) error {
+	d, err := fsOpen(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		if runtime.GOOS == "windows" {
+			return nil
+		}
+		return err
+	}
+	return nil
+}

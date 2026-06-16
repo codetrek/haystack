@@ -44,6 +44,8 @@ func (e *errorStore) getErr(err error) error {
 
 func (e *errorStore) Metric() Metric { return Cosine }
 
+func (e *errorStore) Dim() int { return e.inner.Dim() }
+
 func (e *errorStore) GetVector(id uint64) ([]float32, error) {
 	if err := e.getErr(e.GetVectorErr); err != nil {
 		return nil, err

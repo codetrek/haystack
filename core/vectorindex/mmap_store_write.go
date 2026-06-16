@@ -15,6 +15,9 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32, docId int64)
 	if s.faulted != nil {
 		return s.faulted
 	}
+	if len(vector) != s.dim {
+		return fmt.Errorf("MmapStore.PutNode: vector dim %d != store dim %d", len(vector), s.dim)
+	}
 
 	// Convert to stored form (cosine: unit vector) and keep the original norm
 	// for GetVector restore. norm never participates in distance computation.
@@ -360,6 +363,13 @@ func (s *MmapStore) Checkpoint() error {
 }
 
 func (s *MmapStore) checkpointLocked() error {
+	// A faulted store has uncommitted in-place writes; checkpointing would
+	// persist them and truncate the WAL, defeating crash-recovery rollback.
+	// (Close already guards this for its own call; guard here so the exported
+	// Checkpoint() and maybeCheckpoint() can't bypass it.)
+	if s.faulted != nil {
+		return s.faulted
+	}
 	// 1. msync all mmap regions.
 	if err := s.syncAll(); err != nil {
 		return fmt.Errorf("MmapStore.Checkpoint: msync: %w", err)

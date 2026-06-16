@@ -63,6 +63,9 @@ func TestKill9Recovery_E2E(t *testing.T) {
 	// Verify vectors.
 	for i := 0; i < N; i++ {
 		id := uint64(i)
+		if deletedSet[id] {
+			continue // deleted nodes are correctly no longer readable (audit #5)
+		}
 		vec, err := s2.GetVector(id)
 		if err != nil {
 			t.Fatalf("GetVector(%d): %v", i, err)

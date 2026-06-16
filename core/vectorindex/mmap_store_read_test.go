@@ -14,9 +14,11 @@ func TestMmapStoreGetVector(t *testing.T) {
 	}
 	defer s.Close()
 
-	// Manually write a vector at slot 0.
+	// Manually write a live node at slot 0: vector + occupied node slot + committed.
 	vec := []float32{1.0, 2.0, 3.0, 4.0}
 	writeVecSlot(s, 0, vec)
+	writeNodeSlot(s, 0, 0, nodeFlagOccupied, 0, 0)
+	s.meta.TotalSlots = 1
 
 	got, err := s.GetVector(0)
 	if err != nil {
@@ -120,7 +122,8 @@ func TestMmapStoreGetNormAndLevel(t *testing.T) {
 	}
 	defer s.Close()
 
-	writeNodeSlot(s, 7, 3, 0, 2.5, 0)
+	writeNodeSlot(s, 7, 3, nodeFlagOccupied, 2.5, 0)
+	s.meta.TotalSlots = 8 // mark slot 7 committed so the live-node guard admits it
 
 	level, err := s.GetNodeLevel(7)
 	if err != nil {

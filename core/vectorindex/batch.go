@@ -1,5 +1,7 @@
 package vectorindex
 
+import "fmt"
+
 // batchOpKind distinguishes buffered Put from Delete.
 type batchOpKind int
 
@@ -74,6 +76,30 @@ func (b *Batch) Commit() error {
 		return nil
 	}
 	h := b.idx
+	// Validate every Put before opening a transaction, so a malformed vector
+	// returns a clean error without faulting the store or applying a partial
+	// batch. The batch is left intact for the caller to fix and retry.
+	//
+	// A fresh MemNodeStore has Dim()==0, so validateVector cannot catch a
+	// dimension mismatch on its own; pin the dimension across the batch (from the
+	// store if it has one, else the first Put) and reject any op that disagrees.
+	// Without this a mixed-dim batch passes validation, then panics in the SIMD
+	// distance kernel mid-apply — which runInTxnLocked re-panics, crashing the
+	// process.
+	pinnedDim := h.store.Dim()
+	for _, op := range b.ops {
+		if op.kind != opPut {
+			continue
+		}
+		if err := h.validateVector(op.vector); err != nil {
+			return err
+		}
+		if pinnedDim == 0 {
+			pinnedDim = len(op.vector)
+		} else if len(op.vector) != pinnedDim {
+			return fmt.Errorf("vectorindex: batch has mixed vector dimensions: got %d, want %d", len(op.vector), pinnedDim)
+		}
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 

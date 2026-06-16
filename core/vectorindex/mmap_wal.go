@@ -181,6 +181,19 @@ func (w *WAL) LSN() uint64 {
 	return w.lsn
 }
 
+// SeedLSN raises the WAL's LSN floor so subsequent Appends produce LSNs strictly
+// greater than lsn. Called on open with the last checkpoint LSN: after a
+// checkpoint truncates the WAL, scanLSN sees an empty file and would otherwise
+// restart LSNs at 0 — which a later Replay(afterLSN=checkpointLSN) would
+// silently discard, losing every record written since the reopen.
+func (w *WAL) SeedLSN(lsn uint64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if lsn > w.lsn {
+		w.lsn = lsn
+	}
+}
+
 // Reset truncates the WAL file to 0 bytes, but preserves nextLSN so that
 // subsequent Append calls continue with monotonically increasing LSNs.
 func (w *WAL) Reset() error {

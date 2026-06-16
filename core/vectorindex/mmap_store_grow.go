@@ -64,8 +64,9 @@ func (s *MmapStore) growFile(which fileType, requiredCap uint64) error {
 }
 
 func (s *MmapStore) growVectors(requiredCap uint64) error {
-	// Caller holds muWrite. We also need muVec to block concurrent readers
-	// of s.vectors while remapFile replaces the slice.
+	// Caller holds muWrite, which excludes every reader of s.vectors (GetVector
+	// and GetVectorRef both take muWrite.RLock), so remapFile can replace the
+	// slice with no separate vector lock.
 
 	// Re-check capacity.
 	if requiredCap <= s.vecCapacity {
@@ -79,10 +80,7 @@ func (s *MmapStore) growVectors(requiredCap uint64) error {
 		newCap *= 2
 	}
 
-	s.muVec.Lock()
-	err := s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, newCap, s.vecSlotSize, 8) // VectorsHeader.Capacity at offset 8
-	s.muVec.Unlock()
-	return err
+	return s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, newCap, s.vecSlotSize, 8) // VectorsHeader.Capacity at offset 8
 }
 
 func (s *MmapStore) growNodes(requiredCap uint64) error {
@@ -148,25 +146,30 @@ func (s *MmapStore) growUpper(requiredCap uint64) error {
 	return err
 }
 
-// remapFile is the common grow logic: munmap → ftruncate → update header capacity → re-mmap.
+// remapFile is the common grow logic. Windows cannot resize a file while it is
+// mapped, so it unmaps the old region first. If munmap fails the old mapping is
+// still valid, so it returns the error leaving *data/*cap untouched (reads keep
+// working). Once unmapped it nils the slice and zeros the capacity *before* the
+// fallible truncate/mmap, so a read after a failed grow returns an out-of-range
+// error instead of dereferencing freed memory (audit #3). The caller propagates
+// the error (a batched grow aborts the txn → faults the store).
 func (s *MmapStore) remapFile(f osFile, data *[]byte, cap *uint64, newCap uint64, slotSize int, capHeaderOffset int) error {
 	if err := mmapFree(*data); err != nil {
 		return fmt.Errorf("grow: munmap: %w", err)
 	}
+	*data = nil
+	*cap = 0
 
 	newSize := int64(pageSize) + int64(newCap)*int64(slotSize)
 	if err := f.Truncate(newSize); err != nil {
 		return fmt.Errorf("grow: truncate: %w", err)
 	}
-
 	mapped, err := mmapAlloc(f.Fd(), 0, int(newSize), mmapRead|mmapWrite)
 	if err != nil {
 		return fmt.Errorf("grow: mmap: %w", err)
 	}
 	*data = mapped
-
-	// Update capacity in header.
-	binary.LittleEndian.PutUint64(mapped[capHeaderOffset:], newCap)
+	binary.LittleEndian.PutUint64(mapped[capHeaderOffset:], newCap) // update header capacity
 	*cap = newCap
 	return nil
 }

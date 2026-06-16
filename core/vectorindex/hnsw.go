@@ -81,13 +81,22 @@ func NewHNSWIndex(store NodeStore, opts ...Option) *HNSWIndex {
 }
 
 // randomLevel returns a random level using the formula from the paper:
-// floor(-ln(uniform(0,1)) * mL)
+// floor(-ln(uniform(0,1)) * mL), clamped to defaultMaxLayers. The store
+// pre-allocates exactly defaultMaxLayers upper layers per slot, addressed as
+// layerIdx = layer-1 in [0, maxLayers); the highest valid node level is thus
+// defaultMaxLayers itself (its top layer maps to layerIdx maxLayers-1). A level
+// above that would make setNeighborsUpper error on the missing layer, aborting
+// the insert txn and faulting the store.
 func (h *HNSWIndex) randomLevel() int {
 	r := h.rng.Float64()
 	if r == 0 {
 		r = 1e-18 // avoid log(0)
 	}
-	return int(math.Floor(-math.Log(r) * h.mL))
+	level := int(math.Floor(-math.Log(r) * h.mL))
+	if level > defaultMaxLayers {
+		level = defaultMaxLayers
+	}
+	return level
 }
 
 // runInTxnLocked brackets apply() in a store transaction. On apply error it
@@ -97,6 +106,15 @@ func (h *HNSWIndex) runInTxnLocked(apply func() error) error {
 	if err := h.store.txnBegin(); err != nil {
 		return err
 	}
+	// A panic inside apply (e.g. a SIMD kernel on malformed input that slipped
+	// past validation) must not leave the store's in-txn flag set, which would
+	// brick every subsequent write. Abort to clear it, then re-panic.
+	defer func() {
+		if r := recover(); r != nil {
+			_ = h.store.txnAbort(fmt.Errorf("panic during transaction: %v", r))
+			panic(r)
+		}
+	}()
 	if err := apply(); err != nil {
 		_ = h.store.txnAbort(err)
 		return err
@@ -104,9 +122,40 @@ func (h *HNSWIndex) runInTxnLocked(apply func() error) error {
 	return h.store.txnCommit()
 }
 
+// validateVector rejects inputs that would corrupt the store or panic the
+// distance kernels: empty vectors, and (when the store has a fixed dimension)
+// vectors whose length disagrees with it. Called at every public write/search
+// entry before any state is mutated, so bad input returns an error instead of
+// faulting the store, panicking a SIMD kernel, or over-writing an adjacent slot.
+func (h *HNSWIndex) validateVector(v []float32) error {
+	if len(v) == 0 {
+		return fmt.Errorf("vectorindex: vector must be non-empty")
+	}
+	if d := h.store.Dim(); d > 0 && len(v) != d {
+		return fmt.Errorf("vectorindex: vector dimension mismatch: got %d, want %d", len(v), d)
+	}
+	// For cosine, a non-finite norm means a NaN/Inf component or a magnitude
+	// whose L2 norm overflows float32 — none can be normalized to a finite unit
+	// vector, so reject instead of persisting NaN/Inf or poisoning a search
+	// (audit #6/#10). norm() uses the SIMD fast path, so this is cheap.
+	if h.metric == Cosine {
+		n := h.metric.norm(v)
+		if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
+			return fmt.Errorf("vectorindex: cosine vector norm is not finite (NaN/Inf component or overflow)")
+		}
+		if n != 0 && math.IsInf(float64(1.0/n), 0) {
+			return fmt.Errorf("vectorindex: cosine vector norm %g is too small to normalize without overflow", n)
+		}
+	}
+	return nil
+}
+
 // Insert adds (or replaces) a document's vector. Equivalent to a single-op
 // batch: it wraps one insert in a store transaction.
 func (h *HNSWIndex) Insert(docId int64, vector []float32) error {
+	if err := h.validateVector(vector); err != nil {
+		return err
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.runInTxnLocked(func() error { return h.insertOneLocked(docId, vector) })
@@ -291,6 +340,12 @@ func (h *HNSWIndex) deleteOneLocked(docId int64) error {
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
+	if k <= 0 {
+		return nil, fmt.Errorf("vectorindex: k must be > 0, got %d", k)
+	}
+	if err := h.validateVector(query); err != nil {
+		return nil, err
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 

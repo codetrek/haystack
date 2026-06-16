@@ -19,6 +19,7 @@ type MemNodeStore struct {
 	maxLayer  int
 	hasEntry  bool
 	nextID    uint64
+	dim       int // fixed vector dimension, learned lazily from the first PutNode
 }
 
 // NewMemNodeStore creates a new in-memory NodeStore. The distance metric
@@ -42,6 +43,13 @@ func NewMemNodeStore(metric ...Metric) *MemNodeStore {
 
 // Metric returns the store's distance metric.
 func (m *MemNodeStore) Metric() Metric { return m.metric }
+
+// Dim returns the fixed vector dimension (0 until the first PutNode).
+func (m *MemNodeStore) Dim() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.dim
+}
 
 // GetVector returns a copy of the original vector for the given node. For cosine
 // the stored unit vector is restored to its original scale via the stored norm.
@@ -70,6 +78,11 @@ func (m *MemNodeStore) GetVectorRef(id uint64) ([]float32, error) {
 func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32, docId int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.dim == 0 && len(vector) > 0 {
+		m.dim = len(vector) // learn dim from the first inserted vector
+	} else if m.dim != 0 && len(vector) != m.dim {
+		return fmt.Errorf("MemNodeStore.PutNode: vector dimension mismatch: got %d, want %d", len(vector), m.dim)
+	}
 	stored, norm := m.metric.prepare(vector)
 	cp := make([]float32, len(stored))
 	copy(cp, stored)

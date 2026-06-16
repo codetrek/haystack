@@ -14,6 +14,10 @@ import (
 type NodeStore interface {
 	// Metric returns the immutable distance metric this store was created with.
 	Metric() Metric
+	// Dim returns the fixed vector dimension, or 0 if the store has no fixed
+	// dimension yet (e.g. an in-memory store before its first write). Used to
+	// validate vector inputs before they reach the write/distance paths.
+	Dim() int
 	GetVector(id uint64) ([]float32, error)
 	// GetVectorRef returns the stored vector form without copying. The caller
 	// MUST NOT modify the returned slice. Use GetVector for the original vector.
