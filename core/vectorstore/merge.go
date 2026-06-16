@@ -40,3 +40,35 @@ func (c mergeConfig) withDefaults() mergeConfig {
 	}
 	return c
 }
+
+// segLiveStats is an immutable snapshot of one sealed segment's reclamation
+// signal, taken under s.mu so the pure driver/selector logic never touches the
+// live segment set. count includes tombstoned rows; live excludes them.
+type segLiveStats struct {
+	id    segID
+	count int // total rows (incl. tombstoned)
+	live  int // non-tombstoned rows
+}
+
+func (s segLiveStats) liveRatio() float32 {
+	if s.count == 0 {
+		return 1
+	}
+	return float32(s.live) / float32(s.count)
+}
+
+// segStatsLocked snapshots every live sealed segment's (id, count, live). Caller
+// holds s.mu (R or W). It reads ss.count()/ss.tombCount(), which take the
+// segment's own tomb RLock, so the snapshot is internally consistent per segment.
+func (s *Store) segStatsLocked() []segLiveStats {
+	out := make([]segLiveStats, len(s.sealed))
+	for i, ss := range s.sealed {
+		cnt := ss.count()
+		out[i] = segLiveStats{
+			id:    s.sealedID[i],
+			count: cnt,
+			live:  cnt - ss.tombCount(),
+		}
+	}
+	return out
+}
