@@ -32,6 +32,19 @@ func (b *bitmap) count() int {
 	return n
 }
 
+// or unions o into the receiver in place (receiver ← receiver ∪ o), growing the
+// receiver's word array as needed to cover all of o's set bits.
+func (b *bitmap) or(o *bitmap) {
+	if len(o.words) > len(b.words) {
+		grown := make([]uint64, len(o.words))
+		copy(grown, b.words)
+		b.words = grown
+	}
+	for w := range o.words {
+		b.words[w] |= o.words[w]
+	}
+}
+
 // and intersects b into the receiver in place (receiver ← receiver ∩ o).
 func (b *bitmap) and(o *bitmap) {
 	for w := range b.words {

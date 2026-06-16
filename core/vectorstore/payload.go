@@ -36,6 +36,38 @@ func Int64Value(i int64) Value     { return Value{Kind: KindInt64, Int: i} }
 func Float64Value(f float64) Value { return Value{Kind: KindFloat64, Flt: f} }
 func BoolValue(b bool) Value       { return Value{Kind: KindBool, Bool: b} }
 
+// numeric returns the value as a float64 for ordered (Numeric) comparison, and
+// whether the value is numeric at all. Int64 widens to float64 (lossless to
+// 2^53; the Numeric index is for range filtering, not exact int identity).
+func (v Value) numeric() (float64, bool) {
+	switch v.Kind {
+	case KindInt64:
+		return float64(v.Int), true
+	case KindFloat64:
+		return v.Flt, true
+	default:
+		return 0, false
+	}
+}
+
+// equal reports scalar equality within the same kind (used by Eq/In).
+func (v Value) equal(o Value) bool {
+	if v.Kind != o.Kind {
+		return false
+	}
+	switch v.Kind {
+	case KindString:
+		return v.Str == o.Str
+	case KindInt64:
+		return v.Int == o.Int
+	case KindFloat64:
+		return v.Flt == o.Flt
+	case KindBool:
+		return v.Bool == o.Bool
+	}
+	return false
+}
+
 // Payload is a structured record annotation: a map of property name → scalar
 // Value. Declared properties (CreateAttrIndex, later phase 5 task) are indexed
 // for filtering; non-declared properties are stored and returned by Get but not
