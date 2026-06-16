@@ -109,9 +109,14 @@ func New(store kv.Store, opts Options) (*Allocator, error) {
 	closing, done := a.closing, a.done
 	interval := a.commitInterval
 	go func() {
+		// Use an explicit ticker rather than time.After so Close can stop it:
+		// when Close closes `closing`, the goroutine returns and the deferred
+		// Stop fires, guaranteeing no tick is delivered after Close drains it.
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for {
 			select {
-			case <-time.After(interval):
+			case <-ticker.C:
 				a.mu.Lock()
 				if err := a.tryCommit(); err != nil {
 					log.Printf("[idtable] periodic commit failed: %v", err)
@@ -221,7 +226,19 @@ func (a *Allocator) encodeIdKey(key []byte) []byte {
 
 // tryCommit flushes the pending batch if it is non-empty, returning any
 // Commit error. Callers must hold a.mu.
+//
+// It re-checks the store's open state under a.mu immediately before driving
+// batch.Commit. The periodic-commit tick and the Close-time flush both reach
+// here, and the backing KV can be closed out from under the allocator (e.g. a
+// test's t.Cleanup closes the store while a tick is in flight). Committing a
+// batch against a closed pebble panics ("pebble: closed"), so when the store is
+// closed we skip the commit and return a clean error instead — consistent with
+// GetId/Commit's fail-closed guards. The check sits under a.mu (held by every
+// caller), so it cannot race a concurrent close-then-commit on this allocator.
 func (a *Allocator) tryCommit() error {
+	if a.store == nil || a.store.IsClosed() {
+		return fmt.Errorf("database is closed")
+	}
 	if a.batch.Count() > 0 {
 		if err := a.batch.Commit(); err != nil {
 			return err
