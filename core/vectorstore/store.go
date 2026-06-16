@@ -710,8 +710,26 @@ func (s *Store) sealLocked() error {
 	// (4) Build the graph in the BACKGROUND, off the write lock. The sealed segment
 	// is immutable except its tombstone bitmap, which the builder reads under the
 	// segment's tomb lock (eachLive), so the build needs no lock on the store.
+	//
+	// Gate on s.closing (appendix #1): Close sets s.closing under s.mu, THEN waits
+	// builds/merges (without s.mu). A Put/Seal racing Close must not spawn a build
+	// here after Close's builds.Wait() has passed — that is a WaitGroup add-after-
+	// wait AND would let Close's segment-close() free an mmap this builder is mid-
+	// read (SIGSEGV). Since both this path and Close's closing=true write are under
+	// s.mu, skipping the spawn when closing closes the window. The segment is durable
+	// + pending in the manifest, so recover() resumes its build on the next Open.
+	if s.closing {
+		return nil
+	}
 	s.builds.Add(1)
 	go s.buildAndPublish(id, segDir, ss)
+
+	// (5) Opportunistic background reclamation: a fresh seal may push a size tier to
+	// fanout (growth) or expose a deflated segment (delete-driven). maybeMergeLocked
+	// launches any qualifying merges off the write path; it only picks already-INDEXED
+	// inputs, so it never touches the segment we just sealed above (still pending) and
+	// never blocks Put/Seal. Healthy stores no-op. (Phase 4, architecture §4.9.)
+	s.maybeMergeLocked()
 	return nil
 }
 
@@ -736,8 +754,16 @@ func (s *Store) buildAndPublish(id segID, segDir string, ss *sealedSegment) {
 	_ = s.writeManifestLocked()
 }
 
-// WaitForIndex blocks until every pending sealed-segment build has finished.
+// WaitForIndex blocks until every pending sealed-segment build has finished. It
+// drains in-flight MERGES first (merges.Wait) because a merge spawns its outputs'
+// builds — and does so on a tracked goroutine that holds the merges WaitGroup
+// across the builds.Add. Waiting merges first guarantees every merge-spawned
+// builds.Add has already happened before builds.Wait observes the counter, so a
+// caller's WaitForIndex can never race a merge's Add on a zero builds counter
+// (the WaitGroup add-after-wait hazard, appendix #1). Same merges→builds drain
+// order Close uses.
 func (s *Store) WaitForIndex() error {
+	s.merges.Wait()
 	s.builds.Wait()
 	return nil
 }

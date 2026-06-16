@@ -297,6 +297,22 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	for i, id := range p.inputs {
 		inputDirs[i] = filepath.Join(s.dir, segDirName(id, 0))
 	}
+
+	// (2e) Background-build each output's HNSW (off-lock, like seal). The builds.Add
+	// + goroutine launch happen UNDER s.mu — same as sealLocked's step 4 — so a
+	// concurrent WaitForIndex()/Close() (builds.Wait()) can never race this Add on a
+	// zero counter (add-after-wait): WaitForIndex takes no lock, but a merge that has
+	// spawned builds is itself still in-flight on the merges WaitGroup, and any caller
+	// that awaits index after a merge must WaitForMerge() first; gating the Add under
+	// s.mu additionally serializes it against Close's closing=true handshake. The
+	// buildAndPublish goroutine re-takes s.mu itself, so the build still runs off-lock.
+	// Reuse the builds WaitGroup so Close()/WaitForIndex drain them; buildAndPublish
+	// flips pending→indexed. Every Add(1) here precedes this function's return (and
+	// thus the deferred merges.Done), so Close's merges.Wait()→builds.Wait() holds.
+	for i, ss := range outSS {
+		s.builds.Add(1)
+		go s.buildAndPublish(p.outIDs[i], p.outDirs[i], ss)
+	}
 	s.mu.Unlock()
 
 	// Crash-after-swap seam (test-only, appendix #5/#7): the manifest swap committed
@@ -313,15 +329,6 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	// (3) Delete old input dirs AFTER the swap committed (now orphans).
 	for _, dir := range inputDirs {
 		_ = os.RemoveAll(dir)
-	}
-
-	// (4) Background-build each output's HNSW (off-lock, like seal). Reuse the
-	// builds WaitGroup so Close() drains them; buildAndPublish flips pending→indexed.
-	// Every Add(1) here precedes this function's return (and thus the deferred
-	// merges.Done), so Close's merges.Wait()→builds.Wait() ordering is sound.
-	for i, ss := range outSS {
-		s.builds.Add(1)
-		go s.buildAndPublish(p.outIDs[i], p.outDirs[i], ss)
 	}
 	return nil
 }
@@ -489,4 +496,33 @@ func (s *Store) statsExcludingLocked(stats []segLiveStats, plans []*mergePlan) [
 		}
 	}
 	return out
+}
+
+// maybeMergeLocked is the background trigger: after a structural change (a seal),
+// it checks the reclamation policy and launches at most one delete-driven repack
+// per deflated segment AND one growth-driven roll-up on tracked goroutines. Caller
+// holds s.mu. Launches nothing when the store is healthy, so it is cheap to call
+// on every seal. The actual write+build runs off-lock in mergeAndPublish (the
+// goroutine re-takes the lock only for the swap), so this never blocks the write
+// path.
+//
+// Anti-thrash (appendix #3): planReclamationLocked only selects INDEXED inputs
+// (planMergeLocked skips a segment whose graph is not yet installed), so a
+// just-sealed PENDING segment is never merged before its build completes — the
+// trigger never discards an in-flight build nor close()s an input mmap a builder
+// is mid-read. A merge thus only consumes segments whose (dominant) HNSW build
+// cost has already been paid, and the growth roll-up only fires once a tier of
+// indexed peers reaches fanout. The trigger never recurses (it does not call
+// sealLocked). Gated by s.closing so a merges.Add never races Close's
+// zero-counter merges.Wait (appendix #1).
+func (s *Store) maybeMergeLocked() {
+	if s.closing {
+		return
+	}
+	plans := s.planReclamationLocked()
+	s.merges.Add(len(plans))
+	for _, p := range plans {
+		p := p
+		go func() { _ = s.mergeAndPublish(p) }()
+	}
 }
