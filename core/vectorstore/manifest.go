@@ -36,22 +36,29 @@ type segmentEntry struct {
 type manifest struct {
 	Version  uint64
 	Head     segID
+	Metric   Metric
 	Segments []segmentEntry
 }
 
 var magicManifest = [4]byte{'V', 'S', 'M', 'F'}
 
-const manifestVersionByte = 1
+// manifestVersionByte is the on-disk format version. v2 added the persisted
+// store Metric (1 byte after head) so Open can reject a metric mismatch: the
+// on-disk vector form is metric-dependent, so reopening under a different metric
+// silently mis-reads. The format predates any production data, so v1 is not
+// read back — a v1 byte is rejected as an incompatible format.
+const manifestVersionByte = 2
 
 // serializeManifest encodes a manifest as: magic(4) | fmtver(1) | version(8) |
-// head(8) | nSeg(4) | [segId(8) gen(4) vec(8) tomb(8) state(1)]* | crc32(4).
-// The CRC covers everything before it.
+// head(8) | metric(1) | nSeg(4) | [segId(8) gen(4) vec(8) tomb(8) state(1)]* |
+// crc32(4). The CRC covers everything before it.
 func serializeManifest(m *manifest) []byte {
-	body := make([]byte, 0, 4+1+8+8+4+len(m.Segments)*29+4)
+	body := make([]byte, 0, 4+1+8+8+1+4+len(m.Segments)*29+4)
 	body = append(body, magicManifest[:]...)
 	body = append(body, manifestVersionByte)
 	body = appendU64(body, m.Version)
 	body = appendU64(body, uint64(m.Head))
+	body = append(body, byte(m.Metric))
 	body = appendU32(body, uint32(len(m.Segments)))
 	for _, e := range m.Segments {
 		body = appendU64(body, uint64(e.SegID))
@@ -65,7 +72,7 @@ func serializeManifest(m *manifest) []byte {
 }
 
 func parseManifest(b []byte) (*manifest, error) {
-	if len(b) < 4+1+8+8+4+4 {
+	if len(b) < 4+1+8+8+1+4+4 {
 		return nil, fmt.Errorf("manifest: too short (%d bytes)", len(b))
 	}
 	stored := binary.LittleEndian.Uint32(b[len(b)-4:])
@@ -75,12 +82,17 @@ func parseManifest(b []byte) (*manifest, error) {
 	if string(b[0:4]) != string(magicManifest[:]) {
 		return nil, fmt.Errorf("manifest: bad magic %q", b[0:4])
 	}
+	if b[4] != manifestVersionByte {
+		return nil, fmt.Errorf("manifest: unsupported format version %d (want %d)", b[4], manifestVersionByte)
+	}
 	off := 5 // skip magic(4)+fmtver(1)
 	m := &manifest{}
 	m.Version = binary.LittleEndian.Uint64(b[off:])
 	off += 8
 	m.Head = segID(binary.LittleEndian.Uint64(b[off:]))
 	off += 8
+	m.Metric = Metric(b[off])
+	off++
 	nSeg := int(binary.LittleEndian.Uint32(b[off:]))
 	off += 4
 	m.Segments = make([]segmentEntry, nSeg)

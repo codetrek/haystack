@@ -10,6 +10,7 @@ func sampleManifest() *manifest {
 	return &manifest{
 		Version: 7,
 		Head:    segID(5),
+		Metric:  Euclidean,
 		Segments: []segmentEntry{
 			{SegID: 1, Gen: 0, VecCount: 100, TombCount: 3, State: segPending},
 			{SegID: 2, Gen: 0, VecCount: 200, TombCount: 0, State: segIndexed},
@@ -24,7 +25,7 @@ func TestManifest_WriteReadRoundTrip(t *testing.T) {
 
 	got, err := readManifest(dir)
 	requireNoError(t, err)
-	if got.Version != 7 || got.Head != 5 || len(got.Segments) != 2 {
+	if got.Version != 7 || got.Head != 5 || got.Metric != Euclidean || len(got.Segments) != 2 {
 		t.Fatalf("manifest mismatch: %+v", got)
 	}
 	if got.Segments[0].SegID != 1 || got.Segments[0].State != segPending {

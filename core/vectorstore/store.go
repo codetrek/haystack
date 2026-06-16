@@ -3,6 +3,7 @@ package vectorstore
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -135,6 +136,13 @@ func (s *Store) recover() error {
 		return err
 	}
 	s.manifestVersion = m.Version
+	// The on-disk vector form is metric-dependent (cosine stores unit+|v|;
+	// dot/euclid store raw), so reopening sealed segments under a different metric
+	// would silently mis-read every vector. Options.Metric is operator-settable —
+	// reject a mismatch with a clear error rather than wrong-restore.
+	if s.metric != m.Metric {
+		return fmt.Errorf("vectorstore: metric mismatch: store was sealed under %s but opened with %s", m.Metric, s.metric)
+	}
 	for _, e := range m.Segments {
 		segDir := filepath.Join(s.dir, segDirName(e.SegID, e.Gen))
 		ss, oerr := openSealedSegment(segDir, s.metric)
@@ -709,7 +717,7 @@ func (s *Store) isIndexedForTest(id segID) bool {
 // (appendix #19 — the draft double-incremented with a dead assignment).
 func (s *Store) writeManifestLocked() error {
 	s.manifestVersion++
-	m := &manifest{Version: s.manifestVersion, Head: headSegID}
+	m := &manifest{Version: s.manifestVersion, Head: headSegID, Metric: s.metric}
 	for i, ss := range s.sealed {
 		st := segPending
 		if s.graphs[s.sealedID[i]] != nil {
