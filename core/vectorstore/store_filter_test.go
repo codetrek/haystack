@@ -244,3 +244,180 @@ func TestSearch_Filter_GraphDistantSelective_GraphSBranch(t *testing.T) {
 		t.Fatalf("graph∩S recall@5 = %.2f over a selective graph-distant filter, want >= 0.8 (post-filter would be ~0)", r)
 	}
 }
+
+// TestSearch_Filter_AfterMerge_MatchesOracle proves the derived attr index is
+// REBUILT (not copied) when a merge repacks live docs into a new bucket with
+// renumbered slots, and that a doc deleted before the merge leaves no stale
+// posting in the merged segment's attr.dat (member AND live preserved through
+// the rewrite). Both adaptive branches are pinned via attrSearchT.
+func TestSearch_Filter_AfterMerge_MatchesOracle(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(123))
+	dim := 8
+	vecs := map[int64][]float32{}
+	pls := map[int64]Payload{}
+	requireNoError(t, s.CreateAttrIndex("color", Keyword))
+	put := func(id string, color string) {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		pl := Payload{"color": StringValue(color)}
+		requireNoError(t, s.Put(id, v, pl))
+		doc := s.idToDoc[id]
+		vecs[doc] = v
+		pls[doc] = pl
+	}
+	// Two sealed segments, each with mixed colors.
+	for i := 0; i < 40; i++ {
+		put("a"+itoa(i), []string{"red", "blue"}[i%2])
+	}
+	requireNoError(t, s.Seal())
+	for i := 0; i < 40; i++ {
+		put("b"+itoa(i), []string{"red", "green"}[i%2])
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+	// Snapshot segment "a"'s id so we can assert the repack actually ran (a new
+	// segment id replaces it once its live ratio crosses MergeFloor).
+	s.mu.RLock()
+	preIDs := append([]segID(nil), s.sealedID...)
+	s.mu.RUnlock()
+	// Delete a MAJORITY of segment "a" so its live ratio drops below MergeFloor
+	// (0.5) and Compact's delete-driven repack fires — the live docs are bin-packed
+	// into a fresh bucket with RENUMBERED slots, so the merged segment's attr.dat
+	// must be REBUILT from the repacked payloads, not copied. (Deleting a single doc
+	// would leave liveRatio≈0.975, a no-op merge — plan deviation, see NOTE.)
+	for i := 0; i < 25; i++ {
+		id := "a" + itoa(i)
+		doc := s.idToDoc[id]
+		if doc == 0 { // sealed → absent from idToDoc cache; resolve durably
+			d, ok, err := s.lookupDocID(id)
+			requireNoError(t, err)
+			if ok {
+				doc = d
+			}
+		}
+		requireNoError(t, s.Delete(id))
+		delete(vecs, doc)
+		delete(pls, doc)
+	}
+	requireNoError(t, s.Compact()) // delete-driven repack of segment "a"
+	requireNoError(t, s.WaitForIndex())
+	// Confirm the repack actually renumbered slots: segment "a" (preIDs[0]) is
+	// deflated below MergeFloor, so it is replaced by a fresh repacked segment with
+	// a new id; the untouched "b" segment survives.
+	aSeg := preIDs[0]
+	s.mu.RLock()
+	stillThere := false
+	for _, cur := range s.sealedID {
+		if cur == aSeg {
+			stillThere = true
+		}
+	}
+	postIDs := append([]segID(nil), s.sealedID...)
+	s.mu.RUnlock()
+	if stillThere {
+		t.Fatalf("expected delete-driven repack to replace segment %d with renumbered slots; pre=%v post=%v", aSeg, preIDs, postIDs)
+	}
+
+	a0Doc, _, _ := s.lookupDocID("a0")
+	b1Doc, ok, err := s.lookupDocID("b1")
+	requireNoError(t, err)
+	if !ok {
+		t.Fatal("lookupDocID(b1) not found")
+	}
+	q := vecs[b1Doc]
+	for _, T := range []int{1 << 30, 0} {
+		s.attrSearchT = T
+		pred := Eq("color", StringValue("red"))
+		got, err := s.Search(q, 10, pred)
+		requireNoError(t, err)
+		want := bruteOracleFiltered(Cosine, q, vecs, pls, pred, 10)
+		if !setEqual(got, want) {
+			t.Fatalf("[T=%d] post-merge filter != oracle\n got=%v\nwant=%v", T, ids(got), want)
+		}
+		// the deleted "red" a0 must be gone (no stale postings in the merged seg).
+		for _, r := range got {
+			if r.DocID == a0Doc {
+				t.Fatalf("[T=%d] deleted a0 leaked through merged attr index", T)
+			}
+		}
+	}
+}
+
+// TestSearch_Filter_RecoversAfterReopen proves the declared attr set survives a
+// Close/Open cycle (manifest v3) and the per-segment attr index is loaded (or
+// rebuilt from payload) on recovery, so a filtered Search after reopen matches
+// the independent oracle.
+func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
+	dir := t.TempDir()
+	kvs := newTestKV(t)
+	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	requireNoError(t, err)
+	requireNoError(t, s.CreateAttrIndex("color", Keyword))
+	vecs := map[int64][]float32{}
+	pls := map[int64]Payload{}
+	for i := 0; i < 60; i++ {
+		v := []float32{float32(i + 1), float32(i % 7), 1}
+		pl := Payload{"color": StringValue([]string{"red", "blue"}[i%2])}
+		requireNoError(t, s.Put("k"+itoa(i), v, pl))
+		doc := s.idToDoc["k"+itoa(i)]
+		vecs[doc] = v
+		pls[doc] = pl
+	}
+	requireNoError(t, s.Seal()) // crosses a seal boundary
+	requireNoError(t, s.WaitForIndex())
+	requireNoError(t, s.Close())
+
+	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	requireNoError(t, err)
+	defer s2.Close()
+	requireNoError(t, s2.WaitForIndex())
+	// NOTE (plan deviation): the plan read q := vecs[s2.idToDoc["k2"]], but after
+	// reopen the head WAL was truncated at Seal, so a sealed doc's string id is
+	// absent from the in-memory idToDoc cache (store.go:493). Resolve the docId via
+	// the durable idtable lookup (lookupDocID), which reconstructs the same docId.
+	k2Doc, ok, err := s2.lookupDocID("k2")
+	requireNoError(t, err)
+	if !ok {
+		t.Fatal("lookupDocID(k2) not found after reopen")
+	}
+	q := vecs[k2Doc]
+	pred := Eq("color", StringValue("red"))
+	got, err := s2.Search(q, 10, pred)
+	requireNoError(t, err)
+	want := bruteOracleFiltered(Cosine, q, vecs, pls, pred, 10)
+	if !setEqual(got, want) {
+		t.Fatalf("post-reopen filter != oracle\n got=%v\nwant=%v", ids(got), want)
+	}
+}
+
+// TestSearch_Filter_UpdateCrossSegment_CountedOnce proves that updating a doc
+// whose old copy lives in a sealed segment and whose new copy lands in the head
+// — both matching the filter — yields the doc EXACTLY once: the old sealed slot
+// is tombstoned at Put and removed from S_seg by andLive, the head copy is
+// counted by the head leg.
+func TestSearch_Filter_UpdateCrossSegment_CountedOnce(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	requireNoError(t, s.CreateAttrIndex("color", Keyword))
+	for i := 0; i < 40; i++ {
+		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0}, Payload{"color": StringValue("red")}))
+	}
+	requireNoError(t, s.Seal()) // k* now live in a sealed segment
+	requireNoError(t, s.WaitForIndex())
+	// Update k0: old "red" copy tombstoned in the sealed segment, new "red" copy in
+	// the head — BOTH match the filter. It must appear exactly once.
+	requireNoError(t, s.Put("k0", []float32{1, 0, 0}, Payload{"color": StringValue("red")}))
+	got, err := s.Search([]float32{1, 0, 0}, 40, Eq("color", StringValue("red")))
+	requireNoError(t, err)
+	seen := 0
+	for _, r := range got {
+		if r.DocID == s.idToDoc["k0"] {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("updated cross-segment doc k0 appeared %d times, want 1", seen)
+	}
+}
