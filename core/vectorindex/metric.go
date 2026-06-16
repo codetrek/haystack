@@ -1,6 +1,10 @@
 package vectorindex
 
-import "github.com/viterin/vek/vek32"
+import (
+	"math"
+
+	"github.com/viterin/vek/vek32"
+)
 
 // Metric is the immutable distance metric of an index. It is chosen when the
 // index is created, persisted in the store metadata, and must never change for
@@ -42,7 +46,15 @@ func (m Metric) norm(v []float32) float32 {
 	if m != Cosine {
 		return 0
 	}
-	return vek32.Norm(v)
+	// Accumulate the sum of squares in float64 so the norm is (a) deterministic
+	// across architectures — vek32.Norm used arch-specific SIMD that diverged on
+	// overflow (audit #10) — and (b) free of a float32 intermediate overflowing
+	// to +Inf/NaN or underflowing to 0 for tiny vectors (audit #6/#13).
+	var sumSq float64
+	for _, x := range v {
+		sumSq += float64(x) * float64(x)
+	}
+	return float32(math.Sqrt(sumSq))
 }
 
 // prepare maps a raw vector to the form stored on disk and returns the norm to
