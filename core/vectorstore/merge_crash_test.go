@@ -167,3 +167,72 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 		t.Fatalf("crash-mid-build: post-recovery recall@5 = %.3f, want >= 0.8", avg)
 	}
 }
+
+// TestMerge_SurvivesRecovery_EndToEnd: a full churn → seal → merge → restart cycle.
+// docToSeg is derived from on-disk slotDoc over live slots, so the merged set must
+// reconstruct exactly on reopen (architecture §4.6/§4.8). This is the Task 11
+// integration test — no new product code; it locks in that the manifest round-trips
+// the merge OUTPUTS (not the pre-merge inputs) across recovery.
+func TestMerge_SurvivesRecovery_EndToEnd(t *testing.T) {
+	kvStore := newTestKV(t)
+	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	s.maxSegSize = 8
+	s.mcfg.Fanout = 2
+	s.mcfg.MergeFloor = 0.5
+	rng := rand.New(rand.NewSource(51))
+	dim := 8
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	live := map[int64][]float32{}
+	for i := 0; i < 64; i++ {
+		id := "d-" + itoa(i)
+		v := randVec()
+		requireNoError(t, s.Put(id, v, nil))
+		live[s.idToDoc[id]] = v
+	}
+	// Delete a third to make some segments merge-bait.
+	for i := 0; i < 64; i++ {
+		if i%3 == 0 {
+			requireNoError(t, s.Delete("d-"+itoa(i)))
+			delete(live, s.idToDoc["d-"+itoa(i)])
+		}
+	}
+	// Ensure every sealed segment is indexed before Compact: the delete-driven and
+	// growth drivers only select INDEXED inputs (a pending segment is skipped to
+	// avoid close-during-build, appendix #3/#8), so without this the Compact round
+	// could be a partial no-op and the assertion below would be racy.
+	requireNoError(t, s.WaitForIndex())
+	requireNoError(t, s.Compact())
+	requireNoError(t, s.WaitForMerge())
+	requireNoError(t, s.WaitForIndex())
+
+	s2 := reopenStore(t, s, kvStore)
+	requireNoError(t, s2.WaitForIndex())
+
+	// Every survivor present, every deleted absent.
+	for i := 0; i < 64; i++ {
+		id := "d-" + itoa(i)
+		_, _, found, err := s2.Get(id)
+		requireNoError(t, err)
+		wantLive := i%3 != 0
+		if found != wantLive {
+			t.Fatalf("after recovery Get(%s) found=%v, want %v", id, found, wantLive)
+		}
+	}
+	var sum float64
+	for it := 0; it < 30; it++ {
+		q := randVec()
+		got, err := s2.Search(q, 5)
+		requireNoError(t, err)
+		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
+	}
+	if avg := sum / 30; avg < 0.8 {
+		t.Fatalf("post-recovery (merged) recall@5 = %.3f, want >= 0.8", avg)
+	}
+}
