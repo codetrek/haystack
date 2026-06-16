@@ -134,10 +134,13 @@ const maxWalPayloadSize = 64 << 20
 
 // WAL is an append-only write-ahead log with CRC32 integrity checks.
 type WAL struct {
-	file osFile
-	lsn  uint64
-	mu   sync.Mutex
-	buf  *bufio.Writer
+	file       osFile
+	lsn        uint64
+	mu         sync.Mutex
+	buf        *bufio.Writer
+	size       int64  // logical end offset (buffered + flushed)
+	syncedSize int64  // file offset durably synced — the rollback target
+	syncedLSN  uint64 // lsn durable as of syncedSize
 }
 
 // OpenWAL opens or creates records.wal in dir, scanning it to find the last
@@ -197,14 +200,23 @@ func (w *WAL) scanLSN() error {
 		return err
 	}
 	w.lsn = maxLSN
+	w.size = lastValidOffset
+	w.syncedSize = lastValidOffset
+	w.syncedLSN = maxLSN
 	return nil
 }
 
 // Append buffers a record and returns its LSN. The caller fsyncs via Sync at the
-// commit boundary.
+// commit boundary. An oversize record is rejected up-front (a frame whose length
+// field exceeds maxWalPayloadSize is indistinguishable from a torn tail to
+// scanLSN/Replay, which would silently drop it and every record after it on
+// reopen). A mid-write buffer error rolls the WAL back to the last durable state.
 func (w *WAL) Append(typ recType, payload []byte) (uint64, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if len(payload) > maxWalPayloadSize {
+		return 0, fmt.Errorf("WAL: record payload %d exceeds max %d", len(payload), maxWalPayloadSize)
+	}
 	w.lsn++
 	lsn := w.lsn
 	header := make([]byte, walHeaderSize)
@@ -216,26 +228,51 @@ func (w *WAL) Append(typ recType, payload []byte) (uint64, error) {
 	h.Write(payload)
 	crcBuf := make([]byte, walCRCSize)
 	binary.LittleEndian.PutUint32(crcBuf, h.Sum32())
-	if _, err := w.buf.Write(header); err != nil {
-		return 0, fmt.Errorf("WAL: write header: %w", err)
+	_, err := w.buf.Write(header)
+	if err == nil {
+		_, err = w.buf.Write(payload)
 	}
-	if _, err := w.buf.Write(payload); err != nil {
-		return 0, fmt.Errorf("WAL: write payload: %w", err)
+	if err == nil {
+		_, err = w.buf.Write(crcBuf)
 	}
-	if _, err := w.buf.Write(crcBuf); err != nil {
-		return 0, fmt.Errorf("WAL: write crc: %w", err)
+	if err != nil {
+		w.rollbackLocked()
+		return 0, fmt.Errorf("WAL: write frame: %w", err)
 	}
+	w.size += int64(walHeaderSize) + int64(len(payload)) + int64(walCRCSize)
 	return lsn, nil
 }
 
-// Sync flushes the buffer and fsyncs the file.
+// Sync flushes the buffer and fsyncs the file. On any failure it rolls the WAL
+// back to the last durably-synced state, so an errored Sync leaves no record
+// that a later Sync/Close could resurrect.
 func (w *WAL) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if err := w.buf.Flush(); err != nil {
+		w.rollbackLocked()
 		return err
 	}
-	return w.file.Sync()
+	if err := w.file.Sync(); err != nil {
+		w.rollbackLocked()
+		return err
+	}
+	w.syncedSize = w.size
+	w.syncedLSN = w.lsn
+	return nil
+}
+
+// rollbackLocked restores the WAL to its last durably-synced state, discarding
+// any buffered or flushed-but-unsynced frames. An errored Append/Sync must leave
+// no recoverable record (crash-atomicity, decision #7): a frame whose fsync
+// failed is not silently resurrected on reopen by a later Sync or Close. The
+// discarded LSN(s) are reused by the next Append. Caller holds w.mu.
+func (w *WAL) rollbackLocked() {
+	_ = w.file.Truncate(w.syncedSize)
+	_, _ = w.file.Seek(w.syncedSize, io.SeekStart)
+	w.buf.Reset(w.file)
+	w.lsn = w.syncedLSN
+	w.size = w.syncedSize
 }
 
 // Reset truncates the WAL to 0 bytes while preserving the LSN counter.
@@ -252,6 +289,9 @@ func (w *WAL) Reset() error {
 		return err
 	}
 	w.buf.Reset(w.file)
+	w.size = 0
+	w.syncedSize = 0
+	w.syncedLSN = w.lsn
 	return nil
 }
 
