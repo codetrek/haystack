@@ -86,6 +86,13 @@ type Store struct {
 	// either way, so a pure oracle check cannot prove the graph∩S path ran. Atomic
 	// so concurrent Search calls (each under s.mu.RLock) increment it race-free.
 	graphSDispatches atomic.Uint64
+	// headBruteS counts how many times the filtered HEAD leg used the head attr
+	// index (s.seg.attr) to compute the matching member set S_head and bruted ONLY
+	// that subset (architecture §6 head "brute-S"), rather than the full
+	// every-live-slot evalPayload scan. Test-only observability: brute-S is a
+	// correct superset of the full-scan answer, so a pure oracle check cannot prove
+	// the headAttr leg actually ran. Atomic for the same reason as graphSDispatches.
+	headBruteS atomic.Uint64
 
 	buildMu sync.Mutex // serializes builder graph install + manifest rewrite
 	// quiescence accounting (replaces two sync.WaitGroups). nInflightBuilds and
@@ -783,13 +790,33 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 	pq, _ := s.metric.prepare(q)
 	tk := newTopK(k)
 
-	// Head leg — ALWAYS brute-S (no graph). Filter by brute payload eval.
-	s.seg.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
-		if filter != nil && !filter.evalPayload(s.seg.payloads[slot]) {
-			return
+	// Head leg — ALWAYS brute-S (no graph). When a filter is present AND the head
+	// has a declared attr index, use it to compute the matching member set S_head
+	// and brute ONLY that subset (architecture §6 head "brute-S = brute over the
+	// matching subset S"), instead of scanning every live slot. evalSeg uses the
+	// maintained head index for declared leaves and an evalPayload residual scan for
+	// non-declared ones, so the result set is identical to the full-scan floor.
+	if filter != nil && s.seg.attr != nil {
+		n := len(s.seg.slotDoc)
+		shead, ok := s.seg.attr.evalSeg(filter, n, func(slot int) Payload { return s.seg.payloads[slot] })
+		if ok && shead != nil {
+			s.headBruteS.Add(1)
+			shead.iterate(func(slot int) {
+				if s.seg.tomb.get(slot) { // member ∧ live (§6): deleted docs never leak
+					return
+				}
+				tk.offer(SearchResult{DocID: s.seg.slotDoc[slot], Distance: s.metric.distance(s.seg.vectors[slot], pq)})
+			})
+		} else {
+			// Predicate unanswerable by the index view (never happens for the closed
+			// Eq/In/Range/And set, which validatePredicate already gated) → fall back
+			// to the full brute eval for safety, sharing the no-index path's scan.
+			s.headBruteEvalLocked(filter, pq, tk)
 		}
-		tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
-	})
+	} else {
+		// Unfiltered, or no declared head index: brute every live slot.
+		s.headBruteEvalLocked(filter, pq, tk)
+	}
 
 	// Sealed legs.
 	for i, ss := range s.sealed {
@@ -882,6 +909,20 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 		return nil, nil
 	}
 	return out, nil
+}
+
+// headBruteEvalLocked is the head leg's full-scan fallback: brute every LIVE head
+// slot and admit those matching filter via evalPayload. It is the correctness
+// floor used when no head attr index is available, and the safety net if the
+// index view ever reports a predicate it cannot answer (never, for the closed
+// Eq/In/Range/And set). Caller holds s.mu (R).
+func (s *Store) headBruteEvalLocked(filter Predicate, pq []float32, tk *topK) {
+	s.seg.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+		if filter != nil && !filter.evalPayload(s.seg.payloads[slot]) {
+			return
+		}
+		tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
+	})
 }
 
 // searchIndexedUnfiltered is the unfiltered indexed-segment leg (the pre-Phase-5

@@ -250,3 +250,46 @@ func (ha *headAttr) eq(prop string, v Value) *bitmap {
 	}
 	return &bitmap{}
 }
+
+// asSegIndex materializes the head's maintained maps into a segAttrIndex so the
+// head leg can reuse the SAME proven evalSeg machinery the sealed legs use
+// (architecture §6 "head brute-S"). The keyword postings copy over directly; the
+// numeric map (value → bitmap) is sorted once into the ordered numericIndex that
+// Range binary-searches. Building the view is over DISTINCT VALUES (bounded by
+// head size, cheap), not slots, and consults headAttr exactly as the task
+// requires — the residual/non-declared fallback inside evalSeg still scans head
+// payloads via evalPayload, keeping results identical to the old full-scan leg.
+func (ha *headAttr) asSegIndex() *segAttrIndex {
+	ai := &segAttrIndex{
+		decls:   ha.decls,
+		keyword: make(map[string]map[Value]*bitmap, len(ha.keyword)),
+		numeric: make(map[string]*numericIndex, len(ha.numeric)),
+	}
+	for prop, m := range ha.keyword {
+		// The postings are read-only through evalSeg (evalEq clones before
+		// returning), so sharing the maintained bitmaps is safe — no copy needed.
+		ai.keyword[prop] = m
+	}
+	for prop, m := range ha.numeric {
+		ni := &numericIndex{values: make([]float64, 0, len(m))}
+		for x := range m {
+			ni.values = append(ni.values, x)
+		}
+		sort.Float64s(ni.values)
+		ni.posts = make([]*bitmap, len(ni.values))
+		for i, x := range ni.values {
+			ni.posts[i] = m[x]
+		}
+		ai.numeric[prop] = ni
+	}
+	return ai
+}
+
+// evalSeg computes S_head: the slot bitmap matching pred over the head, using the
+// maintained head attr index for declared leaves and a payload residual scan
+// (evalPayload, identical to the brute floor) for non-declared/unanswerable ones.
+// It is the head counterpart of segAttrIndex.evalSeg and delegates to it via the
+// materialized view, so the two segment kinds share ONE eval implementation.
+func (ha *headAttr) evalSeg(pred Predicate, n int, payloadAt func(slot int) Payload) (*bitmap, bool) {
+	return ha.asSegIndex().evalSeg(pred, n, payloadAt)
+}
