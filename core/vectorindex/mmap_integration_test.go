@@ -50,12 +50,12 @@ func TestMmapStoreIntegration(t *testing.T) {
 	copy(nodeData[0:4], magicNodes[:])
 	// padding 4 bytes
 	binary.LittleEndian.PutUint64(nodeData[8:], cap)
-	// Node 0: level=2, flags=0, norm=1.5, upperSlot=1
-	writeNodeSlotRaw(nodeData, 0, 2, 0, 1.5, 1)
-	// Node 1: level=0, flags=0, norm=2.0, upperSlot=0
-	writeNodeSlotRaw(nodeData, 1, 0, 0, 2.0, 0)
-	// Node 2: level=1, flags=0, norm=3.0, upperSlot=2
-	writeNodeSlotRaw(nodeData, 2, 1, 0, 3.0, 2)
+	// Node 0: level=2, occupied, norm=1.5, upperSlot=1
+	writeNodeSlotRaw(nodeData, 0, 2, nodeFlagOccupied, 1.5, 1)
+	// Node 1: level=0, occupied, norm=2.0, upperSlot=0
+	writeNodeSlotRaw(nodeData, 1, 0, nodeFlagOccupied, 2.0, 0)
+	// Node 2: level=1, occupied, norm=3.0, upperSlot=2
+	writeNodeSlotRaw(nodeData, 2, 1, nodeFlagOccupied, 3.0, 2)
 	writeFile(t, filepath.Join(dir, "nodes.dat"), nodeData)
 
 	// graph_l0.dat

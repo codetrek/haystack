@@ -28,18 +28,39 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	return vec, nil
 }
 
+// nodeLive reports whether id refers to a committed, occupied, non-deleted
+// node. Caller must hold muWrite.RLock, which excludes all writers so
+// meta.TotalSlots and the node's flags byte are stable. It rejects zombie slots
+// (id >= TotalSlots — aborted/crashed-txn allocations whose Occupied bytes
+// leaked to disk), unoccupied slots, and tombstoned slots, so the HNSW
+// algorithm's skip-on-error logic keeps dead nodes out of search navigation and
+// entry-point selection (mirrors GetDocId's guard).
+func (s *MmapStore) nodeLive(id uint64) bool {
+	if id >= s.nodeCapacity || id >= s.meta.TotalSlots {
+		return false
+	}
+	flags := s.nodes[int64(pageSize)+int64(id)*int64(nodeSlotSize)+1]
+	return flags&nodeFlagOccupied != 0 && flags&nodeFlagDeleted == 0
+}
+
 // GetVectorRef returns a zero-copy view of the vector backed directly by the
 // mmap region. Per the NodeStore contract the caller MUST NOT mutate the slice
-// or retain it across a store mutation (which may remap the region). This
-// avoids a per-call allocation on the hot distance-computation path; the HNSW
-// index serializes inserts (which grow/remap) against searches via its own
-// RWMutex, so refs stay valid for the duration of their use.
+// or retain it across a store mutation (which may remap the region). This avoids
+// a per-call allocation on the hot distance path; the HNSW index serializes
+// inserts (which grow/remap) against searches via its own RWMutex.
+//
+// Held under muWrite.RLock (like GetDocId): excludes writers, so the vector
+// region, meta.TotalSlots, and the node flags are all stable, letting nodeLive
+// reject deleted/zombie/unoccupied nodes instead of handing out stale bytes.
 func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
-	s.muVec.RLock()
-	defer s.muVec.RUnlock()
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
 
 	if id >= s.vecCapacity {
 		return nil, fmt.Errorf("MmapStore.GetVectorRef: id %d out of range (cap %d)", id, s.vecCapacity)
+	}
+	if !s.nodeLive(id) {
+		return nil, fmt.Errorf("MmapStore.GetVectorRef: node %d is not live (deleted/zombie/unoccupied)", id)
 	}
 
 	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
@@ -132,11 +153,14 @@ func (s *MmapStore) readUpperSlot(id uint64) (uint32, error) {
 
 // GetNorm returns the precomputed L2 norm for a node.
 func (s *MmapStore) GetNorm(id uint64) (float32, error) {
-	s.muNodes.RLock()
-	defer s.muNodes.RUnlock()
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
 
 	if id >= s.nodeCapacity {
 		return 0, fmt.Errorf("MmapStore.GetNorm: id %d out of range (cap %d)", id, s.nodeCapacity)
+	}
+	if !s.nodeLive(id) {
+		return 0, fmt.Errorf("MmapStore.GetNorm: node %d is not live (deleted/zombie/unoccupied)", id)
 	}
 	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
 	// Norm is at bytes 4..8 in the NodeSlot.
@@ -146,19 +170,17 @@ func (s *MmapStore) GetNorm(id uint64) (float32, error) {
 
 // GetNodeLevel returns the level of the given node.
 func (s *MmapStore) GetNodeLevel(id uint64) (int, error) {
-	s.muNodes.RLock()
-	defer s.muNodes.RUnlock()
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
 
 	if id >= s.nodeCapacity {
 		return 0, fmt.Errorf("MmapStore.GetNodeLevel: id %d out of range (cap %d)", id, s.nodeCapacity)
 	}
-	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
-	level := int(s.nodes[offset]) // Level is first byte
-	flags := s.nodes[offset+1]
-	if flags&nodeFlagDeleted != 0 {
-		return 0, fmt.Errorf("MmapStore.GetNodeLevel: node %d is deleted", id)
+	if !s.nodeLive(id) {
+		return 0, fmt.Errorf("MmapStore.GetNodeLevel: node %d is not live (deleted/zombie/unoccupied)", id)
 	}
-	return level, nil
+	offset := int64(pageSize) + int64(id)*int64(nodeSlotSize)
+	return int(s.nodes[offset]), nil // Level is first byte
 }
 
 // GetEntryPoint returns the entry point node ID and its level.
