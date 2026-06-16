@@ -91,3 +91,91 @@ func TestStore_Search_UnknownIndexErrors(t *testing.T) {
 		t.Fatal("Search on an unknown index must error")
 	}
 }
+
+func TestStore_CreateVectorIndex_BruteThenConverges(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(13))
+	dim := 16
+	vecs := make(map[int64][]float32)
+	put := func(id string, v []float32) {
+		requireNoError(t, s.Put(id, v, nil))
+		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
+	}
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	// Two sealed segments + a head, all under the default index.
+	for i := 0; i < 80; i++ {
+		put("a-"+itoa(i), randVec())
+	}
+	requireNoError(t, s.Seal())
+	for i := 0; i < 80; i++ {
+		put("b-"+itoa(i), randVec())
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+	for i := 0; i < 20; i++ {
+		put("h-"+itoa(i), randVec()) // head
+	}
+
+	// Create a SECOND index (same metric, different params). It is born pending for
+	// every existing sealed segment → immediately queryable via brute fallback.
+	requireNoError(t, s.CreateVectorIndex("fast", VectorIndexConfig{
+		Type: "hnsw", Metric: Cosine, M: 8, EfConstruction: 80, EfSearch: 32,
+	}))
+
+	q := randVec()
+	want := bruteForceKNN(Cosine, q, vecs, 10)
+
+	// BEFORE the background builds finish, the new index is all-pending → every leg
+	// is brute → it returns EXACT top-k (recall 1.0 on the brute legs).
+	gotPending, err := s.Search("fast", q, 10, nil)
+	requireNoError(t, err)
+	if r := recallAtK(gotPending, want); r < 0.9 {
+		t.Fatalf("new index pending (brute) recall = %.2f, want ~1.0", r)
+	}
+
+	// After convergence, the new index's graphs are built (pending→indexed) and it
+	// still returns correct top-k under its own params.
+	requireNoError(t, s.WaitForIndex())
+	info := indexInfoByName(t, s, "fast")
+	if info.Indexed != info.Segments || info.Segments != 2 {
+		t.Fatalf("fast index did not converge: %+v", info)
+	}
+	gotIndexed, err := s.Search("fast", q, 10, nil)
+	requireNoError(t, err)
+	if r := recallAtK(gotIndexed, want); r < 0.8 {
+		t.Fatalf("new index graph recall = %.2f, want >= 0.8", r)
+	}
+}
+
+func TestStore_CreateVectorIndex_DuplicateAndBadType(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	if err := s.CreateVectorIndex("x", VectorIndexConfig{Type: "ivfpq", Metric: Cosine}); err == nil {
+		t.Fatal("non-hnsw Type must error in v1")
+	}
+	requireNoError(t, s.CreateVectorIndex("x", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
+	// Idempotent on the SAME config; conflicting config errors.
+	requireNoError(t, s.CreateVectorIndex("x", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
+	if err := s.CreateVectorIndex("x", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 16}); err == nil {
+		t.Fatal("re-create with a different config must error")
+	}
+	if err := s.CreateVectorIndex("default", VectorIndexConfig{Type: "hnsw", Metric: Cosine}); err == nil {
+		t.Fatal("re-creating the reserved default index must error")
+	}
+}
+
+func indexInfoByName(t *testing.T, s *Store, name string) VectorIndexInfo {
+	t.Helper()
+	for _, in := range s.ListVectorIndexes() {
+		if in.Name == name {
+			return in
+		}
+	}
+	t.Fatalf("index %q not found", name)
+	return VectorIndexInfo{}
+}

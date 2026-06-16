@@ -449,6 +449,55 @@ func (s *Store) DropAttrIndex(property string) error {
 	return s.writeManifestLocked()
 }
 
+// CreateVectorIndex declares a new named vector index over the SAME records as the
+// existing indexes (segment boundaries are shared, §4.7). The index is born
+// PENDING for every existing sealed segment (empty graphs map) → immediately
+// queryable via the brute fallback in searchLocked → the background builder fills
+// its per-segment graphs (pending→indexed). It mirrors CreateAttrIndex: validate,
+// install in the s.indexes map, persist to the manifest (so a crash mid-build
+// resumes via recover, gotcha 8), THEN spawn the builds. Idempotent on the same
+// config; an existing name with a different config (or the reserved "default") is
+// an error. v1 supports Type "hnsw" only.
+func (s *Store) CreateVectorIndex(name string, cfg VectorIndexConfig) error {
+	if cfg.Type != "hnsw" {
+		return fmt.Errorf("vectorstore: unsupported index type %q (v1 supports \"hnsw\")", cfg.Type)
+	}
+	if name == "" {
+		return errors.New("vectorstore: index name must be non-empty")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if name == defaultIndexName {
+		return fmt.Errorf("vectorstore: index %q is reserved", name)
+	}
+	if existing, ok := s.indexes[name]; ok {
+		want := graphConfigFromCfg(cfg)
+		if existing.metric != cfg.Metric || existing.cfg != want {
+			return fmt.Errorf("vectorstore: index %q already exists with a different config", name)
+		}
+		return nil // idempotent on identical config
+	}
+	if s.closing {
+		return errors.New("vectorstore: store is closing")
+	}
+	s.indexes[name] = newVindex(cfg)
+	// Persist the new index (pending for all segments) BEFORE spawning builds, so a
+	// crash mid-build is resumed by recover() (same crash-safety as a pending seal).
+	if err := s.writeManifestLocked(); err != nil {
+		delete(s.indexes, name)
+		return err
+	}
+	// Spawn one background build per existing sealed segment (every (index,seg) is
+	// pending). buildBeginLocked under s.mu before the goroutine, so WaitForIndex
+	// counts it (gotcha 4). Gated by s.closing above.
+	for i, sid := range s.sealedID {
+		segDir := filepath.Join(s.dir, segDirName(sid, 0))
+		s.buildBeginLocked()
+		go s.buildAndPublish(name, sid, segDir, s.sealed[i])
+	}
+	return nil
+}
+
 // --- quiescence accounting (cond-based; all under s.mu) ----------------------
 //
 // These replace two sync.WaitGroups. Keeping the counts under s.mu (the same lock
