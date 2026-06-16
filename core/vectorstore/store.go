@@ -57,6 +57,7 @@ type Store struct {
 	docToSeg map[int64]segID       // global docId → owning segId (headSegID for head)
 	graphs   map[segID]*builtIndex // segId → built index (absent until indexed)
 	gcfg     graphConfig           // the single index's HNSW config
+	mcfg     mergeConfig           // space-reclamation policy tunables (Phase 4)
 	nextSeg  segID                 // next sealed segId to assign
 
 	maxSegSize int // head row-count auto-seal trigger (defaultMaxSegSize unless overridden)
@@ -99,6 +100,7 @@ func Open(opts Options) (*Store, error) {
 		docToSeg: make(map[int64]segID),
 		graphs:   make(map[segID]*builtIndex),
 		gcfg:     graphConfig{}.withDefaults(),
+		mcfg:     mergeConfig{}.withDefaults(),
 		nextSeg:  1,
 
 		maxSegSize: defaultMaxSegSize,
