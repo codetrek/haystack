@@ -5,10 +5,15 @@ import (
 	"fmt"
 )
 
-// writeGraphFile serializes a built segGraphStore to segDir/graph.dat and fsyncs
-// it, then fsyncs segDir. The graph is immutable after this (built once).
-func writeGraphFile(segDir string, g *segGraphStore) error {
-	f, err := fsCreate(segFilePath(segDir, "graph.dat"))
+// graphFileName is the per-index graph file within a shared segment dir. Each
+// named index gets its own file (graph-<name>.dat) so N indexes coexist in one
+// seg dir and DropVectorIndex deletes only one index's files (architecture §4.7).
+func graphFileName(name string) string { return "graph-" + name + ".dat" }
+
+// writeGraphFile serializes a built segGraphStore to segDir/graph-<name>.dat and
+// fsyncs it, then fsyncs segDir. The graph is immutable after this (built once).
+func writeGraphFile(segDir, name string, g *segGraphStore) error {
+	f, err := fsCreate(segFilePath(segDir, graphFileName(name)))
 	if err != nil {
 		return err
 	}
@@ -82,11 +87,11 @@ func (r *graphReader) u64() (uint64, error) {
 	return v, nil
 }
 
-// openGraphFile loads segDir/graph.dat into a fresh segGraphStore bound to seg,
-// reconstructing topology + nodeId↔slot/docId. Vectors are still resolved from
-// seg (graph stores no vectors). The returned store is read-only for search.
-func openGraphFile(segDir string, seg *sealedSegment) (*segGraphStore, error) {
-	data, err := readWholeFile(segFilePath(segDir, "graph.dat"))
+// openGraphFile loads segDir/graph-<name>.dat into a fresh segGraphStore bound to
+// seg, reconstructing topology + nodeId↔slot/docId. Vectors are still resolved
+// from seg (graph stores no vectors). The returned store is read-only for search.
+func openGraphFile(segDir, name string, seg *sealedSegment) (*segGraphStore, error) {
+	data, err := readWholeFile(segFilePath(segDir, graphFileName(name)))
 	if err != nil {
 		return nil, err
 	}

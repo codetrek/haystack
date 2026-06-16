@@ -251,7 +251,7 @@ func (s *Store) recover() error {
 			}
 		}
 		if e.State == segIndexed {
-			g, gerr := openGraphFile(segDir, ss)
+			g, gerr := openGraphFile(segDir, "default", ss)
 			if gerr != nil {
 				return gerr
 			}
@@ -1129,7 +1129,7 @@ func (s *Store) sealLocked() error {
 // flips never race a single manifest file.
 func (s *Store) buildAndPublish(id segID, segDir string, ss *sealedSegment) {
 	defer s.buildDone()
-	gs, err := buildSegmentGraph(segDir, ss, s.gcfg)
+	gs, err := buildSegmentGraph(segDir, "default", ss, s.gcfg)
 	if err != nil {
 		return // stays pending; brute leg keeps results correct
 	}

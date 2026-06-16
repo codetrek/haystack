@@ -23,11 +23,12 @@ func (c graphConfig) withDefaults() graphConfig {
 }
 
 // buildSegmentGraph builds an HNSW over the live slots of seg, persists it to
-// segDir/graph.dat (fsync), and returns the reopened read-only graph store. This
-// is the unit the background builder schedules per pending segment. It is a pure
-// function of the (immutable) segment + cfg, so it is safe to run off the write
-// path with no lock on the store.
-func buildSegmentGraph(segDir string, seg *sealedSegment, cfg graphConfig) (*segGraphStore, error) {
+// segDir/graph-<name>.dat (fsync), and returns the reopened read-only graph store.
+// This is the unit the background builder schedules per pending (index,segment).
+// It is a pure function of the (immutable) segment + cfg, so it is safe to run off
+// the write path with no lock on the store. name selects the per-index graph file
+// so N named indexes coexist in one shared seg dir (architecture §4.7).
+func buildSegmentGraph(segDir, name string, seg *sealedSegment, cfg graphConfig) (*segGraphStore, error) {
 	cfg = cfg.withDefaults()
 	gs := newSegGraphStore(seg)
 	idx := newHNSWIndex(gs,
@@ -44,10 +45,10 @@ func buildSegmentGraph(segDir string, seg *sealedSegment, cfg graphConfig) (*seg
 	if err := b.commit(); err != nil {
 		return nil, err
 	}
-	if err := writeGraphFile(segDir, gs); err != nil {
+	if err := writeGraphFile(segDir, name, gs); err != nil {
 		return nil, err
 	}
 	// Reopen from disk so the returned store is exactly what recovery would load
 	// (no reliance on the in-memory build state lingering).
-	return openGraphFile(segDir, seg)
+	return openGraphFile(segDir, name, seg)
 }

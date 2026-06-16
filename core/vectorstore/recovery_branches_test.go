@@ -89,10 +89,10 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.Close())
 
-	// Simulate a crash mid-build: drop graph.dat and rewrite the manifest marking
-	// segment 1 pending (the state recover() must resume from).
+	// Simulate a crash mid-build: drop graph-default.dat and rewrite the manifest
+	// marking segment 1 pending (the state recover() must resume from).
 	segDir := filepath.Join(dir, segDirName(segID(1), 0))
-	requireNoError(t, os.Remove(filepath.Join(segDir, "graph.dat")))
+	requireNoError(t, os.Remove(filepath.Join(segDir, "graph-default.dat")))
 	m, err := readManifest(dir)
 	requireNoError(t, err)
 	for i := range m.Segments {
@@ -113,13 +113,14 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 	if len(got) == 0 {
 		t.Fatal("search returned nothing on a resumed pending segment")
 	}
-	// After the resumed build finishes, the segment is indexed and graph.dat exists.
+	// After the resumed build finishes, the segment is indexed and the default
+	// index's graph file exists.
 	requireNoError(t, s2.WaitForIndex())
 	if !s2.isIndexedForTest(1) {
 		t.Fatal("resumed segment 1 not indexed after WaitForIndex")
 	}
-	if _, err := os.Stat(filepath.Join(segDir, "graph.dat")); err != nil {
-		t.Fatalf("graph.dat not rebuilt by resumed build: %v", err)
+	if _, err := os.Stat(filepath.Join(segDir, "graph-default.dat")); err != nil {
+		t.Fatalf("graph-default.dat not rebuilt by resumed build: %v", err)
 	}
 }
 

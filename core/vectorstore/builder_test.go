@@ -37,11 +37,11 @@ func TestBuildSegmentGraph_ProducesSearchableGraphFile(t *testing.T) {
 	defer ss.close()
 
 	cfg := graphConfig{M: 16, EfConstruction: 100, EfSearch: 64, Seed: 42}
-	gs, err := buildSegmentGraph(segDir, ss, cfg)
+	gs, err := buildSegmentGraph(segDir, "default", ss, cfg)
 	requireNoError(t, err)
 
-	if _, err := os.Stat(filepath.Join(segDir, "graph.dat")); err != nil {
-		t.Fatalf("graph.dat not written: %v", err)
+	if _, err := os.Stat(filepath.Join(segDir, "graph-default.dat")); err != nil {
+		t.Fatalf("graph-default.dat not written: %v", err)
 	}
 	idx := newHNSWIndex(gs, withGraphEfSearch(64))
 	q := make([]float32, dim)
