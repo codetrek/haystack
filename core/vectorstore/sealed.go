@@ -50,6 +50,14 @@ type sealedSegment struct {
 	plLens    []uint32
 	plOffsets []int // byte offset of each payload within the data region
 	plBase    int   // byte offset where payload bytes start
+
+	// attr is the per-segment derived attr index (segAttrIndex). It is loaded from
+	// attr.dat (or rebuilt from payload) by the store under s.mu when the declared
+	// attr set is known (CreateAttrIndex / recover / seal / merge); nil until then,
+	// in which case the filtered-search leg builds it on the fly. The store owns its
+	// lifecycle (the declared set lives in the manifest, not the segment), so the
+	// segment merely carries the pointer — it is never mutated through the segment.
+	attr *segAttrIndex
 }
 
 func (s *sealedSegment) count() int { return s.n }

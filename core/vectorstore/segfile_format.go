@@ -13,6 +13,7 @@ var (
 	magicSlotDoc = [4]byte{'V', 'S', 'S', 'D'} // slotdoc.dat
 	magicTomb    = [4]byte{'V', 'S', 'T', 'B'} // tomb.dat
 	magicPayload = [4]byte{'V', 'S', 'P', 'L'} // payload.dat
+	magicAttr    = [4]byte{'V', 'S', 'A', 'T'} // attr.dat
 )
 
 // vectorsHeader is the on-disk header for vectors.dat (24 bytes). After the
@@ -57,3 +58,15 @@ type payloadHeader struct {
 }
 
 var _ [16]byte = [unsafe.Sizeof(payloadHeader{})]byte{}
+
+// attrHeader is the on-disk header for attr.dat (16 bytes). Body is a
+// self-describing serialization of the per-property postings (see attrfile.go).
+// Count is the row count this index was built over; it must match the segment's
+// vector count, else the file is stale and the index is rebuilt from payload.
+type attrHeader struct {
+	Magic [4]byte
+	_     [4]byte
+	Count uint64
+}
+
+var _ [16]byte = [unsafe.Sizeof(attrHeader{})]byte{}
