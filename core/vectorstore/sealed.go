@@ -9,7 +9,9 @@ import (
 
 // sealedSegment is an immutable, mmap-backed records segment. Vectors, slot→docId,
 // and payload are read-only; only the tombstone bitmap (tomb.dat) is mutable —
-// Delete/Update set bits and msync them. nodeId==slot for the per-segment HNSW.
+// Delete/Update set bits and msync them. The per-segment HNSW uses a dense
+// live-only build nodeId (NOT the slot); the segment owns its vectors and resolves
+// a graph hit back to a row by docId (§3 "向量只存一份").
 type sealedSegment struct {
 	dir    string
 	metric Metric
@@ -22,6 +24,13 @@ type sealedSegment struct {
 	vecBase int // byte offset where row data starts (segPageSize)
 
 	slotDocs []int64 // decoded from slotdoc.dat (small; copy out, not mmap-aliased)
+
+	// docToSlot is the derived, resident per-segment docId→slot index over LIVE
+	// slots (architecture §4.6: "段内 docId↔slot ... 派生、常驻内存、可重建"). It is
+	// built once at open from slotDocs (tombstoned slots excluded) and pruned by
+	// tombstoneSlot, so slotOfDoc/Get/Delete and the Search tombstone post-filter
+	// are O(1), not an O(n) scan (appendix #6/#17/#20/#24).
+	docToSlot map[int64]int
 
 	// tomb.dat mapping (RW): header at offset 0, words start at segPageSize.
 	tombMap   []byte
@@ -51,7 +60,8 @@ func (s *sealedSegment) tombGet(slot int) bool {
 
 // tombstoneSlot sets slot's tombstone bit and msyncs tomb.dat so the delete is
 // durable. The bitmap is pre-sized at seal to cover every slot, so no growth is
-// needed (segments are immutable in row count).
+// needed (segments are immutable in row count). The derived docToSlot index is
+// pruned so the slot is no longer reported live.
 func (s *sealedSegment) tombstoneSlot(slot int) error {
 	if slot < 0 || slot >= s.n {
 		return fmt.Errorf("vectorstore: tombstone slot %d out of range [0,%d)", slot, s.n)
@@ -61,8 +71,26 @@ func (s *sealedSegment) tombstoneSlot(slot int) error {
 	word := binary.LittleEndian.Uint64(s.tombMap[off : off+8])
 	word |= 1 << uint(slot&63)
 	binary.LittleEndian.PutUint64(s.tombMap[off:off+8], word)
-	return mmapSync(s.tombMap)
+	if err := mmapSync(s.tombMap); err != nil {
+		return err
+	}
+	doc := s.slotDocs[slot]
+	if cur, ok := s.docToSlot[doc]; ok && cur == slot {
+		delete(s.docToSlot, doc)
+	}
+	return nil
 }
+
+// slotOfDoc returns the live slot for docID in O(1) via the derived index. A
+// tombstoned (or absent) docId returns found=false — this is the liveness check
+// the indexed-search tombstone post-filter relies on.
+func (s *sealedSegment) slotOfDoc(docID int64) (int, bool) {
+	slot, ok := s.docToSlot[docID]
+	return slot, ok
+}
+
+// tombCount returns the number of tombstoned slots (live count = n − tombCount).
+func (s *sealedSegment) tombCount() int { return s.n - len(s.docToSlot) }
 
 // getVectorRef returns the stored-form vector for slot without copying (aliases
 // the mmap). Callers must not retain or mutate it. Used by the HNSW graph leg.

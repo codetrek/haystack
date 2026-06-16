@@ -24,19 +24,32 @@ type Options struct {
 	Metric Metric
 }
 
-// Store is the Phase-1 records layer: one in-memory head segment fronted by an
-// idtable (string id → docId) and protected by a WAL. The WAL is the single
-// crash-safe source of truth for both the records and the id↔docId mapping. All
-// public methods are serialized by mu (single-writer; readers take RLock and
-// copy out of the segment).
+// headSegID is the reserved segId for the in-memory head in the global
+// docId→segId map. Sealed segments use ids >= 1 (the manifest version space).
+const headSegID = segID(0)
+
+// Store is the segmented records layer (Phase 2): one in-memory brute head plus
+// an ordered set of immutable on-disk sealed segments, each with a tombstone
+// bitmap and (when indexed) a per-segment HNSW. Writes go to the head; Delete is
+// routed to the owning segment via the global docId→segId map. A manifest +
+// head WAL provide crash recovery. All public methods are serialized by mu.
 type Store struct {
 	mu      sync.RWMutex
 	metric  Metric
 	dir     string
 	alloc   *idtable.Allocator
-	seg     *segment
+	seg     *segment // the head
 	wal     *WAL
 	idToDoc map[string]int64 // derived from WAL replay; lets reads avoid allocating
+
+	sealed   []*sealedSegment      // live sealed segments, by attach order
+	sealedID []segID               // parallel: sealed[i] has segId sealedID[i]
+	docToSeg map[int64]segID       // global docId → owning segId (headSegID for head)
+	graphs   map[segID]*builtIndex // segId → built index (absent until indexed)
+	gcfg     graphConfig           // the single index's HNSW config
+	nextSeg  segID                 // next sealed segId to assign
+
+	manifestVersion uint64 // monotonic manifest version (bumped per rewrite)
 }
 
 // Open creates or recovers a Store at opts.Dir, replaying the WAL to rebuild the
@@ -61,12 +74,16 @@ func Open(opts Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{
-		metric:  opts.Metric,
-		dir:     opts.Dir,
-		alloc:   alloc,
-		seg:     newSegment(opts.Metric),
-		wal:     w,
-		idToDoc: make(map[string]int64),
+		metric:   opts.Metric,
+		dir:      opts.Dir,
+		alloc:    alloc,
+		seg:      newSegment(opts.Metric),
+		wal:      w,
+		idToDoc:  make(map[string]int64),
+		docToSeg: make(map[int64]segID),
+		graphs:   make(map[segID]*builtIndex),
+		gcfg:     graphConfig{}.withDefaults(),
+		nextSeg:  1,
 	}
 	if err := s.replay(); err != nil {
 		w.Close()
@@ -117,6 +134,7 @@ func (s *Store) replay() error {
 				return err
 			}
 			s.idToDoc[r.ID] = r.DocID
+			s.docToSeg[r.DocID] = headSegID
 			s.applyPut(r)
 		case recDelete:
 			d := decodeDelete(payload)
@@ -169,14 +187,29 @@ func (s *Store) Put(id string, v []float32, payload []byte) error {
 	if err := s.wal.Sync(); err != nil {
 		return err
 	}
+	// Cross-segment update (appendix #7): if this docId currently lives in a
+	// SEALED segment, tombstone that sealed slot so it does not stay live in both
+	// the sealed graph and the head. The new copy lands in the head below; the WAL
+	// record (already fsynced) drives the same tombstone on replay.
+	if prev, ok := s.docToSeg[docID]; ok && prev != headSegID {
+		if ss := s.sealedByID(prev); ss != nil {
+			if slot, found := ss.slotOfDoc(docID); found {
+				if err := ss.tombstoneSlot(slot); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	s.idToDoc[id] = docID
+	s.docToSeg[docID] = headSegID
 	s.applyPut(rec)
 	return nil
 }
 
-// Get returns the original (restored) vector and payload for id. Reads never
-// allocate a docId: an unknown id (never Put) returns found=false. The returned
-// vector and payload are fresh copies the caller may mutate freely.
+// Get returns the original (restored) vector and payload for id from its owning
+// segment (head or sealed). Reads never allocate a docId: an unknown id (never
+// Put) returns found=false. The returned vector and payload are fresh copies the
+// caller may mutate freely.
 func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -184,24 +217,45 @@ func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err err
 	if !ok {
 		return nil, nil, false, nil
 	}
-	slot, ok := s.seg.slotOfDoc(docID)
+	segId, ok := s.docToSeg[docID]
 	if !ok {
 		return nil, nil, false, nil
 	}
-	stored, norm, pl, live := s.seg.read(slot)
+	if segId == headSegID {
+		slot, ok := s.seg.slotOfDoc(docID)
+		if !ok {
+			return nil, nil, false, nil
+		}
+		stored, norm, pl, live := s.seg.read(slot)
+		if !live {
+			return nil, nil, false, nil
+		}
+		// restore is the identity for non-cosine metrics, so it may alias the
+		// segment's internal buffer. Always hand the caller a private copy.
+		out := append([]float32(nil), s.metric.restore(stored, norm)...)
+		return out, append([]byte(nil), pl...), true, nil
+	}
+	ss := s.sealedByID(segId)
+	if ss == nil {
+		return nil, nil, false, nil
+	}
+	slot, found2 := ss.slotOfDoc(docID)
+	if !found2 {
+		return nil, nil, false, nil
+	}
+	stored, norm, pl, live := ss.read(slot)
 	if !live {
 		return nil, nil, false, nil
 	}
-	// restore is the identity for non-cosine metrics, so it may alias the
-	// segment's internal buffer. Always hand the caller a private copy.
 	out := append([]float32(nil), s.metric.restore(stored, norm)...)
-	plcp := append([]byte(nil), pl...)
-	return out, plcp, true, nil
+	return out, append([]byte(nil), pl...), true, nil
 }
 
-// Delete tombstones id's current slot. Deleting an unknown or already-deleted id
-// is a pure no-op (no WAL write, no idtable allocation). The id↔docId mapping is
-// intentionally left in place; a later Put of the same id reuses the same docId.
+// Delete tombstones id's current slot in its owning segment (head or sealed).
+// Deleting an unknown or already-deleted id is a no-op. The id↔docId mapping is
+// left in place; a later Put reuses the same docId (in the head). For a sealed
+// segment the tombstone is persisted in that segment's mmap'd bitmap (durable on
+// return); for the head it is a WAL-protected in-memory tombstone.
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -209,17 +263,38 @@ func (s *Store) Delete(id string) error {
 	if !ok {
 		return nil
 	}
-	slot, ok := s.seg.slotOfDoc(docID)
+	segId, ok := s.docToSeg[docID]
 	if !ok {
 		return nil
 	}
-	if _, err := s.wal.Append(recDelete, encodeDelete(id, docID, int64(slot))); err != nil {
+	if segId == headSegID {
+		slot, ok := s.seg.slotOfDoc(docID)
+		if !ok {
+			return nil
+		}
+		if _, err := s.wal.Append(recDelete, encodeDelete(id, docID, int64(slot))); err != nil {
+			return err
+		}
+		if err := s.wal.Sync(); err != nil {
+			return err
+		}
+		s.seg.tombstone(slot)
+		delete(s.docToSeg, docID)
+		return nil
+	}
+	// Sealed segment: tombstone is persisted in the segment's mmap'd bitmap.
+	ss := s.sealedByID(segId)
+	if ss == nil {
+		return nil
+	}
+	slot, found := ss.slotOfDoc(docID)
+	if !found {
+		return nil
+	}
+	if err := ss.tombstoneSlot(slot); err != nil {
 		return err
 	}
-	if err := s.wal.Sync(); err != nil {
-		return err
-	}
-	s.seg.tombstone(slot)
+	delete(s.docToSeg, docID)
 	return nil
 }
 
@@ -245,4 +320,34 @@ func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// sealedByID returns the live sealed segment with segId, or nil. Caller holds s.mu.
+func (s *Store) sealedByID(id segID) *sealedSegment {
+	for i, sid := range s.sealedID {
+		if sid == id {
+			return s.sealed[i]
+		}
+	}
+	return nil
+}
+
+// attachSealedForTest installs a sealed segment under segId and empties the head,
+// mirroring what the seal pipeline does, so tests can exercise multi-segment
+// routing before the full Seal path exists. Live sealed docs are (re)homed to the
+// new segment. Test-only (no manifest write).
+func (s *Store) attachSealedForTest(ss *sealedSegment, id segID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for slot := 0; slot < ss.count(); slot++ {
+		if !ss.tombGet(slot) {
+			s.docToSeg[ss.slotDoc(slot)] = id
+		}
+	}
+	s.sealed = append(s.sealed, ss)
+	s.sealedID = append(s.sealedID, id)
+	s.seg = newSegment(s.metric)
+	if id >= s.nextSeg {
+		s.nextSeg = id + 1
+	}
 }

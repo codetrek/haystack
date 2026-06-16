@@ -173,3 +173,28 @@ func (g *segGraphStore) NextNodeId() (uint64, error) {
 func (g *segGraphStore) txnBegin() error            { return nil }
 func (g *segGraphStore) txnCommit() error           { return nil }
 func (g *segGraphStore) txnAbort(cause error) error { return cause }
+
+// builtIndex couples a segment's durable graph topology (store) with a single,
+// long-lived hnswIndex wrapper built once from the index config (appendix #26:
+// do NOT reconstruct a fresh hnswIndex per query per segment — that re-derives
+// mL/M, can diverge from build-time params, and allocates on the hottest path).
+// idx.search is RLock-safe via the index's own mutex, so one shared instance is
+// reused across concurrent Searches.
+type builtIndex struct {
+	store *segGraphStore
+	idx   *hnswIndex
+}
+
+// newBuiltIndex wraps a (reopened or freshly built) graph store in a search-ready
+// index using the store's HNSW config.
+func newBuiltIndex(gs *segGraphStore, cfg graphConfig) *builtIndex {
+	cfg = cfg.withDefaults()
+	return &builtIndex{
+		store: gs,
+		idx: newHNSWIndex(gs,
+			withGraphM(cfg.M),
+			withGraphEfConstruction(cfg.EfConstruction),
+			withGraphEfSearch(cfg.EfSearch),
+		),
+	}
+}

@@ -334,6 +334,17 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 		s.close()
 		return nil, fmt.Errorf("seal: payload.dat truncated bytes in %s (size=%d need=%d)", segDir, len(pmap), plNeed)
 	}
+
+	// Build the derived docId→slot index over LIVE slots (architecture §4.6;
+	// appendix #6/#17/#20/#24 — keeps slotOfDoc/Get/Delete and the Search
+	// tombstone post-filter O(1) instead of an O(n) scan). Done last so tombGet
+	// (which reads the now-mapped tomb bitmap) is valid.
+	s.docToSlot = make(map[int64]int, s.n)
+	for slot := 0; slot < s.n; slot++ {
+		if !s.tombGet(slot) {
+			s.docToSlot[s.slotDocs[slot]] = slot
+		}
+	}
 	return s, nil
 }
 
