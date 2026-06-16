@@ -98,6 +98,15 @@ func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
 }
 
 // GetNeighbors returns the neighbor list for the given node and layer.
+//
+// Unlike the other read accessors, this is intentionally NOT gated on a faulted
+// store (the VEC-009 guard). It reads under muGraph.RLock, not muWrite, so
+// testing s.faulted here would either race with fault() (muWrite.Lock) or need a
+// lock-order-inverting muWrite acquisition (writers take muWrite then muGraph in
+// grow → deadlock). Every in-tree caller is already gated upstream on a faulted
+// store: Search returns at GetEntryPoint (faulted) before reaching GetNeighbors,
+// and write paths reject at txnBegin. A direct external caller on a faulted
+// store may still observe uncommitted edges; recovery is via reopen.
 func (s *MmapStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 	s.muGraph.RLock()
 	defer s.muGraph.RUnlock()
@@ -221,7 +230,7 @@ func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 	s.muWrite.RUnlock()
 
 	if ep == ^uint64(0) {
-		return 0, 0, fmt.Errorf("MmapStore.GetEntryPoint: no entry point set")
+		return 0, 0, errNoEntryPoint
 	}
 	return ep, int(el), nil
 }
@@ -236,6 +245,10 @@ func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 func (s *MmapStore) HighestLiveNodeExcluding(exclude uint64) (uint64, int, bool, error) {
 	s.muWrite.RLock()
 	defer s.muWrite.RUnlock()
+
+	if s.faulted != nil {
+		return 0, 0, false, s.faulted // VEC-009: don't surface aborted-txn nodes on a faulted store
+	}
 
 	bestID := uint64(0)
 	bestLevel := -1

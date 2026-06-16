@@ -146,7 +146,7 @@ func (m *MemNodeStore) GetEntryPoint() (uint64, int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if !m.hasEntry {
-		return 0, 0, fmt.Errorf("entry point not set")
+		return 0, 0, errNoEntryPoint
 	}
 	return m.entryID, m.maxLayer, nil
 }

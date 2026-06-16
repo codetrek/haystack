@@ -2,8 +2,15 @@ package vectorindex
 
 import (
 	"encoding/binary"
+	"errors"
 	"math"
 )
+
+// errNoEntryPoint is the sentinel returned by NodeStore.GetEntryPoint when the
+// index has no entry point (empty or just-cleared), as distinct from any other
+// error (e.g. a faulted store). Search treats errNoEntryPoint as "empty, return
+// no results" and propagates anything else to the caller.
+var errNoEntryPoint = errors.New("vectorindex: no entry point set")
 
 // NodeStore defines the persistence interface for HNSW graph nodes.
 //

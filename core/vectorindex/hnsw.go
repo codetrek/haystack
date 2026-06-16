@@ -1,6 +1,7 @@
 package vectorindex
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -198,6 +199,9 @@ func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 	// Get current entry point.
 	epId, maxLayer, err := h.store.GetEntryPoint()
 	if err != nil {
+		if !errors.Is(err, errNoEntryPoint) {
+			return err // e.g. a faulted store — don't mistake it for the first node
+		}
 		// First node — set as entry point and return.
 		return h.store.SetEntryPoint(nodeId, l)
 	}
@@ -351,8 +355,10 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 
 	epId, maxLayer, err := h.store.GetEntryPoint()
 	if err != nil {
-		// No entry point — empty index.
-		return nil, nil
+		if errors.Is(err, errNoEntryPoint) {
+			return nil, nil // empty index
+		}
+		return nil, err // e.g. a faulted store — surface it, don't mask as an empty index
 	}
 
 	// Verify entry point node still exists (may have been deleted).
@@ -538,10 +544,15 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 			// still occupied here (DeleteNode runs below), so exclude it from
 			// the scan.
 			//
-			// KNOWN LIMITATION (VEC-007, out of scope): a reseated EP is not
-			// guaranteed to be link-reachable from every other live node, so
-			// recall may be degraded until the next Insert re-links the graph.
-			// We only restore availability here, not full graph connectivity.
+			// KNOWN LIMITATION (VEC-007, out of scope): the reseated EP is not
+			// guaranteed link-reachable from every other live node. Search is a
+			// pure graph traversal from the EP, so if the reseat picks an
+			// isolated node, Search reaches only that node's connected component
+			// — other components' true neighbors are deterministically and
+			// silently dropped (results stay numerically correct) until a later
+			// Insert re-links the graph. We restore availability here, not full
+			// graph connectivity — still strictly better than the prior bug,
+			// where a stale EP made the WHOLE index return empty.
 			candID, candLevel, ok, err := h.store.HighestLiveNodeExcluding(nodeId)
 			if err != nil {
 				return err

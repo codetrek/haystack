@@ -63,6 +63,21 @@ func TestFaultedStoreRejectsAbortedReads(t *testing.T) {
 	if _, ok, err := s.GetNodeId(200); ok && err == nil {
 		t.Fatalf("VEC-009: GetNodeId mapped aborted docId 200 on a faulted store")
 	}
+	// Every other guarded read is rejected too — even for committed node 0
+	// (the whole store is untrustworthy until reopen). Covers the shared
+	// nodeLive guard (GetVector/GetNorm/GetNodeLevel) and HighestLiveNodeExcluding.
+	if _, err := s.GetVector(0); err == nil {
+		t.Fatalf("VEC-009: GetVector served data on a faulted store")
+	}
+	if _, err := s.GetNorm(0); err == nil {
+		t.Fatalf("VEC-009: GetNorm served data on a faulted store")
+	}
+	if _, err := s.GetNodeLevel(0); err == nil {
+		t.Fatalf("VEC-009: GetNodeLevel served data on a faulted store")
+	}
+	if _, _, ok, err := s.HighestLiveNodeExcluding(99); ok || err == nil {
+		t.Fatalf("VEC-009: HighestLiveNodeExcluding returned a node on a faulted store")
+	}
 
 	// Reopen discards the unterminated transaction: B is gone, EP is back to A.
 	if err := s.Close(); err != nil {

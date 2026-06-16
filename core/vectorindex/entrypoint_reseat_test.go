@@ -201,3 +201,37 @@ func TestClearEntryPoint_MemStore(t *testing.T) {
 	_, _, err = mem.GetEntryPoint()
 	require.Error(t, err, "ClearEntryPoint must make GetEntryPoint report no entry")
 }
+
+// Reseat tie-break: among equal-(highest-)level survivors, the lowest node id
+// wins — a documented, deterministic contract on both stores. Inverting the
+// tie-break (id < bestID -> id > bestID) leaves the package green without this.
+func TestStaleEntryPointReseat_TieBreakLowestId(t *testing.T) {
+	// MemStore: delete the EP; B and C are equal-level survivors -> lowest id.
+	store := NewMemNodeStore(Euclidean)
+	idx := NewHNSWIndex(store)
+	idA := buildIsolatedMemNode(t, store, 0, []float32{1, 0, 0, 0}, 100) // A (EP)
+	idB := buildIsolatedMemNode(t, store, 0, []float32{0, 1, 0, 0}, 200)
+	idC := buildIsolatedMemNode(t, store, 0, []float32{0, 0, 1, 0}, 300)
+	require.Less(t, idB, idC) // ascending allocation
+	require.NoError(t, store.SetEntryPoint(idA, 0))
+
+	require.NoError(t, idx.Delete(100))
+	ep, _, err := store.GetEntryPoint()
+	require.NoError(t, err)
+	require.Equal(t, idB, ep, "tie among equal-level survivors must pick the lowest id")
+
+	// MmapStore: HighestLiveNodeExcluding directly — equal level, lowest id wins.
+	dir := t.TempDir()
+	ms, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Euclidean, Dim: 4, M: 16})
+	require.NoError(t, err)
+	defer ms.Close()
+	require.NoError(t, ms.txnBegin())
+	require.NoError(t, ms.PutNode(5, 1, []float32{1, 0, 0, 0}, 1))
+	require.NoError(t, ms.PutNode(9, 1, []float32{0, 1, 0, 0}, 2)) // same level, higher id
+	require.NoError(t, ms.txnCommit())
+	id, lvl, ok, err := ms.HighestLiveNodeExcluding(^uint64(0)) // exclude nothing
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, 1, lvl)
+	require.Equal(t, uint64(5), id, "MmapStore tie-break must pick the lowest id at the max level")
+}
