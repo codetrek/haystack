@@ -3,6 +3,7 @@ package vectorstore
 import (
 	"encoding/binary"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -38,6 +39,7 @@ type Store struct {
 	mu      sync.RWMutex
 	metric  Metric
 	dir     string
+	kv      kv.Store
 	alloc   *idtable.Allocator
 	seg     *segment // the head
 	wal     *WAL
@@ -77,6 +79,7 @@ func Open(opts Options) (*Store, error) {
 	s := &Store{
 		metric:   opts.Metric,
 		dir:      opts.Dir,
+		kv:       opts.KV,
 		alloc:    alloc,
 		seg:      newSegment(opts.Metric),
 		wal:      w,
@@ -86,12 +89,65 @@ func Open(opts Options) (*Store, error) {
 		gcfg:     graphConfig{}.withDefaults(),
 		nextSeg:  1,
 	}
-	if err := s.replay(); err != nil {
+	if err := s.recover(); err != nil {
 		w.Close()
 		alloc.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+// recover rebuilds the full segmented state. A missing manifest means a fresh or
+// Phase-1 store: just replay the head WAL. Otherwise: load the manifest, mmap
+// every sealed segment, rebuild the global docId→segId from each segment's
+// slotDoc over LIVE slots (the persisted tombstone bitmap is authoritative),
+// reopen each indexed segment's graph, then replay the head WAL last so a head
+// put that supersedes a sealed old slot resolves against the now-populated
+// docToSeg.
+//
+// Crash-safety (appendix #8/#19): the manifest is authoritative for every
+// segment it lists. If a crash happened after the manifest swap but BEFORE the
+// head WAL was truncated, the old WAL still carries the just-sealed pre-seal
+// records. Re-homing those into the head would tombstone the (immutable) sealed
+// slot and double-store the doc. So replay SKIPS any record whose docId is still
+// live in a sealed segment loaded from the manifest — it is already durable
+// there. A genuine post-seal Update already tombstoned the sealed slot at Put
+// time, so that doc is NOT live in the segment and is correctly re-homed.
+func (s *Store) recover() error {
+	m, err := readManifest(s.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return s.replay() // fresh / Phase-1 store: head-only WAL replay
+		}
+		return err
+	}
+	s.manifestVersion = m.Version
+	for _, e := range m.Segments {
+		segDir := filepath.Join(s.dir, segDirName(e.SegID, e.Gen))
+		ss, oerr := openSealedSegment(segDir, s.metric)
+		if oerr != nil {
+			return oerr
+		}
+		s.sealed = append(s.sealed, ss)
+		s.sealedID = append(s.sealedID, e.SegID)
+		if e.SegID >= s.nextSeg {
+			s.nextSeg = e.SegID + 1
+		}
+		for slot := 0; slot < ss.count(); slot++ {
+			if !ss.tombGet(slot) {
+				s.docToSeg[ss.slotDoc(slot)] = e.SegID
+			}
+		}
+		if e.State == segIndexed {
+			g, gerr := openGraphFile(segDir, ss)
+			if gerr != nil {
+				return gerr
+			}
+			s.graphs[e.SegID] = newBuiltIndex(g, s.gcfg)
+		}
+	}
+	// Head WAL replay last (against the now-populated docToSeg).
+	return s.replay()
 }
 
 // Metric returns the store's distance metric.
@@ -119,6 +175,31 @@ func (s *Store) docIDForAlloc(id string) (int64, error) {
 	return int64(binary.BigEndian.Uint64([]byte(v))), nil
 }
 
+// lookupDocID resolves a string id to its docId WITHOUT allocating, for the read
+// path (Get). It consults the in-memory idToDoc cache first; on a miss it reads
+// the idtable's durable key→id entry directly from the KV (the same key encoding
+// the allocator uses: {idtableKeyTypeKey}+id, value = 8-byte big-endian docId).
+// This is required so a sealed doc — whose Put record was truncated from the head
+// WAL at seal time and whose string id is therefore absent from idToDoc after
+// recovery — is still resolvable on Get. A truly-unknown id (never Put) yields
+// found=false and, unlike GetId, allocates nothing.
+func (s *Store) lookupDocID(id string) (int64, bool, error) {
+	if d, ok := s.idToDoc[id]; ok {
+		return d, true, nil
+	}
+	key := make([]byte, 1+len(id))
+	key[0] = idtableKeyTypeKey
+	copy(key[1:], id)
+	v, err := s.kv.Get(key)
+	if err != nil {
+		return 0, false, err
+	}
+	if len(v) != 8 {
+		return 0, false, nil // missing (nil) or malformed → unknown id
+	}
+	return int64(binary.BigEndian.Uint64(v)), true, nil
+}
+
 // replay rebuilds in-memory state from the records WAL. Records are applied in
 // LSN order; recPut re-drives the allocator for its string id (reconstructing
 // the same monotonic docId the original run assigned — see store.go decision #9),
@@ -135,6 +216,18 @@ func (s *Store) replay() error {
 				return err
 			}
 			s.idToDoc[r.ID] = r.DocID
+			// Crash-window guard (appendix #8/#19): if this docId is still LIVE in a
+			// sealed segment loaded from the manifest, this is a pre-seal record the
+			// seal already folded into that segment; the WAL just wasn't truncated
+			// before the crash. Skip it — re-homing would tombstone the immutable
+			// sealed slot and double-store the doc.
+			if prev, ok := s.docToSeg[r.DocID]; ok && prev != headSegID {
+				if ss := s.sealedByID(prev); ss != nil {
+					if _, live := ss.slotOfDoc(r.DocID); live {
+						return nil
+					}
+				}
+			}
 			s.docToSeg[r.DocID] = headSegID
 			s.applyPut(r)
 		case recDelete:
@@ -143,7 +236,16 @@ func (s *Store) replay() error {
 				return err
 			}
 			s.idToDoc[d.ID] = d.DocID
-			s.seg.tombstone(int(d.Slot))
+			if segId, ok := s.docToSeg[d.DocID]; ok {
+				if segId == headSegID {
+					s.seg.tombstone(int(d.Slot))
+				} else if ss := s.sealedByID(segId); ss != nil {
+					if slot, found := ss.slotOfDoc(d.DocID); found {
+						_ = ss.tombstoneSlot(slot)
+					}
+				}
+				delete(s.docToSeg, d.DocID)
+			}
 		}
 		return nil
 	})
@@ -214,7 +316,10 @@ func (s *Store) Put(id string, v []float32, payload []byte) error {
 func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	docID, ok := s.idToDoc[id]
+	docID, ok, err := s.lookupDocID(id)
+	if err != nil {
+		return nil, nil, false, err
+	}
 	if !ok {
 		return nil, nil, false, nil
 	}
@@ -260,7 +365,10 @@ func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err err
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	docID, ok := s.idToDoc[id]
+	docID, ok, err := s.lookupDocID(id)
+	if err != nil {
+		return err
+	}
 	if !ok {
 		return nil
 	}
