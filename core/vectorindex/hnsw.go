@@ -125,22 +125,13 @@ func (h *HNSWIndex) validateVector(v []float32) error {
 	if d := h.store.Dim(); d > 0 && len(v) != d {
 		return fmt.Errorf("vectorindex: vector dimension mismatch: got %d, want %d", len(v), d)
 	}
-	// Reject non-finite components: NaN/Inf poison distance computations and,
-	// for cosine, would be persisted as a corrupt norm/stored vector (audit #6).
-	for _, x := range v {
-		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
-			return fmt.Errorf("vectorindex: vector has a non-finite component")
-		}
-	}
-	// For cosine, reject a vector whose L2 norm overflows float32 — it cannot be
-	// normalized to a finite unit vector. Computed in float64, matching metric.norm.
+	// For cosine, a non-finite norm means a NaN/Inf component or a magnitude
+	// whose L2 norm overflows float32 — none can be normalized to a finite unit
+	// vector, so reject instead of persisting NaN/Inf or poisoning a search
+	// (audit #6/#10). norm() uses the SIMD fast path, so this is cheap.
 	if h.metric == Cosine {
-		var sumSq float64
-		for _, x := range v {
-			sumSq += float64(x) * float64(x)
-		}
-		if math.Sqrt(sumSq) > math.MaxFloat32 {
-			return fmt.Errorf("vectorindex: cosine vector L2 norm overflows float32")
+		if n := h.metric.norm(v); math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
+			return fmt.Errorf("vectorindex: cosine vector norm is not finite (NaN/Inf component or overflow)")
 		}
 	}
 	return nil

@@ -46,10 +46,15 @@ func (m Metric) norm(v []float32) float32 {
 	if m != Cosine {
 		return 0
 	}
-	// Accumulate the sum of squares in float64 so the norm is (a) deterministic
-	// across architectures — vek32.Norm used arch-specific SIMD that diverged on
-	// overflow (audit #10) — and (b) free of a float32 intermediate overflowing
-	// to +Inf/NaN or underflowing to 0 for tiny vectors (audit #6/#13).
+	n := vek32.Norm(v) // SIMD fast path — kept for the overwhelming common case
+	// Recompute in float64 ONLY for the inputs the float32 SIMD path mishandles:
+	// a non-finite result (large-magnitude overflow → NaN on AVX2 / +Inf on
+	// scalar, which also diverges across architectures — audit #10), or a zero
+	// result that may be a tiny-vector underflow (audit #13). float64 is
+	// deterministic and overflow/underflow-free; the cost is paid only here.
+	if !math.IsNaN(float64(n)) && !math.IsInf(float64(n), 0) && n != 0 {
+		return n
+	}
 	var sumSq float64
 	for _, x := range v {
 		sumSq += float64(x) * float64(x)

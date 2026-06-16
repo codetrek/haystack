@@ -148,33 +148,27 @@ func (s *MmapStore) growUpper(requiredCap uint64) error {
 	return err
 }
 
-// remapFile is the common grow logic. It grows the file, maps the new larger
-// region, then unmaps the old one (map-new-then-unmap-old): a failure at any
-// step before the swap leaves the old mapping intact and *data/*cap unchanged,
-// so reads never touch unmapped memory (audit #3).
+// remapFile is the common grow logic. Windows cannot resize a file while it is
+// mapped, so map-new-then-unmap-old is not portable; instead it unmaps first but
+// nils the slice and zeros the capacity *before* the fallible truncate/mmap, so
+// a read after a failed grow returns an out-of-range error instead of
+// dereferencing freed memory (audit #3). The caller propagates the error (a
+// batched grow aborts the txn → faults the store).
 func (s *MmapStore) remapFile(f osFile, data *[]byte, cap *uint64, newCap uint64, slotSize int, capHeaderOffset int) error {
-	newSize := int64(pageSize) + int64(newCap)*int64(slotSize)
+	_ = mmapFree(*data) // best-effort; the region is being replaced regardless
+	*data = nil
+	*cap = 0
 
-	// Grow the file first. The old mapping stays valid (it just doesn't cover
-	// the new tail), so a truncate failure leaves the store fully readable.
+	newSize := int64(pageSize) + int64(newCap)*int64(slotSize)
 	if err := f.Truncate(newSize); err != nil {
 		return fmt.Errorf("grow: truncate: %w", err)
 	}
-
-	// Map the new region BEFORE unmapping the old one, so a mmap failure also
-	// leaves the old mapping in place.
 	mapped, err := mmapAlloc(f.Fd(), 0, int(newSize), mmapRead|mmapWrite)
 	if err != nil {
 		return fmt.Errorf("grow: mmap: %w", err)
 	}
-
-	old := *data
 	*data = mapped
 	binary.LittleEndian.PutUint64(mapped[capHeaderOffset:], newCap) // update header capacity
 	*cap = newCap
-
-	// The old mapping is no longer referenced; unmap best-effort — a failure
-	// here only leaks address space, the store is already on the new mapping.
-	_ = mmapFree(old)
 	return nil
 }
