@@ -23,6 +23,7 @@ type faultFile struct {
 	failSync     bool
 	failTruncate bool
 	failClose    bool
+	failReadAt   bool
 }
 
 func (f *faultFile) Write(p []byte) (int, error) {
@@ -30,6 +31,12 @@ func (f *faultFile) Write(p []byte) (int, error) {
 		return 0, errInjected
 	}
 	return f.osFile.Write(p)
+}
+func (f *faultFile) ReadAt(p []byte, off int64) (int, error) {
+	if f.failReadAt {
+		return 0, errInjected
+	}
+	return f.osFile.ReadAt(p, off)
 }
 func (f *faultFile) Sync() error {
 	if f.failSync {
@@ -50,6 +57,14 @@ func (f *faultFile) Close() error {
 	}
 	return cerr
 }
+
+// statFaultFile wraps an osFile and always fails Stat, to drive fileSize's
+// Stat-error branch.
+type statFaultFile struct {
+	osFile
+}
+
+func (f *statFaultFile) Stat() (os.FileInfo, error) { return nil, errInjected }
 
 func withOpenFileFault(t *testing.T, cfg func(*faultFile)) {
 	t.Helper()
