@@ -14,6 +14,7 @@ type segment struct {
 	slotDoc   []int64       // slot → docId (source of truth)
 	tomb      bitmap        // slot → deleted?
 	docToSlot map[int64]int // docId → live slot (derived)
+	attr      *headAttr     // declared-field in-memory index, maintained on append (nil until declared)
 }
 
 func newSegment(m Metric) *segment {
@@ -35,6 +36,9 @@ func (s *segment) append(docID int64, stored []float32, norm float32, payload Pa
 	s.payloads = append(s.payloads, payload.clone())
 	s.slotDoc = append(s.slotDoc, docID)
 	s.docToSlot[docID] = slot
+	if s.attr != nil {
+		s.attr.index(slot, payload) // maintain the head attr index on Put (declared fields)
+	}
 	return slot
 }
 

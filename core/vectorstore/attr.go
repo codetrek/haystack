@@ -188,3 +188,65 @@ func (ai *segAttrIndex) allBits(n int) *bitmap {
 	}
 	return out
 }
+
+// headAttr is the head segment's in-memory attr index over declared fields,
+// maintained incrementally by segment.append (the head is mutable; sealed
+// segments get the immutable segAttrIndex instead). It is rebuilt from scratch
+// when CreateAttrIndex declares a new field over an existing head.
+//
+// The head filter path keeps a brute evalPayload over s.seg.payloads as the
+// correctness floor; headAttr is the fast path consulted when a field is
+// declared, so a missing/partial headAttr is never wrong (architecture §6).
+type headAttr struct {
+	decls   map[string]AttrKind
+	keyword map[string]map[Value]*bitmap
+	numeric map[string]map[float64]*bitmap
+}
+
+func newHeadAttr(decls map[string]AttrKind) *headAttr {
+	ha := &headAttr{decls: decls, keyword: map[string]map[Value]*bitmap{}, numeric: map[string]map[float64]*bitmap{}}
+	for prop, kind := range decls {
+		if kind == Keyword {
+			ha.keyword[prop] = map[Value]*bitmap{}
+		} else {
+			ha.numeric[prop] = map[float64]*bitmap{}
+		}
+	}
+	return ha
+}
+
+func (ha *headAttr) index(slot int, pl Payload) {
+	for prop, kind := range ha.decls {
+		v, ok := pl[prop]
+		if !ok {
+			continue
+		}
+		if kind == Keyword {
+			m := ha.keyword[prop]
+			bm := m[v]
+			if bm == nil {
+				bm = &bitmap{}
+				m[v] = bm
+			}
+			bm.set(slot)
+		} else if x, okn := v.numeric(); okn {
+			m := ha.numeric[prop]
+			bm := m[x]
+			if bm == nil {
+				bm = &bitmap{}
+				m[x] = bm
+			}
+			bm.set(slot)
+		}
+	}
+}
+
+func (ha *headAttr) eq(prop string, v Value) *bitmap {
+	if m, ok := ha.keyword[prop]; ok {
+		if bm, ok := m[v]; ok {
+			cp := bm.clone()
+			return &cp
+		}
+	}
+	return &bitmap{}
+}

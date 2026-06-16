@@ -142,3 +142,60 @@ func TestSegAttr_BuildSkipsNonNumericUnderNumericDecl(t *testing.T) {
 		t.Fatalf("Range over mixed-kind = %v, want [0 2]", bm.collect())
 	}
 }
+
+func TestHeadAttr_MaintainedOnAppend(t *testing.T) {
+	ha := newHeadAttr(map[string]AttrKind{"color": Keyword})
+	ha.index(0, Payload{"color": StringValue("red")})
+	ha.index(1, Payload{"color": StringValue("blue")})
+	ha.index(2, Payload{"color": StringValue("red")})
+	bm := ha.eq("color", StringValue("red"))
+	if !intsEqual(bm.collect(), []int{0, 2}) {
+		t.Fatalf("headAttr eq = %v, want [0 2]", bm.collect())
+	}
+}
+
+// TestHeadAttr_NumericAndMisses covers the Numeric index branch of headAttr.index,
+// the eq miss for a never-stored Keyword value, and the eq path for an undeclared
+// field (returns empty — the head's brute path is the correctness floor).
+func TestHeadAttr_NumericAndMisses(t *testing.T) {
+	ha := newHeadAttr(map[string]AttrKind{"color": Keyword, "n": Numeric})
+	ha.index(0, Payload{"color": StringValue("red"), "n": Int64Value(10)})
+	ha.index(1, Payload{"n": Float64Value(10)}) // numeric, same value, no color
+	ha.index(2, Payload{"unrelated": StringValue("x")})
+
+	// Keyword eq miss: a value never indexed → empty.
+	if bm := ha.eq("color", StringValue("green")); bm.count() != 0 {
+		t.Fatalf("headAttr eq miss = %v, want empty", bm.collect())
+	}
+	// eq on an undeclared field → empty (no panic; head falls back to brute).
+	if bm := ha.eq("unrelated", StringValue("x")); bm.count() != 0 {
+		t.Fatalf("headAttr eq on undeclared field = %v, want empty", bm.collect())
+	}
+	// The Numeric index recorded both slot 0 and slot 1 under value 10.
+	m := ha.numeric["n"]
+	if m == nil || m[10] == nil || !intsEqual(m[10].collect(), []int{0, 1}) {
+		t.Fatalf("headAttr numeric posting for 10 = %v, want [0 1]", m[10].collect())
+	}
+}
+
+// TestSegment_Append_MaintainsHeadAttr proves segment.append feeds new slots into
+// an attached headAttr (the "maintained on Put" wiring), while a segment with no
+// headAttr (attr == nil) appends without indexing and does not panic.
+func TestSegment_Append_MaintainsHeadAttr(t *testing.T) {
+	seg := newSegment(Cosine)
+	seg.attr = newHeadAttr(map[string]AttrKind{"color": Keyword})
+	stored, norm := Cosine.prepare([]float32{1, 0, 0})
+	seg.append(1, stored, norm, Payload{"color": StringValue("red")})
+	seg.append(2, stored, norm, Payload{"color": StringValue("blue")})
+	seg.append(3, stored, norm, Payload{"color": StringValue("red")})
+	if bm := seg.attr.eq("color", StringValue("red")); !intsEqual(bm.collect(), []int{0, 2}) {
+		t.Fatalf("head attr after appends = %v, want [0 2]", bm.collect())
+	}
+
+	// A segment with no attr index must append cleanly (the nil-attr branch).
+	plain := newSegment(Cosine)
+	plain.append(1, stored, norm, Payload{"color": StringValue("red")})
+	if len(plain.payloads) != 1 || plain.attr != nil {
+		t.Fatal("plain segment append must not allocate a head attr")
+	}
+}
