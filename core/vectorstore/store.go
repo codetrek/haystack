@@ -398,6 +398,9 @@ func (s *Store) replay() error {
 		switch typ {
 		case recPut:
 			r := decodePut(payload)
+			if r.badVersion {
+				return fmt.Errorf("vectorstore: incompatible WAL record format (pre-Phase-5 WAL not supported)")
+			}
 			// Re-establish id→docId in the allocator and the derived map.
 			if _, err := s.docIDForAlloc(r.ID); err != nil {
 				return err

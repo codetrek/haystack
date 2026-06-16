@@ -33,6 +33,11 @@ type putRecord struct {
 	Stored  []float32
 	Norm    float32
 	Payload []byte
+
+	// badVersion is set by decodePut when the frame does not carry the current
+	// walRecMagic prefix (a pre-Phase-5 / corrupt putRecord). It is never encoded;
+	// replay rejects any record with badVersion rather than mis-decoding it.
+	badVersion bool
 }
 
 // deleteRecord tombstones Slot, which holds DocID for string key ID.
@@ -58,11 +63,25 @@ func getString(b []byte, off int) (string, int) {
 	return s, off + n
 }
 
-// encodePut layout: idLen(4)|id | docId(8) | oldSlot(8) | norm(4) | vecLen(4) | vec(N*4) | payloadLen(4) | payload
+// walRecMagic prefixes a Phase-5 putRecord body. A pre-Phase-5 putRecord body
+// began directly with idLen (a little-endian uint32 — its low bytes are a small,
+// data-dependent id length), so it can never begin with these two fixed magic
+// bytes (that would require an id of length 0x5AF5 = 23285). decodePut flags any
+// frame lacking the magic as badVersion, and replay rejects it, so an old WAL is
+// never silently mis-applied. (DEVIATION from the draft's single walRecVersion
+// byte: a 1-byte version at offset 0 collides with a legacy frame whose id length
+// low byte equals the version — e.g. a length-1 id → 0x01 == version 1. A 2-byte
+// magic removes that collision; the format predates production data, clean break.)
+var walRecMagic = [2]byte{0xF5, 0x5A}
+
+// encodePut layout: magic(2) | idLen(4)|id | docId(8) | oldSlot(8) | norm(4) |
+// vecLen(4) | vec(N*4) | payloadLen(4) | payload (a serialized Payload blob).
 func encodePut(r putRecord) []byte {
-	size := 4 + len(r.ID) + 8 + 8 + 4 + 4 + len(r.Stored)*4 + 4 + len(r.Payload)
+	size := 2 + 4 + len(r.ID) + 8 + 8 + 4 + 4 + len(r.Stored)*4 + 4 + len(r.Payload)
 	buf := make([]byte, size)
-	off := putString(buf, 0, r.ID)
+	buf[0] = walRecMagic[0]
+	buf[1] = walRecMagic[1]
+	off := putString(buf, 2, r.ID)
 	binary.LittleEndian.PutUint64(buf[off:], uint64(r.DocID))
 	off += 8
 	binary.LittleEndian.PutUint64(buf[off:], uint64(r.OldSlot))
@@ -83,8 +102,14 @@ func encodePut(r putRecord) []byte {
 
 func decodePut(b []byte) putRecord {
 	r := putRecord{}
-	var off int
-	r.ID, off = getString(b, 0)
+	if len(b) < 2 || b[0] != walRecMagic[0] || b[1] != walRecMagic[1] {
+		// Pre-Phase-5 or corrupt record: flag it so replay rejects rather than
+		// mis-decoding opaque bytes into a bogus head segment. OldSlot is set to -1
+		// so an accidental apply (if a caller ignored badVersion) is at least inert.
+		return putRecord{OldSlot: -1, badVersion: true}
+	}
+	off := 2
+	r.ID, off = getString(b, off)
 	r.DocID = int64(binary.LittleEndian.Uint64(b[off:]))
 	off += 8
 	r.OldSlot = int64(binary.LittleEndian.Uint64(b[off:]))
