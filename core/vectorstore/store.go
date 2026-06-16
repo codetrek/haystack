@@ -69,6 +69,20 @@ type Store struct {
 	//                        merges.Add never races a zero-counter merges.Wait (appendix #1)
 
 	manifestVersion uint64 // monotonic manifest version (bumped per rewrite)
+
+	// Test-only crash seams in mergeAndPublish (nil in production). They let a test
+	// force the two durability-critical crash windows on the REAL merge path
+	// (appendix #4/#5/#7), instead of fabricating a stray dir that only re-tests the
+	// Phase-2 orphan sweep. Each is passed the live mergePlan and, returning true,
+	// makes the merge return as if the process died at that exact point:
+	//   - testHookAfterWrite: AFTER every output bucket is written+fsynced+reopened,
+	//     BEFORE the manifest swap → outputs on disk, unreferenced (crash-before-swap).
+	//   - testHookAfterSwap: AFTER writeManifestLocked committed, BEFORE os.RemoveAll
+	//     of the old input dirs → inputs leftover, unreferenced (crash-after-swap),
+	//     and any reconcile-tombstone from step 2a already msync'd to tomb.dat
+	//     (the highest-risk reconciliation durability window, appendix #7).
+	testHookAfterWrite func(p *mergePlan) bool
+	testHookAfterSwap  func(p *mergePlan) bool
 }
 
 // Open creates or recovers a Store at opts.Dir, replaying the WAL to rebuild the

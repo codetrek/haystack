@@ -200,6 +200,22 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		outSS[i] = ss
 	}
 
+	// Crash-before-swap seam (test-only, appendix #4): the outputs are written +
+	// fsynced + reopened but the manifest does NOT yet reference them. Returning
+	// here simulates a process death in exactly that window. We close the opened
+	// output mmaps (they were never installed in s.sealed, so Close won't) but LEAVE
+	// their dirs on disk — recover()'s sweepOrphansLocked must reclaim them, and the
+	// untouched inputs stay live. This exercises the real output segIds/dirs and the
+	// real nextSeg accounting, unlike a hand-fabricated stray dir.
+	if s.testHookAfterWrite != nil && s.testHookAfterWrite(p) {
+		for _, ss := range outSS {
+			if ss != nil {
+				ss.close()
+			}
+		}
+		return nil
+	}
+
 	// (2) Swap under buildMu (serializes manifest rewrites vs builders) + s.mu.
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
@@ -270,6 +286,17 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		inputDirs[i] = filepath.Join(s.dir, segDirName(id, 0))
 	}
 	s.mu.Unlock()
+
+	// Crash-after-swap seam (test-only, appendix #5/#7): the manifest swap committed
+	// (outputs referenced, inputs not) and any step-2a reconcile tombstone is already
+	// msync'd to the output's tomb.dat, but the old input dirs are not yet deleted.
+	// Returning here simulates a crash in that window: the old inputs are left on
+	// disk as orphans (recover() must sweep them) and the background builds never
+	// run (recover() must resume them). The installed output mmaps are owned by
+	// s.sealed now, so Close() releases them — we must NOT close them here.
+	if s.testHookAfterSwap != nil && s.testHookAfterSwap(p) {
+		return nil
+	}
 
 	// (3) Delete old input dirs AFTER the swap committed (now orphans).
 	for _, dir := range inputDirs {
