@@ -634,6 +634,17 @@ func (s *Store) sealLocked() error {
 		}
 	}
 	s.seg = newSegment(s.metric)
+	// Make the idtable's string→docId mappings + nextId counter durable BEFORE the
+	// manifest swap and the WAL reset below. The head WAL is the only other record
+	// of these mappings; once wal.Reset truncates it, the just-sealed docs'
+	// identities exist solely in the idtable. The allocator commits lazily (5s tick
+	// / Close), so without this synchronous commit a crash between Seal and the next
+	// tick loses every sealed doc's mapping → phantom docs (searchable but Get/Delete
+	// not-found) + docId collisions on re-Put. Order is load-bearing: idtable durable
+	// → manifest durable → WAL truncated.
+	if err := s.alloc.Commit(); err != nil {
+		return err
+	}
 	if err := s.writeManifestLocked(); err != nil {
 		return err
 	}

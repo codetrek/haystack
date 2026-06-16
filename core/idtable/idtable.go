@@ -190,6 +190,22 @@ func (a *Allocator) Close() {
 	a.store = nil
 }
 
+// Commit synchronously flushes any pending key→id mappings and the nextId
+// counter to the backing kv.Store, fsync'd (the underlying batch commits with
+// pebble.Sync). It is the public, on-demand counterpart to the lazy 5s tick and
+// the Close-time flush: callers that must make the id allocations durable at a
+// precise point (e.g. before truncating an external write-ahead log that is the
+// only other record of those mappings) call this to close the durability gap.
+// It is safe for concurrent use and is a no-op when nothing is pending.
+func (a *Allocator) Commit() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.store == nil || a.store.IsClosed() {
+		return fmt.Errorf("database is closed")
+	}
+	return a.tryCommit()
+}
+
 // encodeIncrIdKey returns the key used to store nextId.
 func (a *Allocator) encodeIncrIdKey() []byte {
 	return []byte{a.keyTypeNextId}
