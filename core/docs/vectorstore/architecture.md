@@ -218,6 +218,7 @@ head segId;  索引配置 name → VectorIndexConfig
 
 - **payload 每段自带**：payload 是 records-段文件的一部分，和向量同段；`Get(id)` → `docId→segId` → 从该段读。无全局 payload 区；段 compact/merge 时随段重写、自然回收。
 - **属性索引每段一份**：每个 records-段为每个声明字段存 `value → 段内 slot bitmap`(roaring)。
+  - *v1 实现说明*：v1 用 dense per-segment bitset（扩展的 `bitmap` 类型），roaring 暂缓——不引入新的模块依赖；`S_seg` 在单段 ≤ `maxSegSize` 的 dense slots 上，flat `[]uint64` 在 per-candidate traversal gate 上优于 roaring（见 `attr.go` 包注释）。
 - **过滤下推 + 每段自适应**：`Search(filter)` 时每段独立 eval → 段内 member 位图 `S_seg`；`|S_seg| ≤ T` → 段内 brute-S（精确），`|S_seg| > T` → 该段图∩S（filter-during-traversal）；各段结果合并。阈值 T 按**段内** `|S_seg|` 判。
 - **tombstone**：member 位图 AND 段 live 位 → 删除不漏出。
 - **生命周期**：`CreateAttrIndex(prop,kind)` 对每段扫 payload 建位图（便宜，纯扫一遍）；compact/merge 时 attr 位图随段重写 → §15.2 ⑩「删除不清属性位」自然解决。payload 模型 = 方案1（结构化 + 声明可过滤字段；非声明字段仍存供返回、不索引）。

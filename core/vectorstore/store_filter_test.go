@@ -2,6 +2,8 @@ package vectorstore
 
 import (
 	"math/rand"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 )
@@ -419,5 +421,78 @@ func TestSearch_Filter_UpdateCrossSegment_CountedOnce(t *testing.T) {
 	}
 	if seen != 1 {
 		t.Fatalf("updated cross-segment doc k0 appeared %d times, want 1", seen)
+	}
+}
+
+// TestCreateAttrIndex_ConcurrentWithMerge_Race runs CreateAttrIndex concurrently
+// with a Compact-driven merge. Both take s.mu (CreateAttrIndex for its whole
+// per-segment scan, mergeAndPublish for the swap+close), so they serialize and no
+// input mmap is closed while CreateAttrIndex reads it. The gate runs this under
+// -race; the assertion is "no SIGSEGV / no data race", correctness is covered
+// elsewhere (appendix #8 planMergeLocked indexed-only guard).
+func TestCreateAttrIndex_ConcurrentWithMerge_Race(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	for i := 0; i < 120; i++ {
+		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
+			Payload{"color": StringValue([]string{"red", "blue"}[i%2])}))
+		if i%40 == 39 {
+			requireNoError(t, s.Seal())
+		}
+	}
+	requireNoError(t, s.WaitForIndex())
+	done := make(chan error, 1)
+	go func() { done <- s.CreateAttrIndex("color", Keyword) }()
+	_ = s.Compact()
+	requireNoError(t, <-done)
+	requireNoError(t, s.WaitForIndex())
+	got, err := s.Search([]float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
+	requireNoError(t, err)
+	_ = got // correctness covered elsewhere; this gate is -race clean + no SIGSEGV
+}
+
+// TestDropAttrIndex_Unknown_NoOp covers DropAttrIndex's early-return branch for a
+// never-declared property (no panic, no error, no file work).
+func TestDropAttrIndex_Unknown_NoOp(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	requireNoError(t, s.DropAttrIndex("never-declared"))
+}
+
+// TestGet_MalformedPayload_Errors covers Get's sealed-path decode-error branch
+// (store.go: decodePayload(plBytes) error → surfaced, not a silent empty map). A
+// single-doc segment is sealed, then the version byte of slot 0's payload blob is
+// flipped on disk so decodePayload rejects it; Get must return that error.
+func TestGet_MalformedPayload_Errors(t *testing.T) {
+	dir := t.TempDir()
+	kvs := newTestKV(t)
+	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	requireNoError(t, err)
+	requireNoError(t, s.Put("a", []float32{1, 0, 0}, Payload{"k": StringValue("v")}))
+	requireNoError(t, s.Seal()) // one-row sealed segment, no attr declared
+	requireNoError(t, s.WaitForIndex())
+	requireNoError(t, s.Close())
+
+	// payload.dat layout: [segPageSize header][n*4 lens][concatenated blobs]. With
+	// n=1 the slot-0 blob begins at segPageSize+4 and its first byte is
+	// payloadFmtVersion(1). Flip it to 0xFF so decodePayload rejects the blob.
+	matches, _ := filepath.Glob(filepath.Join(dir, "seg-*", "payload.dat"))
+	if len(matches) == 0 {
+		t.Fatal("expected a payload.dat to corrupt")
+	}
+	f, err := os.OpenFile(matches[0], os.O_RDWR, 0644)
+	requireNoError(t, err)
+	if _, err := f.WriteAt([]byte{0xFF}, int64(segPageSize+4)); err != nil {
+		t.Fatalf("corrupt write: %v", err)
+	}
+	requireNoError(t, f.Close())
+
+	// Reopen WITHOUT declaring an attr index (so no attr scan decodes the blob first);
+	// the only decodePayload is in Get's sealed path.
+	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	requireNoError(t, err)
+	defer s2.Close()
+	requireNoError(t, s2.WaitForIndex())
+	_, _, _, gerr := s2.Get("a")
+	if gerr == nil {
+		t.Fatal("Get over a corrupt sealed payload must surface a decode error")
 	}
 }

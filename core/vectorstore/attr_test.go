@@ -199,3 +199,16 @@ func TestSegment_Append_MaintainsHeadAttr(t *testing.T) {
 		t.Fatal("plain segment append must not allocate a head attr")
 	}
 }
+
+// TestRange_BoundaryInclusive proves the Numeric ordered structure answers a
+// closed [lo,hi] Range inclusively on both ends: values {1,2,3} at slots {0,1,2},
+// Range(1,2) selects {0,1} (n=1 and n=2), excluding n=3. This pins the
+// evalRange binary-search span (first value >= lo, while value <= hi).
+func TestRange_BoundaryInclusive(t *testing.T) {
+	pls := []Payload{{"n": Int64Value(1)}, {"n": Int64Value(2)}, {"n": Int64Value(3)}}
+	ai := buildSegAttr(map[string]AttrKind{"n": Numeric}, 3, func(s int) Payload { return pls[s] })
+	bm, _ := ai.evalSeg(Range("n", Int64Value(1), Int64Value(2)), 3, func(s int) Payload { return pls[s] })
+	if !intsEqual(bm.collect(), []int{0, 1}) {
+		t.Fatalf("inclusive range = %v, want [0 1]", bm.collect())
+	}
+}
