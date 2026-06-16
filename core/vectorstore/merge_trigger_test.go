@@ -176,6 +176,3 @@ func TestAutoMerge_CloseRaceNoPanic(t *testing.T) {
 		wg.Wait()
 	}
 }
-
-
-
