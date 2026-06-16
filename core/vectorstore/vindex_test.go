@@ -2,6 +2,8 @@ package vectorstore
 
 import (
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -218,4 +220,74 @@ func TestStore_IndexLag_CountsPendingSegments(t *testing.T) {
 	if l := s.IndexLag("ghost"); l.Exists {
 		t.Fatalf("unknown index must report Exists=false, got %+v", l)
 	}
+}
+
+func TestStore_DropVectorIndex_LeavesOthersIntact(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(41))
+	dim := 16
+	vecs := make(map[int64][]float32)
+	put := func(id string, v []float32) {
+		requireNoError(t, s.Put(id, v, nil))
+		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
+	}
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	for i := 0; i < 100; i++ {
+		put("d-"+itoa(i), randVec())
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
+	requireNoError(t, s.WaitForIndex())
+
+	// Sanity: aux's graph file exists on disk.
+	segDir := filepath.Join(s.dir, segDirName(segID(1), 0))
+	if _, err := os.Stat(filepath.Join(segDir, "graph-aux.dat")); err != nil {
+		t.Fatalf("graph-aux.dat should exist before drop: %v", err)
+	}
+
+	requireNoError(t, s.DropVectorIndex("aux"))
+
+	// aux is gone from the map and its graph file is deleted; the default index's
+	// file and records are untouched.
+	if _, err := os.Stat(filepath.Join(segDir, "graph-aux.dat")); !os.IsNotExist(err) {
+		t.Fatalf("graph-aux.dat must be deleted, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(segDir, "graph-default.dat")); err != nil {
+		t.Fatalf("graph-default.dat must survive a sibling drop: %v", err)
+	}
+	names := s.ListVectorIndexes()
+	if len(names) != 1 || names[0].Name != "default" {
+		t.Fatalf("after drop, only default should remain, got %+v", names)
+	}
+	if _, err := s.Search("aux", randVec(), 5, nil); err == nil {
+		t.Fatal("Search on the dropped index must error")
+	}
+
+	// The surviving default index still returns correct top-k.
+	q := randVec()
+	got, err := s.Search("default", q, 10, nil)
+	requireNoError(t, err)
+	want := bruteForceKNN(Cosine, q, vecs, 10)
+	if r := recallAtK(got, want); r < 0.8 {
+		t.Fatalf("default index recall after sibling drop = %.2f, want >= 0.8", r)
+	}
+
+	// Records intact: a doc is still Gettable.
+	if _, _, found, _ := s.Get("d-0"); !found {
+		t.Fatal("records must survive DropVectorIndex")
+	}
+}
+
+func TestStore_DropVectorIndex_DefaultRefusedUnknownNoop(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	if err := s.DropVectorIndex("default"); err == nil {
+		t.Fatal("dropping the default index must be refused")
+	}
+	requireNoError(t, s.DropVectorIndex("never-existed")) // no-op
 }

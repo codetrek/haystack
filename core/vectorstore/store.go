@@ -518,6 +518,57 @@ func (s *Store) CreateVectorIndex(name string, cfg VectorIndexConfig) error {
 	return nil
 }
 
+// DropVectorIndex removes a named index: its in-memory vindex, its graph-<name>.dat
+// file in every sealed segment dir, and its manifest entries. Records, payload, and
+// all OTHER indexes are untouched (architecture §4.7). It takes buildMu+s.mu so the
+// removal never races a buildAndPublish writing the graphs map (buildAndPublish
+// re-checks the index still exists after taking s.mu — gotcha 5). In-flight builds
+// for this index harmlessly no-op on that re-check. The reserved "default" index
+// cannot be dropped; an unknown name is a no-op.
+func (s *Store) DropVectorIndex(name string) error {
+	if name == defaultIndexName {
+		return fmt.Errorf("vectorstore: cannot drop the reserved %q index", name)
+	}
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.indexes[name]; !ok {
+		return nil // unknown → no-op (idempotent)
+	}
+	delete(s.indexes, name)
+	if err := s.dropGraphFilesLocked(name); err != nil {
+		return err
+	}
+	return s.writeManifestLocked()
+}
+
+// dropGraphFilesLocked removes graph-<name>.dat from every sealed segment dir, then
+// fsyncs each dir so the unlink is durable BEFORE the manifest commit that drops
+// the index (appendix #21: the manifest must never be ahead of a non-durable
+// unlink, else a crash leaves an orphan graph-<name>.dat with no manifest entry). A
+// missing file is fine (the (index,seg) was still pending). Caller holds s.mu (and
+// buildMu, so no builder is mid-install for this index).
+func (s *Store) dropGraphFilesLocked(name string) error {
+	for _, sid := range s.sealedID {
+		segDir := filepath.Join(s.dir, segDirName(sid, 0))
+		p := segFilePath(segDir, graphFileName(name))
+		removed := true
+		if err := fsRemove(p); err != nil {
+			if !os.IsNotExist(err) {
+				return err
+			}
+			removed = false // already absent (pending) → nothing to make durable
+		}
+		if removed {
+			if err := fsyncDir(segDir); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // --- quiescence accounting (cond-based; all under s.mu) ----------------------
 //
 // These replace two sync.WaitGroups. Keeping the counts under s.mu (the same lock
@@ -1257,15 +1308,25 @@ func (s *Store) sealLocked() error {
 // across concurrent builders so two flips never race a single manifest file.
 func (s *Store) buildAndPublish(name string, id segID, segDir string, ss *sealedSegment) {
 	defer s.buildDone()
+	// Snapshot the index's cfg under s.mu: the s.indexes map is now mutated
+	// concurrently by CreateVectorIndex/DropVectorIndex (Phase 6), so this first
+	// lookup — which precedes the off-lock build — must be synchronized. A missing
+	// name means the index was dropped before this build started (Task 6).
+	s.mu.RLock()
 	vx, ok := s.indexes[name]
-	if !ok {
-		return // index was dropped before this build started (Task 6)
+	var cfg graphConfig
+	if ok {
+		cfg = vx.cfg
 	}
-	gs, err := buildSegmentGraph(segDir, name, ss, vx.cfg)
+	s.mu.RUnlock()
+	if !ok {
+		return
+	}
+	gs, err := buildSegmentGraph(segDir, name, ss, cfg)
 	if err != nil {
 		return // stays pending; brute leg keeps results correct
 	}
-	bi := newBuiltIndex(gs, vx.cfg)
+	bi := newBuiltIndex(gs, cfg)
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	s.mu.Lock()
