@@ -35,7 +35,7 @@ func TestSeal_WriteOpenRoundTrip(t *testing.T) {
 	head.tombstone(1)
 
 	segDir := filepath.Join(dir, "seg-1-0")
-	requireNoError(t, writeSealedSegment(segDir, head))
+	requireNoError(t, writeSealedSegment(segDir, head, nil))
 
 	ss, err := openSealedSegment(segDir, DotProduct)
 	requireNoError(t, err)
@@ -85,7 +85,7 @@ func sealFourRows(t *testing.T) string {
 		{40, []float32{0, 1, 1}, nil},
 	})
 	segDir := filepath.Join(dir, "seg-9-0")
-	requireNoError(t, writeSealedSegment(segDir, head))
+	requireNoError(t, writeSealedSegment(segDir, head, nil))
 	return segDir
 }
 

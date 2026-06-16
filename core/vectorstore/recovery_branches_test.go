@@ -108,7 +108,7 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 
 	// Searchable immediately (pending brute leg).
 	q := randVec()
-	got, err := s2.Search(q, 5)
+	got, err := s2.Search(q, 5, nil)
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("search returned nothing on a resumed pending segment")
@@ -155,7 +155,7 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 	// WITHOUT calling Seal (so the WAL is NOT reset and still holds all 40 Puts).
 	segDir := filepath.Join(dir, segDirName(segID(1), 0))
 	s.mu.Lock()
-	requireNoError(t, writeSealedSegment(segDir, s.seg))
+	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
 	m := &manifest{
 		Version: 1,
 		Head:    headSegID,
@@ -192,7 +192,7 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 			t.Fatalf("doc c-%d lost after crash-window recovery", i)
 		}
 	}
-	got, err := s2.Search(randVec(), n)
+	got, err := s2.Search(randVec(), n, nil)
 	requireNoError(t, err)
 	seen := make(map[int64]bool, len(got))
 	for _, h := range got {

@@ -159,7 +159,7 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 	var sum float64
 	for it := 0; it < 20; it++ {
 		q := randVecN(rng, 8)
-		got, err := s2.Search(q, 5)
+		got, err := s2.Search(q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}
@@ -228,7 +228,7 @@ func TestMerge_SurvivesRecovery_EndToEnd(t *testing.T) {
 	var sum float64
 	for it := 0; it < 30; it++ {
 		q := randVec()
-		got, err := s2.Search(q, 5)
+		got, err := s2.Search(q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}

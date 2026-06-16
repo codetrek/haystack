@@ -40,7 +40,7 @@ func TestSealedSegment_TombstoneOutOfRange(t *testing.T) {
 		pl  Payload
 	}{{1, []float32{1, 0}, nil}})
 	dir := t.TempDir() + "/seg-1-0"
-	requireNoError(t, writeSealedSegment(dir, head))
+	requireNoError(t, writeSealedSegment(dir, head, nil))
 	ss, err := openSealedSegment(dir, DotProduct)
 	requireNoError(t, err)
 	defer ss.close()
@@ -68,7 +68,7 @@ func TestRecovery_StrandedManifestTmpIgnored(t *testing.T) {
 	if _, statErr := os.Stat(tmp); !os.IsNotExist(statErr) {
 		t.Fatal("stranded manifest.tmp not swept on recovery")
 	}
-	res, err := s2.Search([]float32{1, 0, 0, 0}, 1)
+	res, err := s2.Search([]float32{1, 0, 0, 0}, 1, nil)
 	requireNoError(t, err)
 	if len(res) != 1 {
 		t.Fatalf("recovered store lost the sealed doc: got %d results", len(res))

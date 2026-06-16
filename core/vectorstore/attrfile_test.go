@@ -16,7 +16,7 @@ func sealedWithPayloads(t *testing.T, dir string, payloads []Payload, dim int) *
 		stored, norm := Cosine.prepare(v)
 		head.append(int64(i+1), stored, norm, pl)
 	}
-	requireNoError(t, writeSealedSegment(dir, head))
+	requireNoError(t, writeSealedSegment(dir, head, nil))
 	ss, err := openSealedSegment(dir, Cosine)
 	requireNoError(t, err)
 	t.Cleanup(ss.close)

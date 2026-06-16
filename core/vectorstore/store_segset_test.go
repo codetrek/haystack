@@ -14,7 +14,7 @@ func TestStore_DeleteRoutesToSealedSegment(t *testing.T) {
 	// Freeze the head into a sealed segment on disk and attach it, leaving the
 	// head emptied — using the internal helper the seal pipeline will reuse.
 	segDir := filepath.Join(s.dir, "seg-1-0")
-	requireNoError(t, writeSealedSegment(segDir, s.seg))
+	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
 	ss, err := openSealedSegment(segDir, DotProduct)
 	requireNoError(t, err)
 	s.attachSealedForTest(ss, 1)
@@ -46,7 +46,7 @@ func TestStore_PutCrossSegmentUpdateTombstonesSealed(t *testing.T) {
 	requireNoError(t, s.Put("b", []float32{0, 1, 0}, nil))
 
 	segDir := filepath.Join(s.dir, "seg-1-0")
-	requireNoError(t, writeSealedSegment(segDir, s.seg))
+	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
 	ss, err := openSealedSegment(segDir, DotProduct)
 	requireNoError(t, err)
 	s.attachSealedForTest(ss, 1)

@@ -122,7 +122,8 @@ type mergePlan struct {
 	buckets []*segment       // packed live docs (≤ maxSegSize each)
 	outIDs  []segID          // fresh segIds, one per bucket (allocated under lock)
 	outDirs []string
-	moved   map[int64]bool // docs whose global segId the swap rehomes
+	moved   map[int64]bool      // docs whose global segId the swap rehomes
+	decls   map[string]AttrKind // snapshot of the declared attr set (taken under s.mu)
 }
 
 // planMergeLocked resolves inputIDs, packs their live docs into buckets, and
@@ -170,7 +171,7 @@ func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergeP
 		// dropped + their dirs deleted. Represent that as a plan with zero buckets.
 		buckets = nil
 	}
-	p := &mergePlan{inputs: inputIDs, inputSS: inputSS, buckets: buckets, moved: moved}
+	p := &mergePlan{inputs: inputIDs, inputSS: inputSS, buckets: buckets, moved: moved, decls: s.attrDeclsSnapshotLocked()}
 	for range buckets {
 		id := s.nextSeg
 		s.nextSeg++
@@ -204,7 +205,7 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	// writeSealedSegment (+ dir fsync) BEFORE the manifest will reference them.
 	outSS := make([]*sealedSegment, len(p.buckets))
 	for i, bk := range p.buckets {
-		if err := writeSealedSegment(p.outDirs[i], bk); err != nil {
+		if err := writeSealedSegment(p.outDirs[i], bk, p.decls); err != nil {
 			s.abortMerge(p, outSS, i)
 			return err
 		}
@@ -212,6 +213,11 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		if err != nil {
 			s.abortMerge(p, outSS, i)
 			return err
+		}
+		// Load the rebuilt-on-merge per-segment attr index for the declared set
+		// (postings are over the bucket's renumbered slots — the derived rewrite).
+		if len(p.decls) > 0 {
+			ss.attr, _ = openAttrFile(p.outDirs[i], ss, p.decls)
 		}
 		outSS[i] = ss
 	}

@@ -39,7 +39,7 @@ func TestStore_AutoSealAtMaxSegSize(t *testing.T) {
 	for d := range q {
 		q[d] = rng.Float32()
 	}
-	got, err := s.Search(q, 10)
+	got, err := s.Search(q, 10, nil)
 	requireNoError(t, err)
 	if len(got) != 10 {
 		t.Fatalf("search returned %d, want 10", len(got))

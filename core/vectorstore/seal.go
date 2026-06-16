@@ -14,12 +14,16 @@ import (
 // or overflow the required-size arithmetic. ~1.07e9 rows.
 const maxSealRows = 1 << 30
 
-// writeSealedSegment dumps a (frozen) head segment into segDir as four fsynced
-// data files: vectors.dat, slotdoc.dat, tomb.dat, payload.dat. Files are written
-// and fsynced individually, then the directory is fsynced so the entries are
-// durable before any sentinel (manifest) references the segment (audit #76:
-// data durable LAST-relative-to-itself, sentinel later). The dir is created here.
-func writeSealedSegment(segDir string, head *segment) error {
+// writeSealedSegment dumps a (frozen) head segment into segDir as fsynced data
+// files: vectors.dat, slotdoc.dat, tomb.dat, payload.dat, and — when decls is
+// non-empty — the derived attr.dat (the per-segment attr index built by scanning
+// the head's payloads for the declared properties). Files are written and fsynced
+// individually, then the directory is fsynced so the entries are durable before
+// any sentinel (manifest) references the segment (audit #76: data durable
+// LAST-relative-to-itself, sentinel later). attr.dat is derived/rebuildable, so a
+// nil/empty decls (no declarations yet) simply omits it; openAttrFile rebuilds
+// from payload on open if it is missing. The dir is created here.
+func writeSealedSegment(segDir string, head *segment, decls map[string]AttrKind) error {
 	if err := os.MkdirAll(segDir, 0755); err != nil {
 		return fmt.Errorf("seal: mkdir %s: %w", segDir, err)
 	}
@@ -38,7 +42,17 @@ func writeSealedSegment(segDir string, head *segment) error {
 	if err := writePayloadFile(segFilePath(segDir, "payload.dat"), head, n); err != nil {
 		return err
 	}
-	// Make the four directory entries durable.
+	// Build + persist the per-segment attr index for the declared properties from
+	// the head's payloads. On merge the head is a freshly repacked bucket, so the
+	// postings are built over the new (renumbered) slots — the derived rewrite that
+	// makes deletes self-cleaning (architecture §6).
+	if len(decls) > 0 {
+		ai := buildSegAttr(decls, n, func(slot int) Payload { return head.payloads[slot] })
+		if err := writeAttrFile(segDir, ai, n); err != nil {
+			return err
+		}
+	}
+	// Make the directory entries durable.
 	return fsyncDir(segDir)
 }
 

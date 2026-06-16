@@ -30,7 +30,7 @@ func TestSeal_TombstonePersistsAcrossReopen(t *testing.T) {
 		{20, []float32{0, 1}, nil},
 	})
 	segDir := filepath.Join(dir, "seg-2-0")
-	requireNoError(t, writeSealedSegment(segDir, head))
+	requireNoError(t, writeSealedSegment(segDir, head, nil))
 
 	ss, err := openSealedSegment(segDir, DotProduct)
 	requireNoError(t, err)

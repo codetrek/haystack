@@ -129,7 +129,7 @@ func TestStore_Search_MatchesOracle_Cosine(t *testing.T) {
 		requireNoError(t, s.Put(id, v, nil))
 	}
 	q := []float32{1, 0, 0, 0}
-	res, err := s.Search(q, 2)
+	res, err := s.Search(q, 2, nil)
 	requireNoError(t, err)
 	if len(res) != 2 {
 		t.Fatalf("len(res) = %d, want 2", len(res))
@@ -159,7 +159,7 @@ func TestStore_Search_MatchesOracle_Euclidean(t *testing.T) {
 		requireNoError(t, s.Put(id, v, nil))
 	}
 	q := []float32{0, 0}
-	res, err := s.Search(q, 3)
+	res, err := s.Search(q, 3, nil)
 	requireNoError(t, err)
 	vecs := map[int64][]float32{}
 	for id, v := range raw {
@@ -178,7 +178,7 @@ func TestStore_Search_SkipsTombstoned(t *testing.T) {
 	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
 	requireNoError(t, s.Put("b", []float32{0, 1}, nil))
 	requireNoError(t, s.Delete("a"))
-	res, err := s.Search([]float32{1, 0}, 5)
+	res, err := s.Search([]float32{1, 0}, 5, nil)
 	requireNoError(t, err)
 	da := s.idToDoc["a"]
 	for _, r := range res {
@@ -190,7 +190,7 @@ func TestStore_Search_SkipsTombstoned(t *testing.T) {
 
 func TestStore_Search_EmptyReturnsNil(t *testing.T) {
 	s := openTestStore(t, Cosine)
-	res, err := s.Search([]float32{1, 0}, 3)
+	res, err := s.Search([]float32{1, 0}, 3, nil)
 	requireNoError(t, err)
 	if res != nil {
 		t.Fatalf("search on empty store = %v, want nil", res)
@@ -200,10 +200,10 @@ func TestStore_Search_EmptyReturnsNil(t *testing.T) {
 func TestStore_Search_RejectsBadVectorAndK(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
-	if _, err := s.Search([]float32{}, 3); err == nil {
+	if _, err := s.Search([]float32{}, 3, nil); err == nil {
 		t.Fatal("empty query should be rejected")
 	}
-	if _, err := s.Search([]float32{1, 0}, 0); err == nil {
+	if _, err := s.Search([]float32{1, 0}, 0, nil); err == nil {
 		t.Fatal("k<=0 should be rejected")
 	}
 }
@@ -232,7 +232,7 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 	if _, _, found, _ := s2.Get("b"); found {
 		t.Fatal("deleted id b must stay deleted after reopen")
 	}
-	res, err := s2.Search([]float32{0, 0, 1}, 5)
+	res, err := s2.Search([]float32{0, 0, 1}, 5, nil)
 	requireNoError(t, err)
 	if len(res) != 1 {
 		t.Fatalf("live results after reopen = %d, want 1", len(res))
@@ -275,7 +275,7 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 	if _, _, found, _ := s2.Get("b"); found {
 		t.Fatal("deleted id b must stay deleted after crash recovery")
 	}
-	res, err := s2.Search([]float32{0, 0, 1}, 5)
+	res, err := s2.Search([]float32{0, 0, 1}, 5, nil)
 	requireNoError(t, err)
 	if len(res) != 1 {
 		t.Fatalf("live results after crash recovery = %d, want 1", len(res))

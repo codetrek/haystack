@@ -200,7 +200,7 @@ func TestSegGraphStore_DeletePaths(t *testing.T) {
 	}
 	head := buildHeadSeg(Cosine, rows)
 	segDir := filepath.Join(t.TempDir(), "seg-1-0")
-	requireNoError(t, writeSealedSegment(segDir, head))
+	requireNoError(t, writeSealedSegment(segDir, head, nil))
 	ss, err := openSealedSegment(segDir, Cosine)
 	requireNoError(t, err)
 	defer ss.close()

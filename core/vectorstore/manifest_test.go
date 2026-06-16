@@ -44,6 +44,22 @@ func TestManifest_NoTmpLeftBehind(t *testing.T) {
 	}
 }
 
+// TestManifest_V3_AttrDeclsRoundTrip pins the v3 manifest carrying the declared
+// attr-index set (property + kind), so a reopen restores which fields are indexed.
+func TestManifest_V3_AttrDeclsRoundTrip(t *testing.T) {
+	m := &manifest{
+		Version: 3, Head: 0, Metric: Cosine,
+		AttrDecls: []attrDecl{{Property: "color", Kind: Keyword}, {Property: "price", Kind: Numeric}},
+		Segments:  []segmentEntry{{SegID: 1, Gen: 0, VecCount: 10, TombCount: 2, State: segIndexed}},
+	}
+	b := serializeManifest(m)
+	got, err := parseManifest(b)
+	requireNoError(t, err)
+	if len(got.AttrDecls) != 2 || got.AttrDecls[0].Property != "color" || got.AttrDecls[1].Kind != Numeric {
+		t.Fatalf("attr decls round-trip = %#v", got.AttrDecls)
+	}
+}
+
 func TestManifest_CorruptCRCRejected(t *testing.T) {
 	dir := t.TempDir()
 	requireNoError(t, writeManifest(dir, sampleManifest()))

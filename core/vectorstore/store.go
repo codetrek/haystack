@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/codetrek/haystack/core/idtable"
@@ -37,6 +38,14 @@ const headSegID = segID(0)
 // later when the adaptive sizing lands.
 const defaultMaxSegSize = 50000
 
+// defaultAttrSearchT is the per-segment |S_seg| threshold under which a filtered
+// search uses the exact brute-S leg (iterate the matching slots) instead of the
+// graph∩S leg (HNSW filter-during-traversal). Like defaultMaxSegSize it is a
+// measure-don't-assert placeholder (§6 "阈值 T 按段内 |S_seg| 判") — TBD by
+// measurement, not a load-bearing magic number; tests pin Store.attrSearchT
+// per-case to force a specific branch.
+const defaultAttrSearchT = 512
+
 // Store is the segmented records layer (Phase 2): one in-memory brute head plus
 // an ordered set of immutable on-disk sealed segments, each with a tombstone
 // bitmap and (when indexed) a per-segment HNSW. Writes go to the head; Delete is
@@ -61,6 +70,15 @@ type Store struct {
 	nextSeg  segID                 // next sealed segId to assign
 
 	maxSegSize int // head row-count auto-seal trigger (defaultMaxSegSize unless overridden)
+
+	// attrDecls is the declared attr-index set (property → kind), mirroring the
+	// manifest's AttrDecls. It is the source of truth at runtime for which payload
+	// fields are indexed; every seal/merge builds the per-segment attr.dat for this
+	// set, and recover() loads it from the manifest before opening segments.
+	attrDecls map[string]AttrKind
+	// attrSearchT is the per-segment |S_seg| brute-S/graph∩S threshold
+	// (defaultAttrSearchT unless overridden). Tunable; tests pin it per-case.
+	attrSearchT int
 
 	buildMu sync.Mutex // serializes builder graph install + manifest rewrite
 	// quiescence accounting (replaces two sync.WaitGroups). nInflightBuilds and
@@ -139,7 +157,9 @@ func Open(opts Options) (*Store, error) {
 		mcfg:     mergeConfig{}.withDefaults(),
 		nextSeg:  1,
 
-		maxSegSize: defaultMaxSegSize,
+		maxSegSize:  defaultMaxSegSize,
+		attrDecls:   make(map[string]AttrKind),
+		attrSearchT: defaultAttrSearchT,
 	}
 	s.quiesced = sync.NewCond(&s.mu)
 	if err := s.recover(); err != nil {
@@ -190,11 +210,21 @@ func (s *Store) recover() error {
 	if s.metric != m.Metric {
 		return fmt.Errorf("vectorstore: metric mismatch: store was sealed under %s but opened with %s", m.Metric, s.metric)
 	}
+	// Load the declared attr-index set BEFORE opening segments so each sealed
+	// segment's attr index is loaded/rebuilt for the right field set (§6/§7).
+	for _, d := range m.AttrDecls {
+		s.attrDecls[d.Property] = d.Kind
+	}
 	for _, e := range m.Segments {
 		segDir := filepath.Join(s.dir, segDirName(e.SegID, e.Gen))
 		ss, oerr := openSealedSegment(segDir, s.metric)
 		if oerr != nil {
 			return oerr
+		}
+		// Load (or rebuild-from-payload) the per-segment attr index for the declared
+		// set. A missing/corrupt attr.dat is rebuilt by openAttrFile (derived floor).
+		if len(s.attrDecls) > 0 {
+			ss.attr, _ = openAttrFile(segDir, ss, s.attrDecls)
 		}
 		s.sealed = append(s.sealed, ss)
 		s.sealedID = append(s.sealedID, e.SegID)
@@ -277,6 +307,92 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 
 // Metric returns the store's distance metric.
 func (s *Store) Metric() Metric { return s.metric }
+
+// attrDeclsSnapshotLocked returns a private copy of the declared attr set so an
+// off-lock consumer (the merge write phase) reads a stable view while a concurrent
+// CreateAttrIndex/DropAttrIndex (under s.mu) may mutate the live map. Caller holds
+// s.mu.
+func (s *Store) attrDeclsSnapshotLocked() map[string]AttrKind {
+	if len(s.attrDecls) == 0 {
+		return nil
+	}
+	cp := make(map[string]AttrKind, len(s.attrDecls))
+	for k, v := range s.attrDecls {
+		cp[k] = v
+	}
+	return cp
+}
+
+// CreateAttrIndex declares property as an indexed attr of kind, scans every sealed
+// segment's payloads to build its per-segment bitmap (writing attr.dat), rebuilds
+// the head's in-memory attr index over the new declared set, persists the
+// declaration in the manifest (v3), and makes every future seal/merge build the
+// index for this property. Idempotent on an already-declared property of the SAME
+// kind; a kind change is an error.
+func (s *Store) CreateAttrIndex(property string, kind AttrKind) error {
+	if kind != Keyword && kind != Numeric {
+		return fmt.Errorf("vectorstore: invalid attr kind %d", kind)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if k, ok := s.attrDecls[property]; ok {
+		if k != kind {
+			return fmt.Errorf("vectorstore: attr index %q already declared as kind %d", property, k)
+		}
+		return nil
+	}
+	s.attrDecls[property] = kind
+	// Rebuild the head's in-memory index over the new declared set (over LIVE slots).
+	s.seg.attr = newHeadAttr(s.attrDecls)
+	for slot, pl := range s.seg.payloads {
+		if !s.seg.tomb.get(slot) {
+			s.seg.attr.index(slot, pl)
+		}
+	}
+	// Scan + persist every sealed segment's attr.dat for the full declared set.
+	for i, ss := range s.sealed {
+		segDir := filepath.Join(s.dir, segDirName(s.sealedID[i], 0))
+		ai := buildSegAttr(s.attrDecls, ss.count(), func(slot int) Payload {
+			p, _ := ss.payloadDecoded(slot)
+			return p
+		})
+		if err := writeAttrFile(segDir, ai, ss.count()); err != nil {
+			return err
+		}
+		ss.attr = ai
+	}
+	return s.writeManifestLocked()
+}
+
+// DropAttrIndex removes property from the declared set, the manifest, the head
+// index, and rewrites each segment's attr.dat without it. Records/payload/vectors/
+// graph are untouched. Idempotent on an unknown property.
+func (s *Store) DropAttrIndex(property string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.attrDecls[property]; !ok {
+		return nil
+	}
+	delete(s.attrDecls, property)
+	s.seg.attr = newHeadAttr(s.attrDecls)
+	for slot, pl := range s.seg.payloads {
+		if !s.seg.tomb.get(slot) {
+			s.seg.attr.index(slot, pl)
+		}
+	}
+	for i, ss := range s.sealed {
+		segDir := filepath.Join(s.dir, segDirName(s.sealedID[i], 0))
+		ai := buildSegAttr(s.attrDecls, ss.count(), func(slot int) Payload {
+			p, _ := ss.payloadDecoded(slot)
+			return p
+		})
+		if err := writeAttrFile(segDir, ai, ss.count()); err != nil {
+			return err
+		}
+		ss.attr = ai
+	}
+	return s.writeManifestLocked()
+}
 
 // --- quiescence accounting (cond-based; all under s.mu) ----------------------
 //
@@ -635,7 +751,17 @@ func (s *Store) Delete(id string) error {
 // gotcha). All legs emit exact same-metric distances into one heap; no cross-leg
 // dedup is needed because a docId is live in exactly one segment. Results are in
 // docId space, ascending by distance. An empty store returns (nil, nil).
-func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
+//
+// filter is an optional metadata Predicate (Eq/In/Range/And; nil = unfiltered).
+// A nil filter is exactly the pre-Phase-5 behavior (the indexed leg uses the
+// HNSW). When non-nil, each leg restricts to the filter-MATCHING LIVE set: the
+// head/pending legs apply a brute payload eval, and each indexed segment evaluates
+// the filter to its segment-local slot bitmap S_seg, ANDs it with the live set
+// (so deletes never leak — §6 "member AND live"), and brute-scores only those
+// slots. The adaptive graph∩S leg (|S_seg| > T) and the HNSW member predicate are
+// layered on in Phase-5 Task 9; this leg is the exact brute-S correctness floor
+// (equivalent to T = ∞) and is the same exact answer the adaptive path must match.
+func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, error) {
 	if k <= 0 {
 		return nil, errors.New("vectorstore: k must be positive")
 	}
@@ -644,11 +770,17 @@ func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
 	if err := validateVector(q, s.searchDimLocked(), s.metric); err != nil {
 		return nil, err
 	}
+	if err := validatePredicate(filter, s.attrDecls); err != nil {
+		return nil, err
+	}
 	pq, _ := s.metric.prepare(q)
 	tk := newTopK(k)
 
-	// Head leg (brute).
+	// Head leg — ALWAYS brute-S (no graph). Filter by brute payload eval.
 	s.seg.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+		if filter != nil && !filter.evalPayload(s.seg.payloads[slot]) {
+			return
+		}
 		tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
 	})
 
@@ -656,32 +788,35 @@ func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
 	for i, ss := range s.sealed {
 		bi := s.graphs[s.sealedID[i]]
 		if bi == nil {
-			// Pending: brute over the segment's live slots.
+			// Pending: ALWAYS brute over the segment's live slots; filter by brute eval.
 			ss.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+				if filter != nil {
+					pl, _ := ss.payloadDecoded(slot)
+					if !filter.evalPayload(pl) {
+						return
+					}
+				}
 				tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
 			})
 			continue
 		}
-		// Indexed: reuse the per-segment hnswIndex built once at install/open
-		// (appendix #26), then drop any hit whose docId is no longer live in the
-		// segment — the immutable graph still contains post-seal-tombstoned nodes.
-		// Over-fetch by the segment's tombstone count so k LIVE hits survive the
-		// post-filter: fetching exactly k and then dropping tombstones makes a
-		// heavily-deleted segment under-return (recall ≈ 1-delFrac). Inflating k by
-		// the live-tombstone count restores the k live results the merge heap needs
-		// (the graph caps its own ef at the available node count, so an over-large
-		// fetchK is harmless).
-		fetchK := k + ss.tombCount()
-		hits, err := bi.idx.search(q, fetchK)
-		if err != nil {
-			return nil, err
-		}
-		for _, h := range hits {
-			if _, live := ss.slotOfDoc(h.DocID); !live {
-				continue // tombstoned after seal → exclude
+		// Indexed sealed segment.
+		if filter == nil {
+			// Unfiltered fast path — exactly today's behavior (regression-guarded).
+			if err := s.searchIndexedUnfiltered(ss, bi, q, k, tk); err != nil {
+				return nil, err
 			}
-			tk.offer(h)
+			continue
 		}
+		// Filtered indexed leg: eval filter → S_seg (segment-local slot bitmap),
+		// AND with live, then brute-score the matching slots. (The adaptive
+		// graph∩S branch for |S_seg| > T arrives in Task 9; this is its exact
+		// brute-S floor.)
+		sseg := s.evalSegLocked(ss, filter)
+		s.andLive(ss, sseg) // member ∧ live (§6: deletes never leak)
+		sseg.iterate(func(slot int) {
+			tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: s.metric.distance(ss.getVectorRef(slot), pq)})
+		})
 	}
 
 	out := tk.sorted()
@@ -689,6 +824,66 @@ func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// searchIndexedUnfiltered is the unfiltered indexed-segment leg (the pre-Phase-5
+// body, extracted verbatim): run the per-segment HNSW, over-fetching by the
+// segment's tombstone count so k LIVE hits survive the tombstone post-filter, then
+// drop any hit no longer live in the segment (the immutable graph still contains
+// post-seal-tombstoned nodes). Caller holds s.mu (R).
+func (s *Store) searchIndexedUnfiltered(ss *sealedSegment, bi *builtIndex, q []float32, k int, tk *topK) error {
+	fetchK := k + ss.tombCount()
+	hits, err := bi.idx.search(q, fetchK)
+	if err != nil {
+		return err
+	}
+	for _, h := range hits {
+		if _, live := ss.slotOfDoc(h.DocID); !live {
+			continue // tombstoned after seal → exclude
+		}
+		tk.offer(h)
+	}
+	return nil
+}
+
+// evalSegLocked evaluates filter against one sealed segment, producing S_seg (a
+// segment-local slot bitmap of matching rows). It uses the segment's resident
+// attr index (ss.attr) when present; if a segment was sealed before any
+// declaration (ss.attr == nil) it builds the index on the fly from payloads, so
+// the filtered path is always correct even on an un-indexed segment (architecture
+// §6: non-declared/un-indexed fields fall back to a payload scan). Caller holds
+// s.mu (R).
+func (s *Store) evalSegLocked(ss *sealedSegment, filter Predicate) *bitmap {
+	payloadAt := func(slot int) Payload {
+		p, _ := ss.payloadDecoded(slot)
+		return p
+	}
+	ai := ss.attr
+	if ai == nil {
+		ai = buildSegAttr(s.attrDecls, ss.count(), payloadAt)
+	}
+	bm, ok := ai.evalSeg(filter, ss.count(), payloadAt)
+	if !ok || bm == nil {
+		// The closed predicate set always yields ok=true; this guard keeps the
+		// filtered leg panic-free if an unusable predicate ever reaches here.
+		return &bitmap{}
+	}
+	return bm
+}
+
+// andLive clears the tombstoned slots from S_seg in place (member ∧ live, §6), so
+// a deleted-but-matching doc never enters the result heap. It snapshots the
+// segment's mmap'd tomb words under the segment's tomb RLock (mirroring eachLive's
+// lock discipline, appendix #16/#18) and applies them via bitmap.andNotWords.
+func (s *Store) andLive(ss *sealedSegment, sseg *bitmap) {
+	ss.tombMu.RLock()
+	tomb := make([]uint64, ss.tombWords)
+	for w := 0; w < ss.tombWords; w++ {
+		off := segPageSize + w*8
+		tomb[w] = binary.LittleEndian.Uint64(ss.tombMap[off : off+8])
+	}
+	ss.tombMu.RUnlock()
+	sseg.andNotWords(tomb)
 }
 
 // searchDimLocked returns the dimension to validate the query against: the head's
@@ -755,13 +950,19 @@ func (s *Store) sealLocked() error {
 	id := s.nextSeg
 	segDir := filepath.Join(s.dir, segDirName(id, 0))
 
-	// (1) Dump head → sealed records-segment files (fsync, fast, durable).
-	if err := writeSealedSegment(segDir, s.seg); err != nil {
+	// (1) Dump head → sealed records-segment files (fsync, fast, durable). The
+	// declared attr set is built into attr.dat in the same write.
+	if err := writeSealedSegment(segDir, s.seg, s.attrDecls); err != nil {
 		return err
 	}
 	ss, err := openSealedSegment(segDir, s.metric)
 	if err != nil {
 		return err
+	}
+	// Load the per-segment attr index (from the just-written attr.dat, or rebuilt
+	// from payload if no declarations / a torn file).
+	if len(s.attrDecls) > 0 {
+		ss.attr, _ = openAttrFile(segDir, ss, s.attrDecls)
 	}
 
 	// (2) Publish as PENDING + fresh head + atomic manifest swap.
@@ -887,6 +1088,15 @@ func (s *Store) isIndexedForTest(id segID) bool {
 func (s *Store) writeManifestLocked() error {
 	s.manifestVersion++
 	m := &manifest{Version: s.manifestVersion, Head: headSegID, Metric: s.metric}
+	// Persist the declared attr-index set (sorted for a deterministic manifest).
+	props := make([]string, 0, len(s.attrDecls))
+	for p := range s.attrDecls {
+		props = append(props, p)
+	}
+	sort.Strings(props)
+	for _, p := range props {
+		m.AttrDecls = append(m.AttrDecls, attrDecl{Property: p, Kind: s.attrDecls[p]})
+	}
 	for i, ss := range s.sealed {
 		st := segPending
 		if s.graphs[s.sealedID[i]] != nil {

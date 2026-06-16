@@ -47,7 +47,7 @@ func TestPackLiveDocs_BinPacksAndCarriesPayload(t *testing.T) {
 			seg.append(doc, st, nrm, Payload{"id": StringValue(id)}) // payload = id (asserted below)
 		}
 		dir := t.TempDir()
-		requireNoError(t, writeSealedSegment(dir, seg))
+		requireNoError(t, writeSealedSegment(dir, seg, nil))
 		ss, err := openSealedSegment(dir, DotProduct)
 		requireNoError(t, err)
 		return ss
@@ -99,7 +99,7 @@ func TestPackLiveDocs_ExcludesTombstoned(t *testing.T) {
 		seg.append(doc, st, nrm, nil)
 	}
 	dir := t.TempDir()
-	requireNoError(t, writeSealedSegment(dir, seg))
+	requireNoError(t, writeSealedSegment(dir, seg, nil))
 	ss, err := openSealedSegment(dir, DotProduct)
 	requireNoError(t, err)
 	requireNoError(t, ss.tombstoneSlot(1)) // tombstone "y"
@@ -217,7 +217,7 @@ func TestMerge_CompactOfOne(t *testing.T) {
 	var sum float64
 	for it := 0; it < 20; it++ {
 		q := randVec()
-		got, err := s.Search(q, 5)
+		got, err := s.Search(q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}

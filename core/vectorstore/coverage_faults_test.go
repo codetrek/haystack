@@ -75,7 +75,7 @@ func TestWriteSealedSegment_WriteFault(t *testing.T) {
 	head := sampleHead(t)
 	withCreateFault(t, func(f *faultFile) { f.failWrite = true })
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	if err := writeSealedSegment(dir, head); err == nil {
+	if err := writeSealedSegment(dir, head, nil); err == nil {
 		t.Fatal("writeSealedSegment should fail when Write is injected to fail")
 	}
 }
@@ -86,7 +86,7 @@ func TestWriteSealedSegment_SyncFault(t *testing.T) {
 	head := sampleHead(t)
 	withCreateFault(t, func(f *faultFile) { f.failSync = true })
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	if err := writeSealedSegment(dir, head); err == nil {
+	if err := writeSealedSegment(dir, head, nil); err == nil {
 		t.Fatal("writeSealedSegment should fail when Sync is injected to fail")
 	}
 }
@@ -97,7 +97,7 @@ func TestWriteSealedSegment_SyncFault(t *testing.T) {
 func TestOpenSealedSegment_StatFault(t *testing.T) {
 	head := sampleHead(t)
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	requireNoError(t, writeSealedSegment(dir, head))
+	requireNoError(t, writeSealedSegment(dir, head, nil))
 
 	// Fail Stat on the next fsOpenFile-opened file (vectors.dat is first).
 	orig := fsOpenFile
@@ -120,7 +120,7 @@ func TestOpenSealedSegment_StatFault(t *testing.T) {
 func TestOpenSealedSegment_ReadWholeFileFault(t *testing.T) {
 	head := sampleHead(t)
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	requireNoError(t, writeSealedSegment(dir, head))
+	requireNoError(t, writeSealedSegment(dir, head, nil))
 
 	withOpenFault(t, func(f *faultFile) { f.failReadAt = true })
 	if _, err := openSealedSegment(dir, Cosine); err == nil {
@@ -227,7 +227,7 @@ func sealedFromRandom(t *testing.T, n, dim int) *sealedSegment {
 	}
 	head := buildHeadSeg(Cosine, rows)
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	requireNoError(t, writeSealedSegment(dir, head))
+	requireNoError(t, writeSealedSegment(dir, head, nil))
 	ss, err := openSealedSegment(dir, Cosine)
 	requireNoError(t, err)
 	t.Cleanup(func() { ss.close() })
@@ -438,7 +438,7 @@ func TestWriteSealedSegment_LaterFileWriteFault(t *testing.T) {
 		return ff, nil
 	}
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	if err := writeSealedSegment(dir, head); err == nil {
+	if err := writeSealedSegment(dir, head, nil); err == nil {
 		t.Fatal("writeSealedSegment should fail when a later per-file Write fails")
 	}
 }
@@ -449,7 +449,7 @@ func TestWriteSealedSegment_LaterFileWriteFault(t *testing.T) {
 func TestOpenSealedSegment_TombOpenFault(t *testing.T) {
 	head := sampleHead(t)
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
-	requireNoError(t, writeSealedSegment(dir, head))
+	requireNoError(t, writeSealedSegment(dir, head, nil))
 
 	orig := fsOpenFile
 	t.Cleanup(func() { fsOpenFile = orig })
@@ -483,7 +483,7 @@ func TestWriteSealedSegment_MkdirFault(t *testing.T) {
 	base := filepath.Join(t.TempDir(), "afile")
 	requireNoError(t, os.WriteFile(base, []byte("x"), 0644))
 	// base is a file, so MkdirAll(base/seg-1-0) cannot create the parent.
-	if err := writeSealedSegment(filepath.Join(base, "seg-1-0"), sampleHead(t)); err == nil {
+	if err := writeSealedSegment(filepath.Join(base, "seg-1-0"), sampleHead(t), nil); err == nil {
 		t.Fatal("writeSealedSegment should fail when MkdirAll cannot create the dir")
 	}
 }
@@ -509,7 +509,7 @@ func TestWriteSealedSegment_TombAndPayloadFault(t *testing.T) {
 			return ff, nil
 		}
 		dir := filepath.Join(t.TempDir(), "seg-1-0")
-		err := writeSealedSegment(dir, head)
+		err := writeSealedSegment(dir, head, nil)
 		fsCreate = orig
 		if err == nil {
 			t.Fatalf("writeSealedSegment should fail when per-file Write #%d fails", failOn)
