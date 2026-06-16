@@ -90,3 +90,26 @@ func TestStore_PutRejectsBadVector(t *testing.T) {
 		t.Fatal("dim mismatch should be rejected")
 	}
 }
+
+func TestStore_Delete(t *testing.T) {
+	s := openTestStore(t, DotProduct)
+	requireNoError(t, s.Put("a", []float32{1, 2}, []byte("x")))
+	requireNoError(t, s.Delete("a"))
+	_, _, found, err := s.Get("a")
+	requireNoError(t, err)
+	if found {
+		t.Fatal("Get(a) should be not-found after Delete")
+	}
+}
+
+func TestStore_DeleteMissingIsPureNoOp(t *testing.T) {
+	s := openTestStore(t, DotProduct)
+	if err := s.Delete("never-put"); err != nil {
+		t.Fatalf("Delete of missing id should be nil, got %v", err)
+	}
+	// Must not have allocated an id: first real Put gets docId 1.
+	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
+	if s.idToDoc["a"] != 1 {
+		t.Fatalf("Delete of unknown id must not allocate a docId")
+	}
+}

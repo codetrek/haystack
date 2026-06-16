@@ -198,3 +198,27 @@ func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err err
 	plcp := append([]byte(nil), pl...)
 	return out, plcp, true, nil
 }
+
+// Delete tombstones id's current slot. Deleting an unknown or already-deleted id
+// is a pure no-op (no WAL write, no idtable allocation). The id↔docId mapping is
+// intentionally left in place; a later Put of the same id reuses the same docId.
+func (s *Store) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	docID, ok := s.idToDoc[id]
+	if !ok {
+		return nil
+	}
+	slot, ok := s.seg.slotOfDoc(docID)
+	if !ok {
+		return nil
+	}
+	if _, err := s.wal.Append(recDelete, encodeDelete(id, docID, int64(slot))); err != nil {
+		return err
+	}
+	if err := s.wal.Sync(); err != nil {
+		return err
+	}
+	s.seg.tombstone(slot)
+	return nil
+}
