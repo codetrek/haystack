@@ -66,17 +66,21 @@ func TestCompact_NoOpWhenHealthy(t *testing.T) {
 	}
 }
 
-// TestAutoMerge_GrowthTriggersOnSeal: with a small fanout, sealing enough segments
-// auto-triggers a growth-driven merge in the background — no manual Compact call.
-// The trigger only picks INDEXED inputs (a pending just-sealed segment is never a
-// merge input — appendix #3/#8 prevents discarding an in-flight build and the
-// close-during-build SIGSEGV). So the three count-5 tier segments are rolled up by
-// the auto-trigger of a LATER seal, once all three are indexed. No Compact() call.
+// TestAutoMerge_GrowthTriggersOnSeal: with a small fanout, sealing enough full
+// same-tier segments auto-triggers a growth-driven merge in the background — no
+// manual Compact call. The trigger only picks INDEXED inputs (a pending just-
+// sealed segment is never a merge input — appendix #3/#8 prevents discarding an
+// in-flight build and the close-during-build SIGSEGV). The K-th segment's own
+// seal-trigger sees only K-1 indexed peers (it is still pending), so the roll-up
+// fires on the K-th segment's BUILD completion instead (finding #1's re-trigger):
+// once all three count-5 segments are indexed they fold into one — with no extra
+// seal and no Compact() call.
 func TestAutoMerge_GrowthTriggersOnSeal(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	s.maxSegSize = 5      // tiny segments
 	s.mcfg.Fanout = 3     // a tier of 3 same-sized segments triggers a roll-up
 	s.mcfg.MergeFloor = 0 // disable delete driver for this test
+	s.mcfg.TargetSegCount = 1000
 	rng := rand.New(rand.NewSource(41))
 	dim := 8
 	randVec := func() []float32 {
@@ -88,50 +92,55 @@ func TestAutoMerge_GrowthTriggersOnSeal(t *testing.T) {
 	}
 	put := func(i int) { requireNoError(t, s.Put("d-"+itoa(i), randVec(), nil)) }
 
-	// Seal three count-5 (tier-2) segments, indexing each so it is an eligible merge
-	// input. The trigger on each seal sees fewer than fanout=3 INDEXED tier peers
-	// (the just-sealed one is still pending), so no merge fires yet.
-	for i := 0; i < 15; i++ {
+	// Seal two count-5 (tier-2) segments, indexing each so it is an eligible merge
+	// input. The trigger on each seal/build sees fewer than fanout=3 INDEXED tier
+	// peers, so no merge fires yet.
+	for i := 0; i < 10; i++ {
 		put(i)
 		if (i+1)%5 == 0 {
-			requireNoError(t, s.WaitForIndex()) // index the seg auto-sealed at row 5
+			requireNoError(t, s.WaitForIndex())
 			requireNoError(t, s.WaitForMerge())
 		}
 	}
 	s.mu.RLock()
 	before := len(s.sealed)
 	s.mu.RUnlock()
-	if before != 3 {
-		t.Fatalf("before re-trigger: nSealed=%d, want 3 (no premature merge)", before)
+	if before != 2 {
+		t.Fatalf("before the K-th seal: nSealed=%d, want 2 (no premature merge)", before)
 	}
 
-	// All three tier-2 segments are now indexed. Force ONE more seal of a smaller
-	// (tier-0) head: its auto-trigger re-evaluates the policy and — finding three
-	// INDEXED count-5 peers at fanout — launches the growth roll-up. The tier-0
-	// segment is a different tier, so it is not swept into the roll-up.
-	put(15)
-	requireNoError(t, s.Seal()) // seg 4 (count 1, tier 0); trigger fires here
-	requireNoError(t, s.WaitForIndex())
-	requireNoError(t, s.WaitForMerge())
+	// Seal the THIRD count-5 segment. Its seal-trigger sees only 2 INDEXED peers (it
+	// is still pending), so no roll-up there. The fix's re-trigger fires when this
+	// third segment's background build COMPLETES — folding all three into one.
+	for i := 10; i < 15; i++ {
+		put(i)
+	}
+	prev := -1
+	for {
+		requireNoError(t, s.WaitForIndex())
+		requireNoError(t, s.WaitForMerge())
+		requireNoError(t, s.WaitForIndex())
+		s.mu.RLock()
+		n := len(s.sealed)
+		s.mu.RUnlock()
+		if n == prev {
+			break
+		}
+		prev = n
+	}
 
-	// The three count-5 segments rolled up into one; the lone tier-0 seg remains.
+	// The three count-5 segments rolled up into one 15-row segment.
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var rolled *sealedSegment
-	for _, ss := range s.sealed {
-		if ss.count() == 15 {
-			rolled = ss
-		}
-	}
-	if rolled == nil {
+	if len(s.sealed) != 1 {
 		counts := make([]int, len(s.sealed))
 		for i, ss := range s.sealed {
 			counts[i] = ss.count()
 		}
-		t.Fatalf("auto-trigger did not roll up the count-5 tier: seg counts=%v, want a 15-row merge output", counts)
+		t.Fatalf("auto-trigger did not roll up the count-5 tier: seg counts=%v, want one 15-row merge output", counts)
 	}
-	if len(s.sealed) != 2 {
-		t.Fatalf("after auto-merge: nSealed=%d, want 2 (15-row roll-up + the tier-0 seg)", len(s.sealed))
+	if s.sealed[0].count() != 15 {
+		t.Fatalf("rolled-up segment row count = %d, want 15", s.sealed[0].count())
 	}
 }
 

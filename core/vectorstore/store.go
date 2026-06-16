@@ -62,11 +62,22 @@ type Store struct {
 
 	maxSegSize int // head row-count auto-seal trigger (defaultMaxSegSize unless overridden)
 
-	buildMu sync.Mutex     // serializes builder graph install + manifest rewrite
-	builds  sync.WaitGroup // tracks in-flight background builds (WaitForIndex/Close)
-	merges  sync.WaitGroup // tracks in-flight merges (WaitForMerge/Close)
-	closing bool           // set under s.mu in Close; gates new merge launches so a
-	//                        merges.Add never races a zero-counter merges.Wait (appendix #1)
+	buildMu sync.Mutex // serializes builder graph install + manifest rewrite
+	// quiescence accounting (replaces two sync.WaitGroups). nInflightBuilds and
+	// nInflightMerges count in-flight background builds/merges; every increment,
+	// decrement, AND wait happens under s.mu, so the WaitGroup add-after-wait hazard
+	// is structurally impossible — a waiter holding s.mu cannot observe a "zero"
+	// counter concurrently with an Add (the Add also needs s.mu). quiesced is
+	// Broadcast on every decrement so waiters re-check. This is what lets a build
+	// completion safely re-trigger a merge (Phase-4 finding #1): the build→merge
+	// edge would race a plain merges.Wait() if these were WaitGroups (a builds-
+	// tracked goroutine calling merges.Add after merges.Wait already returned at a
+	// zero counter), but under s.mu serialization it cannot.
+	quiesced        *sync.Cond
+	nInflightBuilds int
+	nInflightMerges int
+	closing         bool // set under s.mu in Close; gates new merge/build launches so a
+	//                       launch never races teardown (appendix #1)
 
 	manifestVersion uint64 // monotonic manifest version (bumped per rewrite)
 
@@ -122,6 +133,7 @@ func Open(opts Options) (*Store, error) {
 
 		maxSegSize: defaultMaxSegSize,
 	}
+	s.quiesced = sync.NewCond(&s.mu)
 	if err := s.recover(); err != nil {
 		w.Close()
 		alloc.Close()
@@ -211,7 +223,7 @@ func (s *Store) recover() error {
 	for i, sid := range s.sealedID {
 		if s.graphs[sid] == nil {
 			segDir := filepath.Join(s.dir, segDirName(sid, 0))
-			s.builds.Add(1)
+			s.buildBeginLocked()
 			go s.buildAndPublish(sid, segDir, s.sealed[i])
 		}
 	}
@@ -258,24 +270,70 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 // Metric returns the store's distance metric.
 func (s *Store) Metric() Metric { return s.metric }
 
+// --- quiescence accounting (cond-based; all under s.mu) ----------------------
+//
+// These replace two sync.WaitGroups. Keeping the counts under s.mu (the same lock
+// the cond uses) makes Add-after-Wait impossible: a waiter blocked in
+// quiesced.Wait() has released s.mu, but it re-checks the counter under s.mu on
+// every wakeup, and an Add holds s.mu, so the waiter can never "miss" an Add and
+// return early. This is the property that lets a build completion re-trigger a
+// merge (finding #1) without the WaitGroup add-after-wait race.
+
+// buildBeginLocked counts one background build as in-flight. Caller holds s.mu.
+func (s *Store) buildBeginLocked() { s.nInflightBuilds++ }
+
+// buildDone marks one background build complete and wakes any waiter.
+func (s *Store) buildDone() {
+	s.mu.Lock()
+	s.nInflightBuilds--
+	s.quiesced.Broadcast()
+	s.mu.Unlock()
+}
+
+// mergeBeginLocked counts n background merges as in-flight. Caller holds s.mu.
+func (s *Store) mergeBeginLocked(n int) { s.nInflightMerges += n }
+
+// mergeDone marks one background merge complete and wakes any waiter.
+func (s *Store) mergeDone() {
+	s.mu.Lock()
+	s.nInflightMerges--
+	s.quiesced.Broadcast()
+	s.mu.Unlock()
+}
+
+// waitMergesLocked blocks until no merge is in flight. Caller holds s.mu.
+func (s *Store) waitMergesLocked() {
+	for s.nInflightMerges > 0 {
+		s.quiesced.Wait()
+	}
+}
+
+// waitQuiescentLocked blocks until neither a merge NOR a build is in flight.
+// Because a merge can spawn builds and a build can re-trigger a merge (finding #1),
+// it loops until BOTH counters are simultaneously zero under s.mu — the only
+// moment no further background work can self-spawn (every spawn increments a
+// counter under s.mu before its parent's Done decrements). Caller holds s.mu.
+func (s *Store) waitQuiescentLocked() {
+	for s.nInflightMerges > 0 || s.nInflightBuilds > 0 {
+		s.quiesced.Wait()
+	}
+}
+
 // Close waits for any in-flight background merges and builds, then flushes and
-// releases the WAL, sealed-segment mmaps, and idtable. The drain order is
-// load-bearing: a merge spawns output builds, so merges must settle first; both
-// are awaited BEFORE taking s.mu because mergeAndPublish/buildAndPublish acquire
-// s.mu transiently — holding it across the wait would deadlock. To make
-// merges.Wait()/builds.Wait() safe against a concurrent merge launch (which calls
-// merges.Add), Close first sets s.closing under s.mu; every launch site
-// (mergeNow/Compact/maybeMergeLocked) checks s.closing under s.mu and refuses to
-// Add once closing, so a merges.Add never races a zero-counter merges.Wait
-// (appendix #1). Closing the allocator commits any pending id→docId mappings
-// re-driven during replay, making the recovered state durable.
+// releases the WAL, sealed-segment mmaps, and idtable. It sets s.closing under
+// s.mu so every launch site (sealLocked/mergeNow/Compact/maybeMergeLocked) refuses
+// to start new work, then drains to quiescence (no merge AND no build in flight)
+// under the same s.mu the quiescence cond uses — so a launch can never race the
+// drain. Because both the swap path (mergeAndPublish) and the build path
+// (buildAndPublish) acquire s.mu transiently to do their accounting Done +
+// Broadcast, Close must NOT hold s.mu across the drain except as the cond requires
+// (quiesced.Wait releases it while parked). Closing the allocator commits any
+// pending id→docId mappings re-driven during replay, making the recovered state
+// durable.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	s.closing = true
-	s.mu.Unlock()
-	s.merges.Wait()
-	s.builds.Wait()
-	s.mu.Lock()
+	s.waitQuiescentLocked()
 	defer s.mu.Unlock()
 	for _, ss := range s.sealed {
 		ss.close()
@@ -721,7 +779,7 @@ func (s *Store) sealLocked() error {
 	if s.closing {
 		return nil
 	}
-	s.builds.Add(1)
+	s.buildBeginLocked()
 	go s.buildAndPublish(id, segDir, ss)
 
 	// (5) Opportunistic background reclamation: a fresh seal may push a size tier to
@@ -740,7 +798,7 @@ func (s *Store) sealLocked() error {
 // serializes the install+manifest rewrite across concurrent builders so two
 // flips never race a single manifest file.
 func (s *Store) buildAndPublish(id segID, segDir string, ss *sealedSegment) {
-	defer s.builds.Done()
+	defer s.buildDone()
 	gs, err := buildSegmentGraph(segDir, ss, s.gcfg)
 	if err != nil {
 		return // stays pending; brute leg keeps results correct
@@ -752,19 +810,37 @@ func (s *Store) buildAndPublish(id segID, segDir string, ss *sealedSegment) {
 	defer s.mu.Unlock()
 	s.graphs[id] = bi
 	_ = s.writeManifestLocked()
+
+	// Re-evaluate the merge policy on the pending→indexed flip (Phase-4 finding #1).
+	// The on-seal trigger (sealLocked → maybeMergeLocked) cannot roll up the K-th of
+	// K full maxSegSize segments: when its OWN seal fires the trigger it is still
+	// pending, so planReclamationLocked sees only K-1 INDEXED tier peers and the
+	// anti-thrash guard skips the under-fanout tier — and no later seal/write is
+	// guaranteed to follow. This segment just became indexed, so the tier may now
+	// have reached fanout; re-running the policy here is the growth driver's missing
+	// edge. maybeMergeLocked only launches off-lock mergeAndPublish goroutines (it
+	// never calls sealLocked/buildAndPublish synchronously) and only picks already-
+	// INDEXED inputs, so it is non-reentrant-safe under the buildMu+s.mu we already
+	// hold and never blocks the write path. Its mergeBeginLocked increment happens
+	// under s.mu BEFORE this function's deferred buildDone decrement, so a concurrent
+	// waitQuiescentLocked never observes a false "quiescent" between the build
+	// finishing and the merge it spawned being counted. Gated by s.closing inside
+	// maybeMergeLocked so no launch races Close's drain (appendix #1).
+	s.maybeMergeLocked()
 }
 
-// WaitForIndex blocks until every pending sealed-segment build has finished. It
-// drains in-flight MERGES first (merges.Wait) because a merge spawns its outputs'
-// builds — and does so on a tracked goroutine that holds the merges WaitGroup
-// across the builds.Add. Waiting merges first guarantees every merge-spawned
-// builds.Add has already happened before builds.Wait observes the counter, so a
-// caller's WaitForIndex can never race a merge's Add on a zero builds counter
-// (the WaitGroup add-after-wait hazard, appendix #1). Same merges→builds drain
-// order Close uses.
+// WaitForIndex blocks until every pending sealed-segment build has finished AND
+// every merge they may have spawned/re-triggered has settled — i.e. the store is
+// quiescent (no build and no merge in flight). It drains both counters under s.mu
+// in a single wait: a merge spawns its outputs' builds and a completed build can
+// re-trigger a merge (finding #1), so the only safe stopping point is both
+// counters simultaneously zero. Because all begin/done/wait happen under s.mu, a
+// caller can never miss a spawn that races the wait (the WaitGroup add-after-wait
+// hazard, appendix #1).
 func (s *Store) WaitForIndex() error {
-	s.merges.Wait()
-	s.builds.Wait()
+	s.mu.Lock()
+	s.waitQuiescentLocked()
+	s.mu.Unlock()
 	return nil
 }
 

@@ -34,7 +34,7 @@ func TestMerge_DeleteDuringWindow_NotResurrected(t *testing.T) {
 		s.mu.Unlock()
 		t.Fatal("planMergeLocked returned nil (input not indexed?)")
 	}
-	s.merges.Add(1)
+	s.mergeBeginLocked(1)
 	s.mu.Unlock()
 
 	// (2) In the OFF-LOCK window, delete two docs that the plan captured as live.
@@ -96,7 +96,7 @@ func TestMerge_PutRehomeDuringWindow_NotDuplicated(t *testing.T) {
 		s.mu.Unlock()
 		t.Fatal("planMergeLocked returned nil (input not indexed?)")
 	}
-	s.merges.Add(1)
+	s.mergeBeginLocked(1)
 	s.mu.Unlock()
 
 	// Re-Put d-4 with a new vector during the window → rehomed to head.
@@ -164,7 +164,7 @@ func TestMerge_DeleteDuringWindow_DurableAcrossRestart(t *testing.T) {
 		s.mu.Unlock()
 		t.Fatal("planMergeLocked returned nil (input not indexed?)")
 	}
-	s.merges.Add(1)
+	s.mergeBeginLocked(1)
 	s.mu.Unlock()
 
 	requireNoError(t, s.Delete("d-9"))

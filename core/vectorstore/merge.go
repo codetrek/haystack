@@ -185,13 +185,13 @@ func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergeP
 // lock discipline (build off-lock → buildMu → s.mu → install + writeManifestLocked)
 // and sealLocked's commit order (data durable → manifest swap → delete old).
 //
-// WaitGroup discipline (appendix #1): merges.Done fires when this returns. Every
-// output's builds.Add(1) happens at step 4 BEFORE the return, so when Close's
-// merges.Wait() passes, every spawned build is already counted in s.builds and
-// the subsequent builds.Wait() drains them. New merges are gated by s.closing at
-// the launch sites, so no merges.Add ever races a zero-counter merges.Wait.
+// Quiescence discipline (appendix #1): mergeDone fires when this returns. Every
+// output's buildBeginLocked() happens at step 2e BEFORE the return (and under
+// s.mu), so a waiter draining to quiescence (no merge AND no build in flight)
+// sees every spawned build counted before this merge's mergeDone. New merges are
+// gated by s.closing at the launch sites, so no launch races Close's drain.
 func (s *Store) mergeAndPublish(p *mergePlan) error {
-	defer s.merges.Done()
+	defer s.mergeDone()
 	if p == nil {
 		return nil
 	}
@@ -298,19 +298,17 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		inputDirs[i] = filepath.Join(s.dir, segDirName(id, 0))
 	}
 
-	// (2e) Background-build each output's HNSW (off-lock, like seal). The builds.Add
-	// + goroutine launch happen UNDER s.mu — same as sealLocked's step 4 — so a
-	// concurrent WaitForIndex()/Close() (builds.Wait()) can never race this Add on a
-	// zero counter (add-after-wait): WaitForIndex takes no lock, but a merge that has
-	// spawned builds is itself still in-flight on the merges WaitGroup, and any caller
-	// that awaits index after a merge must WaitForMerge() first; gating the Add under
-	// s.mu additionally serializes it against Close's closing=true handshake. The
-	// buildAndPublish goroutine re-takes s.mu itself, so the build still runs off-lock.
-	// Reuse the builds WaitGroup so Close()/WaitForIndex drain them; buildAndPublish
-	// flips pending→indexed. Every Add(1) here precedes this function's return (and
-	// thus the deferred merges.Done), so Close's merges.Wait()→builds.Wait() holds.
+	// (2e) Background-build each output's HNSW (off-lock, like seal). The
+	// buildBeginLocked() + goroutine launch happen UNDER s.mu — same as sealLocked's
+	// step 4 — so a concurrent WaitForIndex()/Close() drain (which also holds s.mu to
+	// read the counters) can never observe a false-quiescent state between this merge
+	// and the builds it spawns: the increment is published under s.mu before this
+	// function's deferred mergeDone decrement. The buildAndPublish goroutine re-takes
+	// s.mu itself, so the build still runs off-lock; it flips pending→indexed (and may
+	// re-trigger a merge, finding #1). Every buildBeginLocked() here precedes this
+	// function's return (and thus the deferred mergeDone), so a quiescence drain holds.
 	for i, ss := range outSS {
-		s.builds.Add(1)
+		s.buildBeginLocked()
 		go s.buildAndPublish(p.outIDs[i], p.outDirs[i], ss)
 	}
 	s.mu.Unlock()
@@ -365,7 +363,7 @@ func (s *Store) mergeNow(inputIDs []segID) error {
 		s.mu.Unlock()
 		return nil
 	}
-	s.merges.Add(1)
+	s.mergeBeginLocked(1)
 	s.mu.Unlock()
 	go func() { _ = s.mergeAndPublish(p) }()
 	return nil
@@ -373,9 +371,11 @@ func (s *Store) mergeNow(inputIDs []segID) error {
 
 // WaitForMerge blocks until every in-flight merge has published (or aborted). It
 // does NOT wait for the merged segments' background graph builds — use
-// WaitForIndex for that. Mirrors WaitForIndex.
+// WaitForIndex for that. Mirrors WaitForIndex but on the merge counter only.
 func (s *Store) WaitForMerge() error {
-	s.merges.Wait()
+	s.mu.Lock()
+	s.waitMergesLocked()
+	s.mu.Unlock()
 	return nil
 }
 
@@ -395,7 +395,7 @@ func (s *Store) Compact() error {
 		return nil
 	}
 	plans := s.planReclamationLocked()
-	s.merges.Add(len(plans))
+	s.mergeBeginLocked(len(plans))
 	s.mu.Unlock()
 	for _, p := range plans {
 		p := p
@@ -408,7 +408,7 @@ func (s *Store) Compact() error {
 // maybeMergeLocked (background trigger): it snapshots the live sealed segments and
 // builds the merge plans for one reclamation round — every delete-driven repack
 // plus at most one growth-driven roll-up. Caller holds s.mu and is responsible for
-// s.merges.Add(len(plans)) + launching mergeAndPublish. Returns nil when the store
+// s.mergeBeginLocked(len(plans)) + launching mergeAndPublish. Returns nil when the store
 // is healthy. The growth roll-up packs into MaxMergedSize buckets (not maxSegSize)
 // so K like-sized inputs fold into ~one larger next-tier output, actually bounding
 // total segment count (appendix #2/#6).
@@ -520,7 +520,7 @@ func (s *Store) maybeMergeLocked() {
 		return
 	}
 	plans := s.planReclamationLocked()
-	s.merges.Add(len(plans))
+	s.mergeBeginLocked(len(plans))
 	for _, p := range plans {
 		p := p
 		go func() { _ = s.mergeAndPublish(p) }()
