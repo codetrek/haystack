@@ -14,10 +14,10 @@ var errNoEntryPoint = errors.New("vectorindex: no entry point set")
 
 // NodeStore defines the persistence interface for HNSW graph nodes.
 //
-// Vectors are stored in the form dictated by the store's Metric: cosine stores
-// unit vectors (so distance reduces to 1 - dot), the raw metrics store vectors
-// unchanged. GetVectorRef returns the *stored* form (ready for metric.distance);
-// GetVector returns the original vector (cosine restores via the stored norm).
+// Vectors are stored RAW for every metric; cosine additionally persists the L2
+// norm (used to divide in the cosine distance). GetVectorRef returns the stored
+// (raw) form; GetVector returns the original vector (identity now that storage
+// is raw).
 type NodeStore interface {
 	// Metric returns the immutable distance metric this store was created with.
 	Metric() Metric
@@ -29,6 +29,12 @@ type NodeStore interface {
 	// GetVectorRef returns the stored vector form without copying. The caller
 	// MUST NOT modify the returned slice. Use GetVector for the original vector.
 	GetVectorRef(id uint64) ([]float32, error)
+	// GetVectorRefWithNorm returns the stored (raw) vector as a zero-copy ref
+	// (same contract/guards as GetVectorRef) together with its precomputed L2
+	// norm, under a SINGLE lock acquisition. This is the hot-path primitive that
+	// makes cosine's per-distance norms cheap: it avoids a second locked call to
+	// GetNorm. The caller MUST NOT modify the returned slice.
+	GetVectorRefWithNorm(id uint64) ([]float32, float32, error)
 	PutNode(id uint64, level int, vector []float32, docId int64) error
 	DeleteNode(id uint64) error
 	GetNeighbors(id uint64, layer int) ([]uint64, error)

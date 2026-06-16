@@ -22,7 +22,7 @@ func TestNodeDistance_NonExistentNode(t *testing.T) {
 	idx := NewHNSWIndex(store)
 
 	// nodeDistance on non-existent node should return error
-	_, err := idx.nodeDist(999, []float32{1, 2, 3})
+	_, err := idx.nodeDist(999, []float32{1, 2, 3}, 1)
 	assert.Error(t, err)
 }
 
@@ -33,7 +33,8 @@ func TestNodeDistance_ValidNode(t *testing.T) {
 	err := idx.Insert(1, []float32{1, 0, 0})
 	assert.NoError(t, err)
 
-	dist, err := idx.nodeDist(1, []float32{0, 1, 0})
+	// query {0,1,0} has norm 1; node {1,0,0} norm 1 → orthogonal → cosine ~1.0.
+	dist, err := idx.nodeDist(1, []float32{0, 1, 0}, 1)
 	assert.NoError(t, err)
 	assert.InDelta(t, 1.0, dist, 0.01) // orthogonal vectors -> cosine distance ~1.0
 }

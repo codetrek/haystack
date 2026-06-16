@@ -37,7 +37,7 @@ const pageSize = 4096
 // Fields are ordered to avoid implicit padding: uint32 group first, then uint64 group.
 type MetaHeader struct {
 	Magic      [4]byte // "HNSW"
-	Version    uint32  // 1
+	Version    uint32  // 3
 	Dim        uint32  // vector dimension
 	M          uint32  // HNSW M parameter
 	MaxLevel   uint32  // current max level
@@ -135,7 +135,7 @@ const defaultMaxLayers = 6
 func writeMetaHeader(dir string, h *MetaHeader) error {
 	h.Magic = magicMeta
 	if h.Version == 0 {
-		h.Version = 2
+		h.Version = 3
 	}
 
 	tmp := filepath.Join(dir, "meta.bin.tmp")

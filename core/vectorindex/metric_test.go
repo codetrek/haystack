@@ -23,20 +23,21 @@ func TestMetricCosine(t *testing.T) {
 	if math.Abs(float64(norm-5)) > 1e-5 {
 		t.Fatalf("norm: got %v want 5", norm)
 	}
-	approxEqual(t, stored, []float32{0.6, 0, 0.8, 0}, 1e-6) // unit vector
-	// raw must be untouched (prepare returns a new slice for cosine).
+	// stored is now the RAW vector unchanged (no unit scaling).
+	approxEqual(t, stored, raw, 0)
+	// raw must be untouched.
 	approxEqual(t, raw, []float32{3, 0, 4, 0}, 0)
-	// restore round-trips back to the original.
-	approxEqual(t, Cosine.restore(stored, norm), raw, 1e-4)
+	// restore is the identity (storage is raw).
+	approxEqual(t, Cosine.restore(stored, norm), raw, 0)
 
-	// distance on stored (unit) vectors is 1 - dot.
-	a, _ := Cosine.prepare([]float32{1, 0, 0, 0})
-	b, _ := Cosine.prepare([]float32{1, 0, 0, 0})
-	if d := Cosine.distance(a, b); math.Abs(float64(d)) > 1e-6 {
+	// distanceN on raw vectors divides by the two norms: identical direction = 0.
+	a, na := Cosine.prepare([]float32{1, 0, 0, 0})
+	b, nb := Cosine.prepare([]float32{1, 0, 0, 0})
+	if d := Cosine.distanceN(a, b, na, nb); math.Abs(float64(d)) > 1e-6 {
 		t.Fatalf("identical-direction distance: got %v want 0", d)
 	}
-	c, _ := Cosine.prepare([]float32{0, 1, 0, 0})
-	if d := Cosine.distance(a, c); math.Abs(float64(d-1)) > 1e-6 {
+	c, nc := Cosine.prepare([]float32{0, 1, 0, 0})
+	if d := Cosine.distanceN(a, c, na, nc); math.Abs(float64(d-1)) > 1e-6 {
 		t.Fatalf("orthogonal distance: got %v want 1", d)
 	}
 }
@@ -48,8 +49,8 @@ func TestMetricCosineZeroVector(t *testing.T) {
 	}
 	approxEqual(t, stored, []float32{0, 0, 0, 0}, 0)
 	approxEqual(t, Cosine.restore(stored, norm), []float32{0, 0, 0, 0}, 0)
-	// distance to anything is 1 (dot is 0).
-	if d := Cosine.distance(stored, []float32{1, 0, 0, 0}); math.Abs(float64(d-1)) > 1e-6 {
+	// distance to anything is 1 (denom == 0).
+	if d := Cosine.distanceN(stored, []float32{1, 0, 0, 0}, norm, 1); math.Abs(float64(d-1)) > 1e-6 {
 		t.Fatalf("zero-vector distance: got %v want 1", d)
 	}
 }
@@ -68,11 +69,11 @@ func TestMetricRawStored(t *testing.T) {
 	}
 
 	// DotProduct distance = 1 - dot.
-	if d := DotProduct.distance([]float32{1, 2}, []float32{3, 4}); math.Abs(float64(d-(1-11))) > 1e-5 {
+	if d := DotProduct.distanceN([]float32{1, 2}, []float32{3, 4}, 0, 0); math.Abs(float64(d-(1-11))) > 1e-5 {
 		t.Fatalf("dot distance: got %v want %v", d, 1-11)
 	}
 	// Euclidean distance = L2.
-	if d := Euclidean.distance([]float32{0, 0}, []float32{3, 4}); math.Abs(float64(d-5)) > 1e-5 {
+	if d := Euclidean.distanceN([]float32{0, 0}, []float32{3, 4}, 0, 0); math.Abs(float64(d-5)) > 1e-5 {
 		t.Fatalf("euclidean distance: got %v want 5", d)
 	}
 }
@@ -98,7 +99,7 @@ func TestMetricStringAndStoresNormalized(t *testing.T) {
 	if Metric(99).String() != "unknown" {
 		t.Fatalf("unknown metric String(): got %q want %q", Metric(99).String(), "unknown")
 	}
-	if !Cosine.storesNormalized() || DotProduct.storesNormalized() || Euclidean.storesNormalized() {
-		t.Fatal("storesNormalized() should be true only for cosine")
+	if Cosine.storesNormalized() || DotProduct.storesNormalized() || Euclidean.storesNormalized() {
+		t.Fatal("storesNormalized() should be false for all metrics (raw storage)")
 	}
 }

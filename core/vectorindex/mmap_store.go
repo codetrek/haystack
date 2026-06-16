@@ -134,8 +134,8 @@ func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 		if err != nil {
 			return nil, err
 		}
-		if h.Version != 2 {
-			return nil, fmt.Errorf("MmapStore: unsupported on-disk version %d (want 2)", h.Version)
+		if h.Version != 3 {
+			return nil, fmt.Errorf("MmapStore: unsupported on-disk version %d (want 3; cosine storage changed from unit to raw — rebuild the index)", h.Version)
 		}
 		if int(h.Dim) != opts.Dim {
 			return nil, fmt.Errorf("MmapStore: dim mismatch: file=%d, opts=%d", h.Dim, opts.Dim)
@@ -233,7 +233,7 @@ func (s *MmapStore) Close() error {
 // initAllFiles creates all data files for a new index.
 func (s *MmapStore) initAllFiles(cap uint64) error {
 	s.meta = MetaHeader{
-		Version:    2,
+		Version:    3,
 		Dim:        uint32(s.dim),
 		M:          uint32(s.m),
 		Metric:     uint32(s.metric),

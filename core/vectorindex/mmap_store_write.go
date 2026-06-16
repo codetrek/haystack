@@ -19,8 +19,9 @@ func (s *MmapStore) PutNode(id uint64, level int, vector []float32, docId int64)
 		return fmt.Errorf("MmapStore.PutNode: vector dim %d != store dim %d", len(vector), s.dim)
 	}
 
-	// Convert to stored form (cosine: unit vector) and keep the original norm
-	// for GetVector restore. norm never participates in distance computation.
+	// Compute the stored (raw) form and its norm. Storage is raw for every
+	// metric now; for cosine the norm is persisted and divides in the cosine
+	// distance, so it is threaded onto the hot path via GetVectorRefWithNorm.
 	stored, norm := s.metric.prepare(vector)
 
 	// WAL — record the stored form so replay writes it back verbatim.

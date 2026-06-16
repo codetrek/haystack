@@ -13,8 +13,12 @@ import (
 type Metric uint8
 
 const (
-	// Cosine stores vectors normalized to unit length, so cosine distance
-	// reduces to 1 - dot(a, b) with no per-distance norm division.
+	// Cosine stores RAW vectors plus their precomputed L2 norm; cosine distance
+	// is 1 - dot(a, b)/(|a||b|), dividing by the two stored norms. (Storage is no
+	// longer normalized — see vectorstore §3.4: this gives up the #69 "store unit
+	// ⇒ distance = 1-dot" micro-optimization in exchange for a lossless raw
+	// round-trip; the norms are threaded through the hot path, so no per-distance
+	// norm recompute or lock.)
 	Cosine Metric = 0
 	// DotProduct stores raw vectors; distance is 1 - dot(a, b).
 	DotProduct Metric = 1
@@ -36,12 +40,12 @@ func (m Metric) String() string {
 }
 
 // storesNormalized reports whether vectors are normalized before being stored.
-func (m Metric) storesNormalized() bool { return m == Cosine }
+// Always false now: cosine stores the raw vector + its norm, not a unit vector.
+func (m Metric) storesNormalized() bool { return false }
 
 // norm returns the L2 norm to persist for a vector. Only cosine needs it: it
-// stores unit vectors and uses the norm to restore the original scale in
-// GetVector. The raw metrics store the original vector verbatim, so they have
-// no use for a norm and skip the computation, reporting 0.
+// stores raw vectors and uses the norm to divide in the cosine distance. The raw
+// metrics have no use for a norm and skip the computation, reporting 0.
 func (m Metric) norm(v []float32) float32 {
 	if m != Cosine {
 		return 0
@@ -63,31 +67,23 @@ func (m Metric) norm(v []float32) float32 {
 }
 
 // prepare maps a raw vector to the form stored on disk and returns the norm to
-// persist alongside it. For cosine it returns a new unit-length slice and the
-// original L2 norm (so GetVector can restore the original scale). For the raw
-// metrics it returns the input slice unchanged with norm 0. A zero vector is
-// stored as-is (norm 0).
+// persist alongside it. Storage is now raw for ALL metrics: the input slice is
+// returned unchanged. For cosine the returned norm is |v| (so the cosine
+// distance can divide by it without recomputing); for the raw metrics it is 0.
+// A zero vector is stored as-is (norm 0).
 func (m Metric) prepare(v []float32) (stored []float32, norm float32) {
-	norm = m.norm(v)
-	if m != Cosine || norm == 0 {
-		return v, norm
-	}
-	return vek32.MulNumber(v, 1.0/norm), norm // SIMD scale into a fresh slice
+	norm = m.norm(v) // 0 for non-cosine, |v| for cosine
+	return v, norm
 }
 
-// restore maps a stored vector back to its original raw form. For cosine it
-// multiplies the unit vector by the stored norm; otherwise it is the identity.
+// restore maps a stored vector back to its original raw form. Storage is raw for
+// all metrics now, so this is the identity (the norm parameter is unused, kept
+// for interface symmetry with prepare).
 func (m Metric) restore(stored []float32, norm float32) []float32 {
-	if m != Cosine {
-		return stored
-	}
-	out := make([]float32, len(stored))
-	for i, x := range stored {
-		out[i] = x * norm
-	}
-	return out
+	return stored
 }
 
-// distance is defined per-architecture (metric_distance_{arm64,amd64}.go): on
+// distanceN is defined per-architecture (metric_distance_{arm64,amd64}.go): on
 // amd64 it calls vek32.Dot directly (so -coverpkg=./... adds no extra per-call
 // coverage counter on the hot path); on arm64 it routes through the NEON dot().
+// na/nb are the precomputed L2 norms of a/b (used only by cosine).

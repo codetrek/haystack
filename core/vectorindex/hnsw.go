@@ -136,9 +136,12 @@ func (h *HNSWIndex) validateVector(v []float32) error {
 		return fmt.Errorf("vectorindex: vector dimension mismatch: got %d, want %d", len(v), d)
 	}
 	// For cosine, a non-finite norm means a NaN/Inf component or a magnitude
-	// whose L2 norm overflows float32 — none can be normalized to a finite unit
-	// vector, so reject instead of persisting NaN/Inf or poisoning a search
-	// (audit #6/#10). norm() uses the SIMD fast path, so this is cheap.
+	// whose L2 norm overflows float32 — both would poison the cosine distance
+	// (NaN/Inf propagating through 1 - dot/(na*nb)), so reject up front
+	// (audit #6/#10). These guards stay protective under raw storage: a
+	// near-zero-direction cosine vector now risks an Inf distance via
+	// 1 - dot/(tiny), so a norm too small to invert without overflow is also
+	// rejected. norm() uses the SIMD fast path, so this is cheap.
 	if h.metric == Cosine {
 		n := h.metric.norm(v)
 		if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
@@ -213,8 +216,9 @@ func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 
 	// Phase 1: From top layer down to l+1, greedy search with ef=1.
 	curEp := epId
-	// Compare against stored neighbors in stored form (cosine: unit vectors).
-	prepared, _ := h.metric.prepare(vector)
+	// Compare against stored neighbors in stored (raw) form; qN is |query|,
+	// threaded through the distance so cosine can divide by both norms.
+	prepared, qN := h.metric.prepare(vector)
 	for layer := maxLayer; layer > l; layer-- {
 		changed := true
 		for changed {
@@ -223,12 +227,12 @@ func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 			if nerr != nil {
 				return nerr
 			}
-			curDist, derr := h.nodeDist(curEp, prepared)
+			curDist, derr := h.nodeDist(curEp, prepared, qN)
 			if derr != nil {
 				return derr
 			}
 			for _, nb := range neighbors {
-				nbDist, derr := h.nodeDist(nb, prepared)
+				nbDist, derr := h.nodeDist(nb, prepared, qN)
 				if derr != nil {
 					continue // node may have been deleted
 				}
@@ -247,7 +251,7 @@ func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 		topLayer = maxLayer
 	}
 	for layer := topLayer; layer >= 0; layer-- {
-		candidates, err := h.searchLayer(prepared, curEp, h.efConstruction, layer)
+		candidates, err := h.searchLayer(prepared, qN, curEp, h.efConstruction, layer)
 		if err != nil {
 			return err
 		}
@@ -257,7 +261,7 @@ func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 		if layer == 0 {
 			mMax = h.Mmax0
 		}
-		selected := h.selectNeighborsHeuristic(vector, candidates, mMax, nil)
+		selected := h.selectNeighborsHeuristic(vector, qN, candidates, mMax, nil, nil)
 
 		// Create bidirectional edges.
 		neighborIds := make([]uint64, len(selected))
@@ -277,26 +281,29 @@ func (h *HNSWIndex) insertOneLocked(docId int64, vector []float32) error {
 			nbNeighbors = append(nbNeighbors, nodeId)
 			if len(nbNeighbors) > mMax {
 				// Shrink using heuristic.
-				nbVec, err := h.store.GetVectorRef(nb.id)
+				nbVec, nbNorm, err := h.store.GetVectorRefWithNorm(nb.id)
 				if err != nil {
 					continue // neighbor may have been deleted
 				}
-				// Pre-load vectors for all candidates so selectNeighborsHeuristic
-				// can read from the cache without repeating these lookups.
+				// Pre-load vectors+norms for all candidates so
+				// selectNeighborsHeuristic can read from the caches without
+				// repeating these lookups.
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
 				shrinkVecCache := make(map[uint64][]float32, len(nbNeighbors))
+				shrinkNormCache := make(map[uint64]float32, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
-					cVec, err := h.store.GetVectorRef(cid)
+					cVec, cNorm, err := h.store.GetVectorRefWithNorm(cid)
 					if err != nil {
 						continue // node may have been deleted
 					}
 					shrinkVecCache[cid] = cVec
+					shrinkNormCache[cid] = cNorm
 					nbCandidates = append(nbCandidates, distItem{
 						id:   cid,
-						dist: h.metric.distance(nbVec, cVec),
+						dist: h.metric.distanceN(nbVec, cVec, nbNorm, cNorm),
 					})
 				}
-				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax, shrinkVecCache)
+				shrunk := h.selectNeighborsHeuristic(nbVec, nbNorm, nbCandidates, mMax, shrinkVecCache, shrinkNormCache)
 				newNb := make([]uint64, len(shrunk))
 				for i, s := range shrunk {
 					newNb[i] = s.id
@@ -368,8 +375,8 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 
 	// Phase 1: From top layer down to 1, greedy search with ef=1.
 	curEp := epId
-	// Compare against stored vectors in stored form (cosine: unit vectors).
-	prepared, _ := h.metric.prepare(query)
+	// Compare against stored vectors in stored (raw) form; qN is |query|.
+	prepared, qN := h.metric.prepare(query)
 	for layer := maxLayer; layer >= 1; layer-- {
 		changed := true
 		for changed {
@@ -378,12 +385,12 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 			if nerr != nil {
 				return nil, nerr
 			}
-			curDist, derr := h.nodeDist(curEp, prepared)
+			curDist, derr := h.nodeDist(curEp, prepared, qN)
 			if derr != nil {
 				return nil, derr
 			}
 			for _, nb := range neighbors {
-				nbDist, derr := h.nodeDist(nb, prepared)
+				nbDist, derr := h.nodeDist(nb, prepared, qN)
 				if derr != nil {
 					continue // node may have been deleted
 				}
@@ -401,7 +408,7 @@ func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
 	if k > ef {
 		ef = k
 	}
-	results, err := h.searchLayer(prepared, curEp, ef, 0)
+	results, err := h.searchLayer(prepared, qN, curEp, ef, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -451,7 +458,7 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 		// Remove nodeId from each neighbor's list.
 		for _, nb := range neighbors {
 			// Skip neighbors that may have been deleted previously.
-			nbVec, err := h.store.GetVectorRef(nb)
+			nbVec, nbNorm, err := h.store.GetVectorRefWithNorm(nb)
 			if err != nil {
 				continue
 			}
@@ -482,13 +489,13 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 			// Build candidate list for heuristic selection.
 			candidates := make([]distItem, 0, len(candidateSet))
 			for cid := range candidateSet {
-				cVec, err := h.store.GetVectorRef(cid)
+				cVec, cNorm, err := h.store.GetVectorRefWithNorm(cid)
 				if err != nil {
 					continue // node may have been deleted
 				}
 				candidates = append(candidates, distItem{
 					id:   cid,
-					dist: h.metric.distance(nbVec, cVec),
+					dist: h.metric.distanceN(nbVec, cVec, nbNorm, cNorm),
 				})
 			}
 
@@ -496,7 +503,7 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 			if layer == 0 {
 				mMax = h.Mmax0
 			}
-			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax, nil)
+			selected := h.selectNeighborsHeuristic(nbVec, nbNorm, candidates, mMax, nil, nil)
 			newNb := make([]uint64, len(selected))
 			for i, s := range selected {
 				newNb[i] = s.id
@@ -577,9 +584,10 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 
 // searchLayer performs a beam search on a single layer with given ef width.
 // Uses a min-heap for candidates and a max-heap for the result set.
-// query is already in prepared (stored) form.
-func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer int) ([]distItem, error) {
-	entryDist, err := h.nodeDist(entryId, query)
+// query is already in prepared (stored, raw) form; queryNorm is |query|, threaded
+// into every nodeDist so cosine can divide by both norms without recomputing.
+func (h *HNSWIndex) searchLayer(query []float32, queryNorm float32, entryId uint64, ef int, layer int) ([]distItem, error) {
+	entryDist, err := h.nodeDist(entryId, query, queryNorm)
 	if err != nil {
 		return nil, err
 	}
@@ -617,7 +625,7 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 			}
 			visited.mark(nbId)
 
-			nbDist, err := h.nodeDist(nbId, query)
+			nbDist, err := h.nodeDist(nbId, query, queryNorm)
 			if err != nil {
 				continue // node may have been deleted
 			}
@@ -646,8 +654,9 @@ func (h *HNSWIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 // selectNeighborsHeuristic selects up to M neighbors using the heuristic
 // from the paper. It ensures diversity by only adding a candidate if it
 // is closer to the query than to any already-selected neighbor.
-// If vecCache is non-nil, vectors are read from it instead of the store.
-func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int, vecCache map[uint64][]float32) []distItem {
+// query is in stored (raw) form with norm queryNorm. If vecCache is non-nil,
+// vectors are read from it (and norms from normCache) instead of the store.
+func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, queryNorm float32, candidates []distItem, m int, vecCache map[uint64][]float32, normCache map[uint64]float32) []distItem {
 	if len(candidates) <= m {
 		return candidates
 	}
@@ -655,19 +664,22 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	// Sort candidates by distance to query.
 	sortDistItems(candidates)
 
-	// Resolve each candidate's stored vector once into a position-indexed slice.
-	// Reading from this slice instead of an id-keyed map removes the map hashing
-	// that dominated the insert CPU profile. vecs[i] corresponds to the
-	// just-sorted candidates[i]; a nil vecs[i] means the vector was unavailable.
-	// Vectors are in stored form, so metric.distance compares them directly with
-	// no norm lookup.
+	// Resolve each candidate's stored vector AND norm once into position-indexed
+	// slices. Reading from these slices instead of an id-keyed map removes the
+	// map hashing that dominated the insert CPU profile. vecs[i]/norms[i]
+	// correspond to the just-sorted candidates[i]; a nil vecs[i] means the vector
+	// was unavailable. Vectors are in stored (raw) form, so distanceN compares
+	// them directly with the parallel norms.
 	n := len(candidates)
 	vecs := make([][]float32, n)
+	norms := make([]float32, n)
 	for i, c := range candidates {
 		if vecCache != nil {
 			vecs[i] = vecCache[c.id]
-		} else if v, err := h.store.GetVectorRef(c.id); err == nil {
+			norms[i] = normCache[c.id]
+		} else if v, nm, err := h.store.GetVectorRefWithNorm(c.id); err == nil {
 			vecs[i] = v
+			norms[i] = nm
 		}
 	}
 
@@ -687,7 +699,7 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 			if sVec == nil {
 				continue
 			}
-			if h.metric.distance(cVec, sVec) < candidates[i].dist {
+			if h.metric.distanceN(cVec, sVec, norms[i], norms[sIdx]) < candidates[i].dist {
 				good = false
 				break
 			}
@@ -722,14 +734,16 @@ func (h *HNSWIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 }
 
 // nodeDist computes the distance between a stored node and an already-prepared
-// query vector. Both operands are in stored form (cosine: unit vectors), so the
-// metric handles cosine as a plain 1 - dot with no norm lookup.
-func (h *HNSWIndex) nodeDist(nodeId uint64, query []float32) (float32, error) {
-	vec, err := h.store.GetVectorRef(nodeId)
+// query vector. Both operands are in stored (raw) form; queryNorm is the
+// precomputed |query| and the node's norm is fetched alongside its vector under
+// a single store lock, so cosine divides by both norms with no per-distance norm
+// recompute or extra lock.
+func (h *HNSWIndex) nodeDist(nodeId uint64, query []float32, queryNorm float32) (float32, error) {
+	vec, nodeNorm, err := h.store.GetVectorRefWithNorm(nodeId)
 	if err != nil {
 		return 0, err
 	}
-	return h.metric.distance(vec, query), nil
+	return h.metric.distanceN(vec, query, nodeNorm, queryNorm), nil
 }
 
 func removeId(ids []uint64, target uint64) []uint64 {

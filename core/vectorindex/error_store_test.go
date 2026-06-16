@@ -62,6 +62,13 @@ func (e *errorStore) GetVectorRef(id uint64) ([]float32, error) {
 	return e.inner.GetVectorRef(id)
 }
 
+func (e *errorStore) GetVectorRefWithNorm(id uint64) ([]float32, float32, error) {
+	if err := e.getErr(e.GetVectorRefErr); err != nil {
+		return nil, 0, err
+	}
+	return e.inner.GetVectorRefWithNorm(id)
+}
+
 func (e *errorStore) PutNode(id uint64, level int, vector []float32, docId int64) error {
 	if err := e.getErr(e.PutNodeErr); err != nil {
 		return err

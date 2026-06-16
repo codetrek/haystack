@@ -61,8 +61,8 @@ func TestNodeDistanceGetVectorRefError(t *testing.T) {
 	store := NewMemNodeStore()
 	idx := NewHNSWIndex(store)
 
-	// Node 999 does not exist — GetVectorRef returns an error.
-	_, err := idx.nodeDist(999, []float32{1.0, 2.0})
+	// Node 999 does not exist — GetVectorRefWithNorm returns an error.
+	_, err := idx.nodeDist(999, []float32{1.0, 2.0}, 1)
 	assert.Error(t, err, "nodeDistance should propagate GetVectorRef error")
 }
 
@@ -72,7 +72,8 @@ func TestNodeDistanceSuccess(t *testing.T) {
 
 	requireNoError(t, store.PutNode(1, 0, []float32{1.0, 0.0}, 1))
 
-	dist, err := idx.nodeDist(1, []float32{1.0, 0.0})
+	// query {1,0} norm 1; node {1,0} norm 1 → cosine self-distance ~0.
+	dist, err := idx.nodeDist(1, []float32{1.0, 0.0}, 1)
 	requireNoError(t, err)
 	assert.InDelta(t, 0.0, dist, 1e-6, "distance to self should be ~0")
 }

@@ -90,7 +90,7 @@ func TestMmapStoreIntegration(t *testing.T) {
 
 	// meta.bin
 	meta := &MetaHeader{
-		Version:    2,
+		Version:    3,
 		Dim:        dim,
 		M:          m,
 		Metric:     uint32(DotProduct),

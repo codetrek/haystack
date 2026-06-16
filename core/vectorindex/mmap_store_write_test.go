@@ -33,7 +33,7 @@ func TestMmapStorePutNodeAndGetVector(t *testing.T) {
 }
 
 func TestMmapStorePutNodeAndGetNorm(t *testing.T) {
-	// Only cosine persists a norm (to restore the original scale); the raw
+	// Only cosine persists a norm (it divides in the cosine distance); the raw
 	// metrics store the vector verbatim and skip the norm computation.
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: Cosine, Dim: 4, M: 4})

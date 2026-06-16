@@ -8,14 +8,13 @@ import (
 )
 
 // GetVector returns a copy of the original vector for the given node ID. The
-// returned slice is owned by the caller. For cosine the stored unit vector is
-// restored to its original scale via the stored norm; for the raw metrics the
-// stored vector is the original.
+// returned slice is owned by the caller. Storage is raw for every metric now, so
+// the original vector is exactly the stored bytes (no unit→scale restore).
 //
-// The copy/restore is done while holding muWrite.RLock, which excludes a
-// writer's grow (remap): the zero-copy mmap view must never escape the lock to
-// be read by lock-less caller code, or a concurrent munmap turns it into a
-// use-after-free (audit #2).
+// The copy is done while holding muWrite.RLock, which excludes a writer's grow
+// (remap): the zero-copy mmap view must never escape the lock to be read by
+// lock-less caller code, or a concurrent munmap turns it into a use-after-free
+// (audit #2).
 func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	s.muWrite.RLock()
 	defer s.muWrite.RUnlock()
@@ -33,13 +32,6 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
 	ref := unsafe.Slice(ptr, s.dim) // valid only while the lock is held
 
-	if s.metric.storesNormalized() {
-		// Read the norm from the node slot under the same lock, then restore
-		// into a fresh slice — all before releasing the lock that pins the mmap.
-		normOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
-		norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[normOff+4 : normOff+8]))
-		return s.metric.restore(ref, norm), nil // restore allocates a fresh slice
-	}
 	out := make([]float32, len(ref))
 	copy(out, ref)
 	return out, nil
@@ -95,6 +87,37 @@ func (s *MmapStore) GetVectorRef(id uint64) ([]float32, error) {
 	}
 	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
 	return unsafe.Slice(ptr, s.dim), nil
+}
+
+// GetVectorRefWithNorm returns the zero-copy stored (raw) vector AND its
+// precomputed L2 norm under a SINGLE muWrite.RLock. It deliberately inlines the
+// nodeLive/offset checks and both the vectors.dat slice and the nodes.dat norm
+// read rather than calling the separately-locking GetVectorRef/GetNorm: those
+// each re-take muWrite.RLock, and a re-entrant RLock can deadlock against a
+// queued writer. Same contract as GetVectorRef — the caller MUST NOT mutate or
+// retain the slice across a store mutation (which may remap the region).
+func (s *MmapStore) GetVectorRefWithNorm(id uint64) ([]float32, float32, error) {
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
+
+	if id >= s.vecCapacity {
+		return nil, 0, fmt.Errorf("MmapStore.GetVectorRefWithNorm: id %d out of range (cap %d)", id, s.vecCapacity)
+	}
+	if !s.nodeLive(id) {
+		return nil, 0, fmt.Errorf("MmapStore.GetVectorRefWithNorm: node %d is not live (deleted/zombie/unoccupied)", id)
+	}
+
+	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
+	if offset%4 != 0 {
+		return nil, 0, fmt.Errorf("MmapStore.GetVectorRefWithNorm: unaligned offset %d for id %d", offset, id)
+	}
+	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
+	ref := unsafe.Slice(ptr, s.dim)
+
+	// Norm lives at bytes 4..8 of the node slot.
+	normOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
+	norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[normOff+4 : normOff+8]))
+	return ref, norm, nil
 }
 
 // GetNeighbors returns the neighbor list for the given node and layer.

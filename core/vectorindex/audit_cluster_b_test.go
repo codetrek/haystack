@@ -35,7 +35,8 @@ func TestCosineRejectsNonFiniteAndOverflow(t *testing.T) {
 	require.Error(t, err, "NaN query must error, not poison the search")
 }
 
-// #13: 极小非零 cosine 向量必须被正确归一化为单位向量(不能因 float32 下溢被当零向量)，
+// #13: 极小非零 cosine 向量必须被正确处理(不能因 float32 下溢被当零向量):
+// 存储形是原始向量(raw 存储),norm 是 float64 计算出的精确非零 norm,
 // 且 GetVector 能还原原始向量。
 func TestCosineTinyVectorNormalizedNotZeroed(t *testing.T) {
 	store := openTestCosineStore(t)
@@ -50,12 +51,15 @@ func TestCosineTinyVectorNormalizedNotZeroed(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	// 存储形必须是单位向量 {1,0,0,0}，而非被零化。
-	ref, err := store.GetVectorRef(nodeId)
+	// 存储形是原始向量 {tiny,0,0,0}(raw 存储,不再归一化为单位向量)。
+	ref, norm, err := store.GetVectorRefWithNorm(nodeId)
 	require.NoError(t, err)
-	assert.InDelta(t, 1.0, ref[0], 1e-5, "tiny vector must be normalized to unit length, not zeroed")
+	assert.InDelta(t, float64(tiny), float64(ref[0]), float64(tiny)*1e-3, "tiny vector stored raw, not unit-scaled")
+	// norm 必须是精确非零(float64 计算),不能因下溢被当零。
+	assert.Greater(t, float64(norm), 0.0, "precomputed norm must be non-zero, not underflowed to 0")
+	assert.InDelta(t, float64(tiny), float64(norm), float64(tiny)*1e-3, "norm of {tiny,0,0,0} is tiny")
 
-	// 原始向量必须能还原。
+	// 原始向量必须能还原(raw 存储 → 恒等)。
 	orig, err := store.GetVector(nodeId)
 	require.NoError(t, err)
 	assert.InDelta(t, float64(tiny), float64(orig[0]), float64(tiny)*1e-3, "original magnitude must round-trip")

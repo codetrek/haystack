@@ -9,9 +9,9 @@ import (
 type MemNodeStore struct {
 	mu        sync.RWMutex
 	metric    Metric
-	vectors   map[uint64][]float32 // stored form (normalized for cosine)
+	vectors   map[uint64][]float32 // stored form (raw for all metrics)
 	levels    map[uint64]int
-	norms     map[uint64]float32          // original norm, used only to restore vectors
+	norms     map[uint64]float32          // cosine L2 norm; used to divide in cosine distance
 	neighbors map[uint64]map[int][]uint64 // nodeId -> layer -> neighbor ids
 	docToNode map[int64]uint64
 	nodeDoc   map[uint64]int64 // nodeId -> docId, backs GetDocId
@@ -51,8 +51,8 @@ func (m *MemNodeStore) Dim() int {
 	return m.dim
 }
 
-// GetVector returns a copy of the original vector for the given node. For cosine
-// the stored unit vector is restored to its original scale via the stored norm.
+// GetVector returns a copy of the original vector for the given node. Storage is
+// raw for every metric now, so the original vector is exactly the stored slice.
 func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -60,7 +60,9 @@ func (m *MemNodeStore) GetVector(id uint64) ([]float32, error) {
 	if !ok {
 		return nil, fmt.Errorf("node %d not found", id)
 	}
-	return m.metric.restore(v, m.norms[id]), nil
+	out := make([]float32, len(v))
+	copy(out, v)
+	return out, nil
 }
 
 // GetVectorRef returns the internal stored vector slice directly without
@@ -73,6 +75,19 @@ func (m *MemNodeStore) GetVectorRef(id uint64) ([]float32, error) {
 		return nil, fmt.Errorf("node %d not found", id)
 	}
 	return v, nil
+}
+
+// GetVectorRefWithNorm returns the stored (raw) vector ref AND its norm under a
+// single RLock over the vectors+norms maps (the hot-path primitive that makes
+// norms cheap). The caller MUST NOT modify the returned slice.
+func (m *MemNodeStore) GetVectorRefWithNorm(id uint64) ([]float32, float32, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	v, ok := m.vectors[id]
+	if !ok {
+		return nil, 0, fmt.Errorf("node %d not found", id)
+	}
+	return v, m.norms[id], nil
 }
 
 func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32, docId int64) error {
