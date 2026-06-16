@@ -52,6 +52,9 @@ type Store struct {
 	gcfg     graphConfig           // the single index's HNSW config
 	nextSeg  segID                 // next sealed segId to assign
 
+	buildMu sync.Mutex     // serializes builder graph install + manifest rewrite
+	builds  sync.WaitGroup // tracks in-flight background builds (WaitForIndex/Close)
+
 	manifestVersion uint64 // monotonic manifest version (bumped per rewrite)
 }
 
@@ -146,19 +149,39 @@ func (s *Store) recover() error {
 			s.graphs[e.SegID] = newBuiltIndex(g, s.gcfg)
 		}
 	}
-	// Head WAL replay last (against the now-populated docToSeg).
-	return s.replay()
+	// Head WAL replay last (against the now-populated docToSeg), exactly once
+	// (appendix #15: replay must not run twice — that would double-apply every
+	// head record). Then resume builds for any segment left pending (crash
+	// mid-build); the resume runs AFTER replay so the build reads a consistent
+	// tombstone view (a replayed head Delete may tombstone a sealed slot).
+	if err := s.replay(); err != nil {
+		return err
+	}
+	for i, sid := range s.sealedID {
+		if s.graphs[sid] == nil {
+			segDir := filepath.Join(s.dir, segDirName(sid, 0))
+			s.builds.Add(1)
+			go s.buildAndPublish(sid, segDir, s.sealed[i])
+		}
+	}
+	return nil
 }
 
 // Metric returns the store's distance metric.
 func (s *Store) Metric() Metric { return s.metric }
 
-// Close flushes and releases the WAL and idtable. Closing the allocator commits
-// any pending id→docId mappings re-driven during replay, making the recovered
-// state durable.
+// Close waits for any in-flight background builds, then flushes and releases the
+// WAL, sealed-segment mmaps, and idtable. Builds are awaited BEFORE taking s.mu
+// because buildAndPublish itself acquires s.mu to install its graph — holding the
+// lock across the wait would deadlock. Closing the allocator commits any pending
+// id→docId mappings re-driven during replay, making the recovered state durable.
 func (s *Store) Close() error {
+	s.builds.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for _, ss := range s.sealed {
+		ss.close()
+	}
 	werr := s.wal.Close()
 	s.alloc.Close()
 	return werr
@@ -509,10 +532,12 @@ func (s *Store) attachSealedForTest(ss *sealedSegment, id segID) {
 
 // Seal freezes the current head into a new immutable sealed records-segment on
 // disk, atomically updates the manifest (head→new sealed seg, state pending,
-// fresh empty head), truncates the head WAL, then (Phase 2 step) builds the
-// segment's HNSW. The records-segment is durable before the manifest swap and the
-// WAL truncate, so a crash never loses a durably-acked write. An empty head is a
-// no-op.
+// fresh empty head), truncates the head WAL, then spawns a BACKGROUND build of
+// the segment's HNSW. The records-segment is durable before the manifest swap and
+// the WAL truncate, so a crash never loses a durably-acked write. Seal returns as
+// soon as the segment is published pending — the store is immediately writable
+// (fresh head) and searchable (pending segment served by its brute leg). An empty
+// head is a no-op.
 func (s *Store) Seal() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -535,7 +560,7 @@ func (s *Store) sealLocked() error {
 		return err
 	}
 
-	// (2) Atomic manifest swap: head→new sealed seg (pending), fresh head.
+	// (2) Publish as PENDING + fresh head + atomic manifest swap.
 	s.sealed = append(s.sealed, ss)
 	s.sealedID = append(s.sealedID, id)
 	s.nextSeg++
@@ -555,22 +580,46 @@ func (s *Store) sealLocked() error {
 		return err
 	}
 
-	// (4) Build the graph (synchronous for now; backgrounded in Task 11).
-	gs, err := buildSegmentGraph(segDir, ss, s.gcfg)
-	if err != nil {
-		return err
-	}
-	s.graphs[id] = newBuiltIndex(gs, s.gcfg)
-	return s.markIndexedLocked(id)
+	// (4) Build the graph in the BACKGROUND, off the write lock. The sealed segment
+	// is immutable except its tombstone bitmap, which the builder reads under the
+	// segment's tomb lock (eachLive), so the build needs no lock on the store.
+	s.builds.Add(1)
+	go s.buildAndPublish(id, segDir, ss)
+	return nil
 }
 
-// WaitForIndex blocks until every sealed segment is indexed. With the synchronous
-// Seal of this task it is already true on return; Task 11 makes it wait on the
-// background builder.
+// buildAndPublish builds the HNSW for a pending sealed segment off the write
+// path, then installs the index and flips the manifest to indexed. The build
+// failure path drops the error: the segment stays pending → still brute-searched,
+// still correct; recovery (or a future RebuildVectorIndex) retries. buildMu
+// serializes the install+manifest rewrite across concurrent builders so two
+// flips never race a single manifest file.
+func (s *Store) buildAndPublish(id segID, segDir string, ss *sealedSegment) {
+	defer s.builds.Done()
+	gs, err := buildSegmentGraph(segDir, ss, s.gcfg)
+	if err != nil {
+		return // stays pending; brute leg keeps results correct
+	}
+	bi := newBuiltIndex(gs, s.gcfg)
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.graphs[id] = bi
+	_ = s.writeManifestLocked()
+}
+
+// WaitForIndex blocks until every pending sealed-segment build has finished.
 func (s *Store) WaitForIndex() error {
+	s.builds.Wait()
+	return nil
+}
+
+// isIndexedForTest reports whether sealed segment id has its graph installed.
+func (s *Store) isIndexedForTest(id segID) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return nil
+	return s.graphs[id] != nil
 }
 
 // writeManifestLocked rewrites the manifest from the current segment set. Caller
@@ -593,13 +642,6 @@ func (s *Store) writeManifestLocked() error {
 		})
 	}
 	return writeManifest(s.dir, m)
-}
-
-// markIndexedLocked re-publishes the manifest so the just-built segment shows as
-// indexed. Caller holds s.mu.
-func (s *Store) markIndexedLocked(id segID) error {
-	_ = id
-	return s.writeManifestLocked()
 }
 
 // segDirName derives the on-disk directory name for a sealed segment (§4.8: paths

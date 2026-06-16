@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"sync"
 )
 
 // sealedSegment is an immutable, mmap-backed records segment. Vectors, slot→docId,
@@ -24,6 +25,14 @@ type sealedSegment struct {
 	vecBase int // byte offset where row data starts (segPageSize)
 
 	slotDocs []int64 // decoded from slotdoc.dat (small; copy out, not mmap-aliased)
+
+	// tombMu guards the mutable tombstone state (the tomb.dat words + the derived
+	// docToSlot index). The background graph builder reads the tomb bitmap via
+	// eachLive OFF the store lock while a concurrent Delete writes it via
+	// tombstoneSlot under the store lock; without this guard that is a data race on
+	// the mmap word and the docToSlot map (appendix #16/#18 — the -race gate flags
+	// it). Read paths take RLock, tombstoneSlot takes Lock.
+	tombMu sync.RWMutex
 
 	// docToSlot is the derived, resident per-segment docId→slot index over LIVE
 	// slots (architecture §4.6: "段内 docId↔slot ... 派生、常驻内存、可重建"). It is
@@ -47,8 +56,16 @@ func (s *sealedSegment) count() int { return s.n }
 
 func (s *sealedSegment) slotDoc(slot int) int64 { return s.slotDocs[slot] }
 
-// tombGet reports whether slot is tombstoned, reading the mmap'd bitmap words.
+// tombGet reports whether slot is tombstoned, reading the mmap'd bitmap words
+// under the tomb read lock (a concurrent tombstoneSlot mutates the same word).
 func (s *sealedSegment) tombGet(slot int) bool {
+	s.tombMu.RLock()
+	defer s.tombMu.RUnlock()
+	return s.tombGetLocked(slot)
+}
+
+// tombGetLocked is the lock-free body of tombGet; callers must hold tombMu (R or W).
+func (s *sealedSegment) tombGetLocked(slot int) bool {
 	w := slot >> 6
 	if w >= s.tombWords {
 		return false
@@ -61,11 +78,14 @@ func (s *sealedSegment) tombGet(slot int) bool {
 // tombstoneSlot sets slot's tombstone bit and msyncs tomb.dat so the delete is
 // durable. The bitmap is pre-sized at seal to cover every slot, so no growth is
 // needed (segments are immutable in row count). The derived docToSlot index is
-// pruned so the slot is no longer reported live.
+// pruned so the slot is no longer reported live. Held under the write lock so a
+// concurrent builder/search read sees a consistent word + map.
 func (s *sealedSegment) tombstoneSlot(slot int) error {
 	if slot < 0 || slot >= s.n {
 		return fmt.Errorf("vectorstore: tombstone slot %d out of range [0,%d)", slot, s.n)
 	}
+	s.tombMu.Lock()
+	defer s.tombMu.Unlock()
 	w := slot >> 6
 	off := segPageSize + w*8
 	word := binary.LittleEndian.Uint64(s.tombMap[off : off+8])
@@ -85,12 +105,18 @@ func (s *sealedSegment) tombstoneSlot(slot int) error {
 // tombstoned (or absent) docId returns found=false — this is the liveness check
 // the indexed-search tombstone post-filter relies on.
 func (s *sealedSegment) slotOfDoc(docID int64) (int, bool) {
+	s.tombMu.RLock()
+	defer s.tombMu.RUnlock()
 	slot, ok := s.docToSlot[docID]
 	return slot, ok
 }
 
 // tombCount returns the number of tombstoned slots (live count = n − tombCount).
-func (s *sealedSegment) tombCount() int { return s.n - len(s.docToSlot) }
+func (s *sealedSegment) tombCount() int {
+	s.tombMu.RLock()
+	defer s.tombMu.RUnlock()
+	return s.n - len(s.docToSlot)
+}
 
 // getVectorRef returns the stored-form vector for slot without copying (aliases
 // the mmap). Callers must not retain or mutate it. Used by the HNSW graph leg.
@@ -128,10 +154,15 @@ func (s *sealedSegment) payload(slot int) []byte {
 }
 
 // eachLive visits non-tombstoned slots ascending, mirroring segment.eachLive so
-// the brute leg and graph builder share one iterator contract.
+// the brute leg and graph builder share one iterator contract. It holds the tomb
+// read lock for the whole pass so the live set is a consistent snapshot even when
+// a concurrent Delete tombstones a slot mid-iteration (appendix #16/#18). fn must
+// not call back into this segment's tomb methods (would re-enter the RLock).
 func (s *sealedSegment) eachLive(fn func(slot int, docID int64, stored []float32, norm float32)) {
+	s.tombMu.RLock()
+	defer s.tombMu.RUnlock()
 	for slot := 0; slot < s.n; slot++ {
-		if s.tombGet(slot) {
+		if s.tombGetLocked(slot) {
 			continue
 		}
 		fn(slot, s.slotDocs[slot], s.getVectorRef(slot), s.norm(slot))
