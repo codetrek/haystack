@@ -137,6 +137,18 @@ type mergePlan struct {
 // in flight for that input. This also satisfies the "do not merge a just-sealed
 // pending segment before its graph is built" fidelity point (appendix #3).
 func (s *Store) planMergeLocked(inputIDs []segID) (*mergePlan, error) {
+	return s.planMergeWithCapLocked(inputIDs, s.maxSegSize)
+}
+
+// planMergeWithCapLocked is planMergeLocked with an explicit per-output bucket
+// row cap, so the two drivers can pack differently (appendix #2/#6):
+//   - DELETE-driven repack uses bucketCap = maxSegSize: the goal is reclaiming
+//     tombstone space, so deflated segments refill ~maxSegSize buckets.
+//   - GROWTH-driven roll-up uses bucketCap = MaxMergedSize: the goal is BOUNDING
+//     total segment count, so K like-sized inputs must fold into ~ONE larger
+//     output (the next tier), not be re-split back into maxSegSize same-tier
+//     segments — which would make zero progress on count (§4.9 "压住段数").
+func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergePlan, error) {
 	inputSS := make([]*sealedSegment, 0, len(inputIDs))
 	for _, id := range inputIDs {
 		ss := s.sealedByID(id)
@@ -148,7 +160,7 @@ func (s *Store) planMergeLocked(inputIDs []segID) (*mergePlan, error) {
 		}
 		inputSS = append(inputSS, ss)
 	}
-	buckets, moved := packLiveDocs(inputSS, s.metric, s.maxSegSize)
+	buckets, moved := packLiveDocs(inputSS, s.metric, bucketCap)
 	if len(buckets) == 1 && len(buckets[0].slotDoc) == 0 {
 		// All inputs fully tombstoned: no output, but the inputs must still be
 		// dropped + their dirs deleted. Represent that as a plan with zero buckets.
@@ -358,4 +370,123 @@ func (s *Store) mergeNow(inputIDs []segID) error {
 func (s *Store) WaitForMerge() error {
 	s.merges.Wait()
 	return nil
+}
+
+// Compact runs one round of the reclamation policy synchronously-launched: it
+// merges every delete-driven candidate (live ratio < mergeFloor) and, if a size
+// tier has reached fanout (or the live sealed count exceeds TargetSegCount), one
+// growth-driven roll-up. It returns once the merges are launched on tracked
+// goroutines; callers use WaitForMerge to await publication. A healthy store (no
+// candidates) is a no-op. This is the manual entry point for tests and
+// operator-triggered reclamation (architecture §4.9). Refuses to launch once the
+// store is closing (appendix #1: a merges.Add must never race a zero-counter
+// merges.Wait in Close).
+func (s *Store) Compact() error {
+	s.mu.Lock()
+	if s.closing {
+		s.mu.Unlock()
+		return nil
+	}
+	plans := s.planReclamationLocked()
+	s.merges.Add(len(plans))
+	s.mu.Unlock()
+	for _, p := range plans {
+		p := p
+		go func() { _ = s.mergeAndPublish(p) }()
+	}
+	return nil
+}
+
+// planReclamationLocked is the shared policy core for Compact() (manual) and
+// maybeMergeLocked (background trigger): it snapshots the live sealed segments and
+// builds the merge plans for one reclamation round — every delete-driven repack
+// plus at most one growth-driven roll-up. Caller holds s.mu and is responsible for
+// s.merges.Add(len(plans)) + launching mergeAndPublish. Returns nil when the store
+// is healthy. The growth roll-up packs into MaxMergedSize buckets (not maxSegSize)
+// so K like-sized inputs fold into ~one larger next-tier output, actually bounding
+// total segment count (appendix #2/#6).
+func (s *Store) planReclamationLocked() []*mergePlan {
+	stats := s.segStatsLocked()
+	var plans []*mergePlan
+	// Delete-driven: each deflated segment is its own "merge of one" repack into
+	// fresh ~maxSegSize buckets.
+	for _, id := range pickDeleteDriven(stats, s.mcfg) {
+		if p, err := s.planMergeLocked([]segID{id}); err == nil && p != nil {
+			plans = append(plans, p)
+		}
+	}
+	// Growth-driven: one tier roll-up (re-snapshot excludes ids already planned so
+	// the growth pick never double-selects a delete-driven input). Packs into
+	// MaxMergedSize buckets so K inputs consolidate into fewer larger segments.
+	if g := pickGrowthMerge(s.statsExcludingLocked(stats, plans), s.mcfg); g != nil {
+		if p, err := s.planMergeWithCapLocked(g, s.mcfg.MaxMergedSize); err == nil && p != nil {
+			plans = append(plans, p)
+		}
+	}
+	return plans
+}
+
+// pickGrowthMerge wraps pickGrowthTiered with the TargetSegCount count-cap guard
+// (appendix #2): the §4.9 invariant is "k-NN searches every segment → read
+// amplification = total segment count → bound total count". The tier+fanout pick
+// alone can leave a store above target if no single tier has reached fanout (e.g.
+// many segments spread thinly across tiers). When the live sealed count exceeds
+// TargetSegCount, force a roll-up of the LOWEST (smallest, cheapest) tier even if
+// it is below fanout — so the count strictly trends down toward target.
+func pickGrowthMerge(stats []segLiveStats, cfg mergeConfig) []segID {
+	if g := pickGrowthTiered(stats, cfg); g != nil {
+		return g
+	}
+	if len(stats) <= cfg.TargetSegCount {
+		return nil
+	}
+	// Over target with no fanout-ready tier: fold the smallest tier (>= 2 segments)
+	// whose combined live rows fit MaxMergedSize, to reduce count by at least one.
+	tiers := make(map[int][]segLiveStats)
+	var order []int
+	for _, st := range stats {
+		t := sizeTier(st.count)
+		if _, seen := tiers[t]; !seen {
+			order = append(order, t)
+		}
+		tiers[t] = append(tiers[t], st)
+	}
+	sortIntsAsc(order)
+	for _, t := range order {
+		group := tiers[t]
+		if len(group) < 2 {
+			continue
+		}
+		liveSum := 0
+		for _, st := range group {
+			liveSum += st.live
+		}
+		if liveSum > cfg.MaxMergedSize {
+			continue
+		}
+		ids := make([]segID, len(group))
+		for i, st := range group {
+			ids[i] = st.id
+		}
+		return ids
+	}
+	return nil
+}
+
+// statsExcludingLocked returns stats minus any segment already claimed by a
+// planned merge, so the growth pick never double-selects a delete-driven input.
+func (s *Store) statsExcludingLocked(stats []segLiveStats, plans []*mergePlan) []segLiveStats {
+	claimed := make(map[segID]bool)
+	for _, p := range plans {
+		for _, id := range p.inputs {
+			claimed[id] = true
+		}
+	}
+	out := stats[:0:0]
+	for _, st := range stats {
+		if !claimed[st.id] {
+			out = append(out, st)
+		}
+	}
+	return out
 }
