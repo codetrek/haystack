@@ -190,3 +190,57 @@ func ids(rs []SearchResult) []int64 {
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
+
+// TestSearch_Filter_GraphDistantSelective_GraphSBranch red-proofs the graph∩S
+// leg: a SELECTIVE filter (1-in-50 "hot") whose matching docs are SPREAD (not
+// clustered near the query), so they are graph-distant from any single entry
+// region. A naive post-filter over the top-k graph hits would return ~0 matches;
+// filter-during-traversal (still expanding THROUGH non-members) must recover them.
+// T=0 forces the >T graph∩S branch, and the counter assertion proves that leg ran
+// (so this is not silently the brute-S floor under test).
+func TestSearch_Filter_GraphDistantSelective_GraphSBranch(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(99))
+	dim := 16
+	vecs := map[int64][]float32{}
+	pls := map[int64]Payload{}
+	put := func(id string, v []float32, hot bool) {
+		pl := Payload{"hot": BoolValue(hot)}
+		requireNoError(t, s.Put(id, v, pl))
+		doc := s.idToDoc[id]
+		vecs[doc] = v
+		pls[doc] = pl
+	}
+	// 1 in 50 docs is "hot" (selective). Hot docs are NOT clustered near the query
+	// — they are spread, so they are graph-distant from any single entry region.
+	n := 500
+	for i := 0; i < n; i++ {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		put("k"+itoa(i), v, i%50 == 0)
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+	requireNoError(t, s.CreateAttrIndex("hot", Keyword))
+	s.attrSearchT = 0 // force graph∩S (|S_seg| ~ 10 > 0)
+	requireNoError(t, s.WaitForIndex())
+
+	q := make([]float32, dim)
+	for d := range q {
+		q[d] = rng.Float32()
+	}
+	pred := Eq("hot", BoolValue(true))
+	before := s.graphSDispatches.Load()
+	got, err := s.Search(q, 5, pred)
+	requireNoError(t, err)
+	if s.graphSDispatches.Load() == before {
+		t.Fatal("expected the graph∩S branch to run (T=0, |S_seg|>0), but it did not")
+	}
+	want := bruteOracleFiltered(Cosine, q, vecs, pls, pred, 5)
+	// filter-during-traversal must recover the in-set neighbors a post-filter misses.
+	if r := recallAtK(got, want); r < 0.8 {
+		t.Fatalf("graph∩S recall@5 = %.2f over a selective graph-distant filter, want >= 0.8 (post-filter would be ~0)", r)
+	}
+}

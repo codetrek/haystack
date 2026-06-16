@@ -846,9 +846,23 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 			slot := gs.nodeSlot[nodeId]
 			return slot >= 0 && sseg.get(slot)
 		}
-		// Over-fetch for both tombstones and non-members: ef = max(efSearch, fetchK),
-		// so a selective filter still reaches enough members (Task 10 red-proofs this).
+		// Over-fetch must account for FILTER SELECTIVITY, not just tombstones: a
+		// selective filter (small |S_seg| vs the segment's live rows) needs a much
+		// wider beam (ef = max(efSearch, fetchK)) to traverse enough graph to reach k
+		// spread members. Inflate the effective k by the inverse selectivity
+		// (liveCount/card), so ef ≈ k/selectivity, bounded by the live count, and add
+		// the tombstone slack. (measure-don't-assert: the plan's k+tomb+1 under-returns
+		// for a graph-distant selective filter; tuned up until Task 10's recall ≥ 0.8.)
+		liveN := ss.count() - ss.tombCount()
 		fetchK := k + ss.tombCount() + 1
+		if card > 0 {
+			if scaled := (k*liveN)/card + 1; scaled > fetchK {
+				fetchK = scaled
+			}
+		}
+		if fetchK > liveN {
+			fetchK = liveN
+		}
 		hits, err := bi.idx.searchFiltered(q, fetchK, member)
 		if err != nil {
 			return nil, err
