@@ -222,3 +222,27 @@ func (s *Store) Delete(id string) error {
 	s.seg.tombstone(slot)
 	return nil
 }
+
+// Search returns the k nearest live records to q under the store's metric,
+// brute-scanning the single head segment. An empty store returns (nil, nil).
+// Results are in docId space (see SearchResult / decision #4).
+func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
+	if k <= 0 {
+		return nil, errors.New("vectorstore: k must be positive")
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if err := validateVector(q, s.seg.dim, s.metric); err != nil {
+		return nil, err
+	}
+	pq, _ := s.metric.prepare(q)
+	tk := newTopK(k)
+	s.seg.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+		tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
+	})
+	out := tk.sorted()
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}

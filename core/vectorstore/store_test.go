@@ -113,3 +113,94 @@ func TestStore_DeleteMissingIsPureNoOp(t *testing.T) {
 		t.Fatalf("Delete of unknown id must not allocate a docId")
 	}
 }
+
+func TestStore_Search_MatchesOracle_Cosine(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	raw := map[string][]float32{
+		"a": {1, 0, 0, 0},
+		"b": {0, 1, 0, 0},
+		"c": {0.9, 0.1, 0, 0},
+		"d": {0, 0, 1, 0},
+	}
+	for id, v := range raw {
+		requireNoError(t, s.Put(id, v, nil))
+	}
+	q := []float32{1, 0, 0, 0}
+	res, err := s.Search(q, 2)
+	requireNoError(t, err)
+	if len(res) != 2 {
+		t.Fatalf("len(res) = %d, want 2", len(res))
+	}
+	vecs := map[int64][]float32{}
+	for id, v := range raw {
+		vecs[s.idToDoc[id]] = v
+	}
+	want := bruteForceKNN(Cosine, q, vecs, 2)
+	if res[0].DocID != want[0] || res[1].DocID != want[1] {
+		t.Fatalf("search docIds = [%d %d], want %v", res[0].DocID, res[1].DocID, want)
+	}
+	if res[0].Distance > res[1].Distance {
+		t.Fatalf("results not ascending by distance: %+v", res)
+	}
+}
+
+func TestStore_Search_MatchesOracle_Euclidean(t *testing.T) {
+	s := openTestStore(t, Euclidean)
+	raw := map[string][]float32{
+		"a": {0, 0},
+		"b": {3, 4},   // dist 5 from origin
+		"c": {1, 1},   // dist ~1.41
+		"d": {10, 10}, // far
+	}
+	for id, v := range raw {
+		requireNoError(t, s.Put(id, v, nil))
+	}
+	q := []float32{0, 0}
+	res, err := s.Search(q, 3)
+	requireNoError(t, err)
+	vecs := map[int64][]float32{}
+	for id, v := range raw {
+		vecs[s.idToDoc[id]] = v
+	}
+	want := bruteForceKNN(Euclidean, q, vecs, 3)
+	for i := range want {
+		if res[i].DocID != want[i] {
+			t.Fatalf("euclidean search[%d] = %d, want %d (full=%v)", i, res[i].DocID, want[i], want)
+		}
+	}
+}
+
+func TestStore_Search_SkipsTombstoned(t *testing.T) {
+	s := openTestStore(t, DotProduct)
+	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
+	requireNoError(t, s.Put("b", []float32{0, 1}, nil))
+	requireNoError(t, s.Delete("a"))
+	res, err := s.Search([]float32{1, 0}, 5)
+	requireNoError(t, err)
+	da := s.idToDoc["a"]
+	for _, r := range res {
+		if r.DocID == da {
+			t.Fatal("tombstoned docId must not appear in results")
+		}
+	}
+}
+
+func TestStore_Search_EmptyReturnsNil(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	res, err := s.Search([]float32{1, 0}, 3)
+	requireNoError(t, err)
+	if res != nil {
+		t.Fatalf("search on empty store = %v, want nil", res)
+	}
+}
+
+func TestStore_Search_RejectsBadVectorAndK(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
+	if _, err := s.Search([]float32{}, 3); err == nil {
+		t.Fatal("empty query should be rejected")
+	}
+	if _, err := s.Search([]float32{1, 0}, 0); err == nil {
+		t.Fatal("k<=0 should be rejected")
+	}
+}
