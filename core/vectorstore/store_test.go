@@ -235,3 +235,53 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 		t.Fatalf("live results after reopen = %d, want 1", len(res))
 	}
 }
+
+func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
+	dir := t.TempDir()
+	store := newTestKV(t) // shared; NOT closed between opens
+
+	s1, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, []byte("pa")))
+	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, []byte("pb")))
+	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, []byte("pa2"))) // upsert
+	requireNoError(t, s1.Delete("b"))
+	docA := s1.idToDoc["a"]
+
+	// CRASH: do NOT call s1.Close(). idtable's id→docId batch and nextId were
+	// never committed to KV. Close ONLY the WAL fd so the OS releases the file;
+	// the allocator is deliberately left uncommitted to mimic a kill.
+	requireNoError(t, s1.wal.Close())
+
+	// Reopen over the SAME dir + SAME KV. Recovery must come entirely from the
+	// WAL: the segment, the id→docId map, and a consistent allocator nextId.
+	s2, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	defer s2.Close()
+
+	// The string id "a" must still resolve to the SAME docId and the upserted
+	// vector/payload — proving the WAL, not idtable, carried the mapping.
+	if got := s2.idToDoc["a"]; got != docA {
+		t.Fatalf("recovered docId for a = %d, want %d (WAL must carry the mapping)", got, docA)
+	}
+	v, pl, found, err := s2.Get("a")
+	requireNoError(t, err)
+	if !found || string(pl) != "pa2" || !approxEqual(v[2], 1, 1e-4) {
+		t.Fatalf("crash-recovered Get(a) = %v,%q,%v, want [0 0 1],pa2,true", v, pl, found)
+	}
+	if _, _, found, _ := s2.Get("b"); found {
+		t.Fatal("deleted id b must stay deleted after crash recovery")
+	}
+	res, err := s2.Search([]float32{0, 0, 1}, 5)
+	requireNoError(t, err)
+	if len(res) != 1 {
+		t.Fatalf("live results after crash recovery = %d, want 1", len(res))
+	}
+
+	// A fresh Put after recovery must get a NEW, non-colliding docId (nextId was
+	// resynced by replay re-driving the allocator).
+	requireNoError(t, s2.Put("c", []float32{1, 0, 0}, nil))
+	if s2.idToDoc["c"] == docA {
+		t.Fatalf("new id c collided with recovered docId %d — nextId not resynced", docA)
+	}
+}
