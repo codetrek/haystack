@@ -437,9 +437,12 @@ func (s *Store) planReclamationLocked() []*mergePlan {
 // (appendix #2): the §4.9 invariant is "k-NN searches every segment → read
 // amplification = total segment count → bound total count". The tier+fanout pick
 // alone can leave a store above target if no single tier has reached fanout (e.g.
-// many segments spread thinly across tiers). When the live sealed count exceeds
-// TargetSegCount, force a roll-up of the LOWEST (smallest, cheapest) tier even if
-// it is below fanout — so the count strictly trends down toward target.
+// many segments spread thinly across tiers, one per tier). When the live sealed
+// count exceeds TargetSegCount, force a greedy roll-up of the SMALLEST segments —
+// even across tiers and even below fanout — so the count strictly trends down
+// toward target. Without this, an all-singleton-tier over-target store would sit
+// over target forever (finding #2): the old per-tier-only fallback could never
+// pick across tiers, so it returned nil and the count never dropped.
 func pickGrowthMerge(stats []segLiveStats, cfg mergeConfig) []segID {
 	if g := pickGrowthTiered(stats, cfg); g != nil {
 		return g
@@ -447,37 +450,40 @@ func pickGrowthMerge(stats []segLiveStats, cfg mergeConfig) []segID {
 	if len(stats) <= cfg.TargetSegCount {
 		return nil
 	}
-	// Over target with no fanout-ready tier: fold the smallest tier (>= 2 segments)
-	// whose combined live rows fit MaxMergedSize, to reduce count by at least one.
-	tiers := make(map[int][]segLiveStats)
-	var order []int
-	for _, st := range stats {
-		t := sizeTier(st.count)
-		if _, seen := tiers[t]; !seen {
-			order = append(order, t)
+	// Over target with no fanout-ready tier: greedily fold the SMALLEST segments
+	// (cheapest merges, drains the long tail) whose combined live rows fit
+	// MaxMergedSize. Sorting by count ascending lets us pack the smallest pair/run
+	// first; this works whether they share a tier or are one-per-tier (finding #2's
+	// all-singleton case). Returns a group of >= 2 so the count drops by >= 1; nil if
+	// not even the two smallest fit the cap (no admissible merge that respects the
+	// size bound — leave it to delete-driven reclamation / a later, larger budget).
+	order := make([]segLiveStats, len(stats))
+	copy(order, stats)
+	sortStatsByCountAsc(order)
+	liveSum := 0
+	var ids []segID
+	for _, st := range order {
+		if liveSum+st.live > cfg.MaxMergedSize {
+			break // adding this would overflow the size cap; stop with what we have
 		}
-		tiers[t] = append(tiers[t], st)
+		ids = append(ids, st.id)
+		liveSum += st.live
 	}
-	sortIntsAsc(order)
-	for _, t := range order {
-		group := tiers[t]
-		if len(group) < 2 {
-			continue
-		}
-		liveSum := 0
-		for _, st := range group {
-			liveSum += st.live
-		}
-		if liveSum > cfg.MaxMergedSize {
-			continue
-		}
-		ids := make([]segID, len(group))
-		for i, st := range group {
-			ids[i] = st.id
-		}
-		return ids
+	if len(ids) < 2 {
+		return nil // no pair fits the cap → no count-reducing merge available
 	}
-	return nil
+	return ids
+}
+
+// sortStatsByCountAsc sorts a segLiveStats slice ascending by total row count
+// (ties keep input order via the stable insertion pass), so the count-cap fallback
+// packs the smallest segments first.
+func sortStatsByCountAsc(a []segLiveStats) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j-1].count > a[j].count; j-- {
+			a[j-1], a[j] = a[j], a[j-1]
+		}
+	}
 }
 
 // statsExcludingLocked returns stats minus any segment already claimed by a
