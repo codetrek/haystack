@@ -10,7 +10,7 @@ type segment struct {
 	dim       int           // learned from the first append (0 until then)
 	vectors   [][]float32   // slot → stored-form vector
 	norms     []float32     // slot → norm (meaningful only for cosine)
-	payloads  [][]byte      // slot → payload
+	payloads  []Payload     // slot → decoded payload (head holds the typed form)
 	slotDoc   []int64       // slot → docId (source of truth)
 	tomb      bitmap        // slot → deleted?
 	docToSlot map[int64]int // docId → live slot (derived)
@@ -23,21 +23,16 @@ func newSegment(m Metric) *segment {
 // append stores a new slot and indexes it as the live slot for docID. The vector
 // must already be in stored form (caller runs metric.prepare). The slice and
 // payload are copied so the caller may reuse its buffers.
-func (s *segment) append(docID int64, stored []float32, norm float32, payload []byte) int {
+func (s *segment) append(docID int64, stored []float32, norm float32, payload Payload) int {
 	if s.dim == 0 && len(stored) > 0 {
 		s.dim = len(stored)
 	}
 	vcp := make([]float32, len(stored))
 	copy(vcp, stored)
-	var pcp []byte
-	if len(payload) > 0 {
-		pcp = make([]byte, len(payload))
-		copy(pcp, payload)
-	}
 	slot := len(s.vectors)
 	s.vectors = append(s.vectors, vcp)
 	s.norms = append(s.norms, norm)
-	s.payloads = append(s.payloads, pcp)
+	s.payloads = append(s.payloads, payload.clone())
 	s.slotDoc = append(s.slotDoc, docID)
 	s.docToSlot[docID] = slot
 	return slot
@@ -63,7 +58,7 @@ func (s *segment) slotOfDoc(docID int64) (int, bool) {
 }
 
 // read returns the slot's stored vector, norm, payload, and liveness.
-func (s *segment) read(slot int) (stored []float32, norm float32, payload []byte, live bool) {
+func (s *segment) read(slot int) (stored []float32, norm float32, payload Payload, live bool) {
 	if slot < 0 || slot >= len(s.vectors) {
 		return nil, 0, nil, false
 	}

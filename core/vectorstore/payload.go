@@ -42,6 +42,20 @@ func BoolValue(b bool) Value       { return Value{Kind: KindBool, Bool: b} }
 // indexed (architecture §6 "非声明字段仍存供返回、不索引").
 type Payload map[string]Value
 
+// clone returns a deep copy of p, or nil for an empty/nil payload (so a Get of a
+// record stored with no payload always returns a nil map — the canonical empty
+// form decodePayload also produces, keeping reflect.DeepEqual round-trips exact).
+func (p Payload) clone() Payload {
+	if len(p) == 0 {
+		return nil
+	}
+	cp := make(Payload, len(p))
+	for k, v := range p {
+		cp[k] = v
+	}
+	return cp
+}
+
 // payloadFmtVersion is the on-disk/in-WAL serialization version of a Payload
 // blob. The Phase-1 opaque-[]byte payloads were UNVERSIONED raw bytes; bumping a
 // version byte at the front lets decodePayload reject any pre-Phase-5 blob (the

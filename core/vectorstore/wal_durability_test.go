@@ -2,6 +2,7 @@ package vectorstore
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -25,7 +26,11 @@ func TestPutOversizeRejectedNoCascadeLoss(t *testing.T) {
 	s, err := Open(Options{Dir: dir, KV: kvs, Metric: DotProduct})
 	requireNoError(t, err)
 	requireNoError(t, s.Put("a", []float32{1, 2, 3, 4}, nil))
-	if err := s.Put("big", []float32{1, 2, 3, 4}, make([]byte, maxWalPayloadSize)); err == nil {
+	// A structured payload whose serialized blob exceeds maxWalPayloadSize: the
+	// encoded putRecord frame is oversize, so WAL.Append must reject it (the blob
+	// body is a Payload now, not raw []byte — the oversize check is on the frame).
+	oversize := Payload{"k": StringValue(strings.Repeat("x", maxWalPayloadSize))}
+	if err := s.Put("big", []float32{1, 2, 3, 4}, oversize); err == nil {
 		t.Fatal("oversize Put returned success; data will be silently lost on reopen")
 	}
 	requireNoError(t, s.Put("c", []float32{5, 6, 7, 8}, nil))

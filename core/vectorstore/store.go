@@ -419,7 +419,9 @@ func (s *Store) replay() error {
 				}
 			}
 			s.docToSeg[r.DocID] = headSegID
-			s.applyPut(r)
+			if err := s.applyPut(r); err != nil {
+				return err
+			}
 		case recDelete:
 			d := decodeDelete(payload)
 			if _, err := s.docIDForAlloc(d.ID); err != nil {
@@ -442,12 +444,19 @@ func (s *Store) replay() error {
 }
 
 // applyPut mutates the segment for a (durably logged) put: tombstone the prior
-// slot, then append the new one. Shared by Put and replay.
-func (s *Store) applyPut(r putRecord) {
+// slot, then append the new one. The WAL record carries the serialized payload
+// blob; applyPut decodes it to the typed Payload the head stores. Shared by Put
+// and replay.
+func (s *Store) applyPut(r putRecord) error {
 	if r.OldSlot >= 0 {
 		s.seg.tombstone(int(r.OldSlot))
 	}
-	s.seg.append(r.DocID, r.Stored, r.Norm, r.Payload)
+	pl, err := decodePayload(r.Payload)
+	if err != nil {
+		return err
+	}
+	s.seg.append(r.DocID, r.Stored, r.Norm, pl)
+	return nil
 }
 
 // Put inserts or replaces the vector and payload for id. It is crash-atomic: a
@@ -456,11 +465,15 @@ func (s *Store) applyPut(r putRecord) {
 // state is mutated, so a crash either loses the whole Put or applies it whole on
 // replay. The string→docId mapping is recovered from the same WAL record, so Put
 // is fully durable on return without depending on idtable's lazy commit.
-func (s *Store) Put(id string, v []float32, payload []byte) error {
+func (s *Store) Put(id string, v []float32, payload Payload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if err := validateVector(v, s.seg.dim, s.metric); err != nil {
+		return err
+	}
+	plBytes, err := encodePayload(payload)
+	if err != nil {
 		return err
 	}
 	docID, err := s.docIDForAlloc(id)
@@ -473,7 +486,7 @@ func (s *Store) Put(id string, v []float32, payload []byte) error {
 	if slot, ok := s.seg.slotOfDoc(docID); ok {
 		oldSlot = int64(slot)
 	}
-	rec := putRecord{ID: id, DocID: docID, OldSlot: oldSlot, Stored: stored, Norm: norm, Payload: payload}
+	rec := putRecord{ID: id, DocID: docID, OldSlot: oldSlot, Stored: stored, Norm: norm, Payload: plBytes}
 	if _, err := s.wal.Append(recPut, encodePut(rec)); err != nil {
 		return err
 	}
@@ -495,7 +508,9 @@ func (s *Store) Put(id string, v []float32, payload []byte) error {
 	}
 	s.idToDoc[id] = docID
 	s.docToSeg[docID] = headSegID
-	s.applyPut(rec)
+	if err := s.applyPut(rec); err != nil {
+		return err
+	}
 
 	// Auto-seal when the head fills (§4.2): freeze it into a sealed segment and
 	// start a fresh head, so callers never have to call Seal() explicitly. Put
@@ -514,7 +529,7 @@ func (s *Store) Put(id string, v []float32, payload []byte) error {
 // segment (head or sealed). Reads never allocate a docId: an unknown id (never
 // Put) returns found=false. The returned vector and payload are fresh copies the
 // caller may mutate freely.
-func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err error) {
+func (s *Store) Get(id string) (v []float32, payload Payload, found bool, err error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	docID, ok, err := s.lookupDocID(id)
@@ -540,7 +555,7 @@ func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err err
 		// restore is the identity for non-cosine metrics, so it may alias the
 		// segment's internal buffer. Always hand the caller a private copy.
 		out := append([]float32(nil), s.metric.restore(stored, norm)...)
-		return out, append([]byte(nil), pl...), true, nil
+		return out, pl.clone(), true, nil
 	}
 	ss := s.sealedByID(segId)
 	if ss == nil {
@@ -550,12 +565,16 @@ func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err err
 	if !found2 {
 		return nil, nil, false, nil
 	}
-	stored, norm, pl, live := ss.read(slot)
+	stored, norm, plBytes, live := ss.read(slot)
 	if !live {
 		return nil, nil, false, nil
 	}
+	pl, derr := decodePayload(plBytes)
+	if derr != nil {
+		return nil, nil, false, derr
+	}
 	out := append([]float32(nil), s.metric.restore(stored, norm)...)
-	return out, append([]byte(nil), pl...), true, nil
+	return out, pl, true, nil
 }
 
 // Delete tombstones id's current slot in its owning segment (head or sealed).

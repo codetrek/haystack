@@ -28,7 +28,7 @@ func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 		return v
 	}
 	for i := 0; i < 60; i++ {
-		requireNoError(t, s.Put("s-"+itoa(i), randVec(), []byte("p")))
+		requireNoError(t, s.Put("s-"+itoa(i), randVec(), Payload{"p": StringValue("p")}))
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex()) // segment becomes indexed → recover reopens graph.dat

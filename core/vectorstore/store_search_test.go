@@ -176,7 +176,7 @@ func TestStore_Search_MergesPendingSealedBrute(t *testing.T) {
 // is fetched from the sealed segment, not the (now empty) head.
 func TestStore_Get_LiveSealedDoc(t *testing.T) {
 	s := openTestStore(t, DotProduct)
-	requireNoError(t, s.Put("a", []float32{1, 2, 3}, []byte("pa")))
+	requireNoError(t, s.Put("a", []float32{1, 2, 3}, Payload{"p": StringValue("pa")}))
 	requireNoError(t, s.Put("b", []float32{4, 5, 6}, nil))
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
@@ -187,8 +187,8 @@ func TestStore_Get_LiveSealedDoc(t *testing.T) {
 	if !found {
 		t.Fatal("Get(a) should be found in the sealed segment")
 	}
-	if len(v) != 3 || v[0] != 1 || v[2] != 3 || string(pl) != "pa" {
-		t.Fatalf("Get(a) = v=%v pl=%q, want {1,2,3} \"pa\"", v, pl)
+	if len(v) != 3 || v[0] != 1 || v[2] != 3 || pl["p"].Str != "pa" {
+		t.Fatalf("Get(a) = v=%v pl=%#v, want {1,2,3} {p:pa}", v, pl)
 	}
 	// Deleting then Get returns not-found via the sealed path.
 	requireNoError(t, s.Delete("b"))

@@ -37,7 +37,7 @@ func TestSealedSegment_TombstoneOutOfRange(t *testing.T) {
 	head := buildHeadSeg(DotProduct, []struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}{{1, []float32{1, 0}, nil}})
 	dir := t.TempDir() + "/seg-1-0"
 	requireNoError(t, writeSealedSegment(dir, head))

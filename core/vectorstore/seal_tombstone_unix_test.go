@@ -24,7 +24,7 @@ func TestSeal_TombstonePersistsAcrossReopen(t *testing.T) {
 	head := buildHeadSeg(DotProduct, []struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}{
 		{10, []float32{1, 0}, nil},
 		{20, []float32{0, 1}, nil},

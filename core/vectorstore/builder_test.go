@@ -14,7 +14,7 @@ func TestBuildSegmentGraph_ProducesSearchableGraphFile(t *testing.T) {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, n)
 	vecs := make(map[int64][]float32, n)
 	for i := 0; i < n; i++ {
@@ -25,7 +25,7 @@ func TestBuildSegmentGraph_ProducesSearchableGraphFile(t *testing.T) {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{int64(i), v, nil})
 		vecs[int64(i)] = v
 	}

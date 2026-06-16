@@ -10,7 +10,7 @@ import (
 func buildHeadSeg(m Metric, rows []struct {
 	doc int64
 	v   []float32
-	pl  []byte
+	pl  Payload
 }) *segment {
 	seg := newSegment(m)
 	for _, r := range rows {
@@ -25,10 +25,10 @@ func TestSeal_WriteOpenRoundTrip(t *testing.T) {
 	head := buildHeadSeg(DotProduct, []struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}{
-		{10, []float32{1, 0, 0}, []byte("p10")},
-		{20, []float32{0, 1, 0}, []byte("p20")},
+		{10, []float32{1, 0, 0}, Payload{"p": StringValue("p10")}},
+		{20, []float32{0, 1, 0}, Payload{"p": StringValue("p20")}},
 		{30, []float32{0, 0, 1}, nil},
 	})
 	// Tombstone slot 1 (docId 20) so the sealed segment carries a delete.
@@ -47,10 +47,12 @@ func TestSeal_WriteOpenRoundTrip(t *testing.T) {
 	if ss.count() != 3 {
 		t.Fatalf("count = %d, want 3", ss.count())
 	}
-	// slot 0 live, docId 10, payload p10, vector {1,0,0}
-	stored, _, pl, live := ss.read(0)
-	if !live || ss.slotDoc(0) != 10 || string(pl) != "p10" || stored[0] != 1 {
-		t.Fatalf("slot0 = live=%v doc=%d pl=%q v=%v", live, ss.slotDoc(0), pl, stored)
+	// slot 0 live, docId 10, payload {p:p10}, vector {1,0,0}
+	stored, _, plBytes, live := ss.read(0)
+	pl, derr := decodePayload(plBytes)
+	requireNoError(t, derr)
+	if !live || ss.slotDoc(0) != 10 || pl["p"].Str != "p10" || stored[0] != 1 {
+		t.Fatalf("slot0 = live=%v doc=%d pl=%#v v=%v", live, ss.slotDoc(0), pl, stored)
 	}
 	// slot 1 tombstoned (docId 20)
 	if _, _, _, live := ss.read(1); live {
@@ -75,11 +77,11 @@ func sealFourRows(t *testing.T) string {
 	head := buildHeadSeg(DotProduct, []struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}{
-		{10, []float32{1, 0, 0}, []byte("payload-ten")},
-		{20, []float32{0, 1, 0}, []byte("payload-twenty")},
-		{30, []float32{0, 0, 1}, []byte("payload-thirty")},
+		{10, []float32{1, 0, 0}, Payload{"p": StringValue("payload-ten")}},
+		{20, []float32{0, 1, 0}, Payload{"p": StringValue("payload-twenty")}},
+		{30, []float32{0, 0, 1}, Payload{"p": StringValue("payload-thirty")}},
 		{40, []float32{0, 1, 1}, nil},
 	})
 	segDir := filepath.Join(dir, "seg-9-0")

@@ -134,19 +134,25 @@ func writePayloadFile(path string, head *segment, n int) error {
 	if _, err := f.Write(hdr); err != nil {
 		return err
 	}
+	// The head holds decoded Payloads; serialize each once (the payload.dat blob
+	// interior is a versioned Payload — Task 1). The file format (lens[] then
+	// concatenated bytes) is unchanged; only each blob's body is now structured.
+	blobs := make([][]byte, n)
 	lens := make([]byte, n*4)
-	var total int
 	for slot := 0; slot < n; slot++ {
-		l := len(head.payloads[slot])
-		binary.LittleEndian.PutUint32(lens[slot*4:], uint32(l))
-		total += l
+		b, err := encodePayload(head.payloads[slot])
+		if err != nil {
+			return err
+		}
+		blobs[slot] = b
+		binary.LittleEndian.PutUint32(lens[slot*4:], uint32(len(b)))
 	}
 	if _, err := f.Write(lens); err != nil {
 		return err
 	}
 	for slot := 0; slot < n; slot++ {
-		if len(head.payloads[slot]) > 0 {
-			if _, err := f.Write(head.payloads[slot]); err != nil {
+		if len(blobs[slot]) > 0 {
+			if _, err := f.Write(blobs[slot]); err != nil {
 				return err
 			}
 		}

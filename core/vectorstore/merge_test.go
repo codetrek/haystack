@@ -44,7 +44,7 @@ func TestPackLiveDocs_BinPacksAndCarriesPayload(t *testing.T) {
 			doc, err := s.docIDForAlloc(id)
 			requireNoError(t, err)
 			st, nrm := DotProduct.prepare(vecs[i])
-			seg.append(doc, st, nrm, []byte(id)) // payload = id bytes (asserted below)
+			seg.append(doc, st, nrm, Payload{"id": StringValue(id)}) // payload = id (asserted below)
 		}
 		dir := t.TempDir()
 		requireNoError(t, writeSealedSegment(dir, seg))

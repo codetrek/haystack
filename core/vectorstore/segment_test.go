@@ -4,8 +4,8 @@ import "testing"
 
 func TestSegment_AppendReadTombstone(t *testing.T) {
 	s := newSegment(Cosine)
-	slot0 := s.append(10, []float32{0.6, 0.8}, 5, []byte("a"))
-	slot1 := s.append(11, []float32{0, 1}, 1, []byte("b"))
+	slot0 := s.append(10, []float32{0.6, 0.8}, 5, Payload{"p": StringValue("a")})
+	slot1 := s.append(11, []float32{0, 1}, 1, Payload{"p": StringValue("b")})
 	if slot0 != 0 || slot1 != 1 {
 		t.Fatalf("slots = %d,%d, want 0,1", slot0, slot1)
 	}
@@ -13,8 +13,8 @@ func TestSegment_AppendReadTombstone(t *testing.T) {
 		t.Fatalf("slotOfDoc(10) = %d,%v, want 0,true", got, ok)
 	}
 	v, n, pl, live := s.read(0)
-	if !live || n != 5 || string(pl) != "a" || v[0] != 0.6 {
-		t.Fatalf("read(0) = %v,%v,%q,%v", v, n, pl, live)
+	if !live || n != 5 || pl["p"].Str != "a" || v[0] != 0.6 {
+		t.Fatalf("read(0) = %v,%v,%#v,%v", v, n, pl, live)
 	}
 	s.tombstone(0)
 	if _, _, _, live := s.read(0); live {
@@ -28,13 +28,13 @@ func TestSegment_AppendReadTombstone(t *testing.T) {
 func TestSegment_AppendCopiesBuffers(t *testing.T) {
 	s := newSegment(DotProduct)
 	v := []float32{1, 2}
-	pl := []byte("x")
+	pl := Payload{"k": StringValue("x")}
 	s.append(1, v, 0, pl)
-	v[0] = 99 // mutate caller buffers after append
-	pl[0] = 'Z'
+	v[0] = 99                  // mutate caller buffers after append
+	pl["k"] = StringValue("Z") // mutate the caller's payload map after append
 	gv, _, gpl, _ := s.read(0)
-	if gv[0] != 1 || string(gpl) != "x" {
-		t.Fatalf("segment must copy inputs: got %v,%q", gv, gpl)
+	if gv[0] != 1 || gpl["k"].Str != "x" {
+		t.Fatalf("segment must copy inputs: got %v,%#v", gv, gpl)
 	}
 }
 

@@ -13,7 +13,7 @@ func TestSegGraphStore_BuildOverSealedSegment_Recall(t *testing.T) {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, n)
 	vecs := make(map[int64][]float32, n)
 	for i := 0; i < n; i++ {
@@ -25,7 +25,7 @@ func TestSegGraphStore_BuildOverSealedSegment_Recall(t *testing.T) {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{doc, v, nil})
 		vecs[doc] = v
 	}
@@ -86,7 +86,7 @@ func TestSegGraphStore_InteriorTombstones_DenseIdBoundary(t *testing.T) {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, n)
 	vecs := make(map[int64][]float32, n)
 	for i := 0; i < n; i++ {
@@ -98,7 +98,7 @@ func TestSegGraphStore_InteriorTombstones_DenseIdBoundary(t *testing.T) {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{doc, v, nil})
 		vecs[doc] = v
 	}
@@ -158,7 +158,7 @@ func TestSegGraphStore_MemEquivalence(t *testing.T) {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, n)
 	for i := 0; i < n; i++ {
 		v := make([]float32, dim)
@@ -168,7 +168,7 @@ func TestSegGraphStore_MemEquivalence(t *testing.T) {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{int64(i), v, nil})
 	}
 	head := buildHeadSeg(Cosine, rows)

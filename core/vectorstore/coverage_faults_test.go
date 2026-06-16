@@ -53,7 +53,7 @@ func sampleHead(t *testing.T) *segment {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, 12)
 	for i := 0; i < 12; i++ {
 		v := make([]float32, 4)
@@ -63,8 +63,8 @@ func sampleHead(t *testing.T) *segment {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
-		}{int64(i + 1), v, []byte("p")})
+			pl  Payload
+		}{int64(i + 1), v, Payload{"p": StringValue("p")}})
 	}
 	return buildHeadSeg(Cosine, rows)
 }
@@ -212,7 +212,7 @@ func sealedFromRandom(t *testing.T, n, dim int) *sealedSegment {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, n)
 	for i := 0; i < n; i++ {
 		v := make([]float32, dim)
@@ -222,7 +222,7 @@ func sealedFromRandom(t *testing.T, n, dim int) *sealedSegment {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{int64(4000 + i), v, nil})
 	}
 	head := buildHeadSeg(Cosine, rows)

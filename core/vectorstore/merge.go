@@ -98,7 +98,11 @@ func packLiveDocs(inputs []*sealedSegment, metric Metric, maxSegSize int) (bucke
 				cur = newSegment(metric)
 				buckets = append(buckets, cur)
 			}
-			cur.append(docID, stored, norm, ss.payload(slot))
+			// Immutable segment; the payload blob was written by encodePayload at
+			// seal, so it is well-formed. A decode error yields a nil Payload, which
+			// re-encodes to an empty blob — never a crash mid-merge.
+			pl, _ := ss.payloadDecoded(slot)
+			cur.append(docID, stored, norm, pl)
 			moved[docID] = true
 		})
 	}

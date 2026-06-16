@@ -14,7 +14,7 @@ func TestGraphFile_PersistReopen_SameResults(t *testing.T) {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, n)
 	for i := 0; i < n; i++ {
 		v := make([]float32, dim)
@@ -24,7 +24,7 @@ func TestGraphFile_PersistReopen_SameResults(t *testing.T) {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{int64(i), v, nil})
 	}
 	head := buildHeadSeg(Cosine, rows)
@@ -80,7 +80,7 @@ func TestGraphFile_TruncatedRejected(t *testing.T) {
 	rows := make([]struct {
 		doc int64
 		v   []float32
-		pl  []byte
+		pl  Payload
 	}, 0, 30)
 	for i := 0; i < 30; i++ {
 		v := make([]float32, dim)
@@ -90,7 +90,7 @@ func TestGraphFile_TruncatedRejected(t *testing.T) {
 		rows = append(rows, struct {
 			doc int64
 			v   []float32
-			pl  []byte
+			pl  Payload
 		}{int64(i), v, nil})
 	}
 	head := buildHeadSeg(Cosine, rows)

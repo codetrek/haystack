@@ -26,7 +26,7 @@ func TestStore_OpenRequiresDir(t *testing.T) {
 
 func TestStore_PutThenGet(t *testing.T) {
 	s := openTestStore(t, Cosine)
-	requireNoError(t, s.Put("a", []float32{3, 4}, []byte("payA")))
+	requireNoError(t, s.Put("a", []float32{3, 4}, Payload{"p": StringValue("payA")}))
 	v, pl, found, err := s.Get("a")
 	requireNoError(t, err)
 	if !found {
@@ -35,8 +35,8 @@ func TestStore_PutThenGet(t *testing.T) {
 	if !approxEqual(v[0], 3, 1e-4) || !approxEqual(v[1], 4, 1e-4) {
 		t.Fatalf("restored vector = %v, want [3 4]", v)
 	}
-	if string(pl) != "payA" {
-		t.Fatalf("payload = %q, want payA", pl)
+	if pl["p"].Str != "payA" {
+		t.Fatalf("payload = %#v, want {p:payA}", pl)
 	}
 }
 
@@ -70,11 +70,11 @@ func TestStore_GetReturnsCopy_NonCosine(t *testing.T) {
 func TestStore_PutUpsertReplaces(t *testing.T) {
 	s := openTestStore(t, DotProduct)
 	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
-	requireNoError(t, s.Put("a", []float32{0, 9}, []byte("v2")))
+	requireNoError(t, s.Put("a", []float32{0, 9}, Payload{"p": StringValue("v2")}))
 	v, pl, found, err := s.Get("a")
 	requireNoError(t, err)
-	if !found || v[0] != 0 || v[1] != 9 || string(pl) != "v2" {
-		t.Fatalf("after upsert Get = %v,%q,%v, want [0 9],v2,true", v, pl, found)
+	if !found || v[0] != 0 || v[1] != 9 || pl["p"].Str != "v2" {
+		t.Fatalf("after upsert Get = %v,%#v,%v, want [0 9],{p:v2},true", v, pl, found)
 	}
 	live := 0
 	s.seg.eachLive(func(int, int64, []float32, float32) { live++ })
@@ -96,7 +96,7 @@ func TestStore_PutRejectsBadVector(t *testing.T) {
 
 func TestStore_Delete(t *testing.T) {
 	s := openTestStore(t, DotProduct)
-	requireNoError(t, s.Put("a", []float32{1, 2}, []byte("x")))
+	requireNoError(t, s.Put("a", []float32{1, 2}, Payload{"p": StringValue("x")}))
 	requireNoError(t, s.Delete("a"))
 	_, _, found, err := s.Get("a")
 	requireNoError(t, err)
@@ -214,9 +214,9 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 
 	s1, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
-	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, []byte("pa")))
-	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, []byte("pb")))
-	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, []byte("pa2"))) // upsert
+	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, Payload{"p": StringValue("pa")}))
+	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, Payload{"p": StringValue("pb")}))
+	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, Payload{"p": StringValue("pa2")})) // upsert
 	requireNoError(t, s1.Delete("b"))
 	requireNoError(t, s1.Close()) // graceful: commits idtable + flushes WAL
 
@@ -226,8 +226,8 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 
 	v, pl, found, err := s2.Get("a")
 	requireNoError(t, err)
-	if !found || string(pl) != "pa2" || !approxEqual(v[2], 1, 1e-4) {
-		t.Fatalf("after reopen Get(a) = %v,%q,%v, want [0 0 1],pa2,true", v, pl, found)
+	if !found || pl["p"].Str != "pa2" || !approxEqual(v[2], 1, 1e-4) {
+		t.Fatalf("after reopen Get(a) = %v,%#v,%v, want [0 0 1],{p:pa2},true", v, pl, found)
 	}
 	if _, _, found, _ := s2.Get("b"); found {
 		t.Fatal("deleted id b must stay deleted after reopen")
@@ -245,9 +245,9 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 
 	s1, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
-	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, []byte("pa")))
-	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, []byte("pb")))
-	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, []byte("pa2"))) // upsert
+	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, Payload{"p": StringValue("pa")}))
+	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, Payload{"p": StringValue("pb")}))
+	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, Payload{"p": StringValue("pa2")})) // upsert
 	requireNoError(t, s1.Delete("b"))
 	docA := s1.idToDoc["a"]
 
@@ -269,8 +269,8 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 	}
 	v, pl, found, err := s2.Get("a")
 	requireNoError(t, err)
-	if !found || string(pl) != "pa2" || !approxEqual(v[2], 1, 1e-4) {
-		t.Fatalf("crash-recovered Get(a) = %v,%q,%v, want [0 0 1],pa2,true", v, pl, found)
+	if !found || pl["p"].Str != "pa2" || !approxEqual(v[2], 1, 1e-4) {
+		t.Fatalf("crash-recovered Get(a) = %v,%#v,%v, want [0 0 1],{p:pa2},true", v, pl, found)
 	}
 	if _, _, found, _ := s2.Get("b"); found {
 		t.Fatal("deleted id b must stay deleted after crash recovery")

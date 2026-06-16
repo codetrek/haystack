@@ -153,6 +153,13 @@ func (s *sealedSegment) payload(slot int) []byte {
 	return out
 }
 
+// payloadDecoded returns the slot's payload deserialized to a Payload. A sealed
+// segment is immutable and its payload blobs were written by encodePayload, so a
+// decode error means on-disk corruption (surfaced to the caller, not swallowed).
+func (s *sealedSegment) payloadDecoded(slot int) (Payload, error) {
+	return decodePayload(s.payload(slot))
+}
+
 // eachLive visits non-tombstoned slots ascending, mirroring segment.eachLive so
 // the brute leg and graph builder share one iterator contract. It holds the tomb
 // read lock for the whole pass so the live set is a consistent snapshot even when
