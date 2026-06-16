@@ -1,35 +1,39 @@
-// Package vectorstore is the Phase-1 records layer of the vector store engine.
+// Package vectorstore is the segmented (LSM-style) vector store engine.
 //
-// It stores records as (string id, vector, payload) in a single in-memory "head"
-// segment and answers k-nearest-neighbor queries by brute force, synchronously.
-// Vectors are kept in their metric-natural stored form (cosine: unit vector +
-// norm; dot/euclidean: raw + norm 0); the original vector is reconstructed (as a
-// fresh copy) on Get. A string id maps to a stable int64 docId via core/idtable.
+// Records are (string id, vector, payload). They live in one mutable in-memory
+// "head" segment plus an ordered set of immutable on-disk SEALED segments. The
+// head is brute-searched and never gets a graph; when it reaches maxSegSize (or
+// on Seal) it is frozen into a sealed records-segment (mmap'd vectors in
+// metric-natural form + norm, slot→docId, a persisted tombstone bitmap, and
+// payload) under seg-<id>-<gen>/, and a fresh head starts. A background builder
+// then builds a per-segment HNSW graph over the sealed segment and flips its
+// state pending→indexed.
 //
-// Durability: each Put/Delete is written to a CRC-checked write-ahead log and
-// fsynced before any in-memory state changes, and the WAL record carries BOTH
-// the records data AND the string id, so the WAL is the single crash-safe source
-// of truth for the id-to-docId mapping. On reopen the head and all derived maps
-// are rebuilt exactly by replaying the log in order (which also re-drives the
-// allocator to reconstruct identical docIds), so a Put/Delete is durable on
-// return even after an unclean crash.
+// Search is an N-way merge: each indexed sealed segment via its HNSW (results
+// post-filtered by that segment's tombstone bitmap, since the immutable graph
+// can still return tombstoned nodes), each pending sealed segment by brute, and
+// the head by brute — all into one shared top-k heap in docId space.
 //
-// Two-level id model (architecture §4.6): a global docId-to-segId map plus a
-// per-segment docId-to-slot map. In Phase 1 there is exactly one segment (the
-// head), so the global level is the identity {every docId -> head} and is
-// intentionally not materialized; the per-segment map is segment.docToSlot.
+// Durability has two persistent faces (architecture §4.8): a per-write head WAL
+// (Put/Delete fsync before mutation) and a single-file manifest atomically
+// rewritten on each structural change (tmp+fsync+rename+dir-fsync) listing the
+// sealed segments, their index states, and the head segId. Recovery loads the
+// manifest, mmaps the sealed segments, rebuilds the global docId→segId map from
+// each segment's on-disk slot→docId, reopens indexed graphs, replays the head
+// WAL, resumes any pending build, and sweeps orphan seg dirs not referenced by
+// the manifest (half-written seal files from a crash). Sealed segments are
+// immutable except for their tombstone bitmaps.
 //
-// Search returns results in docId space ([]SearchResult{DocID, Distance}).
-// Mapping docId back to the caller's string id is the caller's responsibility in
-// Phase 1, because idtable has no reverse map. If string-id results are required,
-// that is a scope addition beyond Phase 1.
+// The two-level id model (architecture §4.6) spans segments: a stable int64
+// docId (via core/idtable) maps to an owning segId, and each segment maps
+// docId↔slot. Search returns docId-space results; mapping docId back to the
+// caller's string id is the caller's responsibility (idtable has no reverse map).
 //
-// Phase 1 deliberately excludes: sealing the head into immutable on-disk
-// segments, the on-disk mmap segment file format + manifest atomic-swap, per-
-// segment HNSW/IVF index building, N-way segment merge, compaction / space
-// reclaim (Delete only tombstones), attribute filtering, and multiple indexes.
-// Those arrive in later phases (see core/docs/vectorstore/architecture.md §8;
-// the standalone "payload" phase in §8 is subsumed here because §8.1 folds
-// payload into the records layer). The existing core/vectorindex (HNSW) package
-// is independent and unaffected.
+// Phase 2 has exactly ONE index (the default HNSW over the store's metric). The
+// HNSW graph algorithm + NodeStore seam are migrated (copied and slimmed so the
+// graph stores only topology and resolves vectors from the owning sealed segment
+// by slot) from core/vectorindex, which remains independent and unmodified.
+//
+// Out of scope (later phases): compaction / segment merge / space reclaim,
+// attribute filtering, and multiple indexes (different metrics/params).
 package vectorstore
