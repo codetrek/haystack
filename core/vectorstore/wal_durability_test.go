@@ -118,4 +118,3 @@ func TestSyncFlushErrorRollsBack(t *testing.T) {
 		t.Fatal("expected Sync to fail when buf.Flush errors")
 	}
 }
-

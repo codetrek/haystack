@@ -159,6 +159,12 @@ func (s *Store) recover() error {
 			s.graphs[e.SegID] = newBuiltIndex(g, s.gcfg)
 		}
 	}
+	// Sweep any seg-* directory (and a stranded manifest.tmp) the committed
+	// manifest does not reference — a crash mid-seal leaves half-written files
+	// the manifest swap never committed to (appendix #3).
+	if err := s.sweepOrphansLocked(m); err != nil {
+		return err
+	}
 	// Head WAL replay last (against the now-populated docToSeg), exactly once
 	// (appendix #15: replay must not run twice — that would double-apply every
 	// head record). Then resume builds for any segment left pending (crash
@@ -172,6 +178,43 @@ func (s *Store) recover() error {
 			segDir := filepath.Join(s.dir, segDirName(sid, 0))
 			s.builds.Add(1)
 			go s.buildAndPublish(sid, segDir, s.sealed[i])
+		}
+	}
+	return nil
+}
+
+// sweepOrphansLocked removes any seg-* directory on disk not referenced by the
+// loaded manifest, plus a stranded manifest.tmp. A crash mid-seal leaves a
+// half-written segment the manifest never committed to; the manifest swap is the
+// commit point, so anything not in it is an orphan (§4.8, appendix #3). The
+// stranded manifest.tmp from a crashed write is harmless to readManifest (which
+// reads "manifest", not the tmp) but is cleaned here so it cannot accumulate or
+// be mistaken for a committed manifest later. Caller holds s.mu.
+func (s *Store) sweepOrphansLocked(m *manifest) error {
+	referenced := make(map[string]bool, len(m.Segments))
+	for _, e := range m.Segments {
+		referenced[segDirName(e.SegID, e.Gen)] = true
+	}
+	entries, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+	for _, ent := range entries {
+		name := ent.Name()
+		if name == "manifest.tmp" && !ent.IsDir() {
+			if err := fsRemove(filepath.Join(s.dir, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		if !ent.IsDir() || len(name) < 4 || name[:4] != "seg-" {
+			continue
+		}
+		if referenced[name] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(s.dir, name)); err != nil {
+			return err
 		}
 	}
 	return nil
