@@ -3,6 +3,7 @@ package vectorindex
 import (
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -90,4 +91,21 @@ func TestCheckpointOnFaultedStoreErrors(t *testing.T) {
 func TestFsyncDir(t *testing.T) {
 	require.NoError(t, fsyncDir(t.TempDir()))
 	require.Error(t, fsyncDir(filepath.Join(t.TempDir(), "does-not-exist")))
+}
+
+// #9: 目录 Sync 失败时(非 Windows)必须把错误上报。
+func TestFsyncDirSyncError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fsyncDir is a no-op on Windows (directory fsync unsupported)")
+	}
+	orig := fsOpen
+	defer func() { fsOpen = orig }()
+	fsOpen = func(name string) (osFile, error) {
+		f, err := orig(name)
+		if err != nil {
+			return nil, err
+		}
+		return &faultFile{osFile: f, failSync: true}, nil
+	}
+	require.Error(t, fsyncDir(t.TempDir()), "a directory Sync failure must surface")
 }
