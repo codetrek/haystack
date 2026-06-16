@@ -88,29 +88,45 @@ func (s *Store) segStatsLocked() []segLiveStats {
 // payload, so aliasing the input mmap is safe. eachLive holds each input's tomb
 // RLock for a consistent per-segment snapshot. The returned moved set is the
 // authoritative list of docs whose global segId the swap must rehome.
-func packLiveDocs(inputs []*sealedSegment, metric Metric, maxSegSize int) (buckets []*segment, moved map[int64]bool) {
+//
+// Fail-closed on a corrupt payload (consistent with Get — store.go ~695): a
+// sealed payload blob is written by encodePayload at seal, so a decode error
+// means on-disk corruption. Swallowing it (substituting an empty Payload) would
+// silently drop that doc's attrs / non-declared fields into the merged output, so
+// instead we capture the first decode error and abort the whole merge — never
+// launder a corrupt blob into a clean-but-lossy segment. eachLive has no early
+// exit, so once an error is latched the callback skips the remaining appends and
+// the caller surfaces err.
+func packLiveDocs(inputs []*sealedSegment, metric Metric, maxSegSize int) (buckets []*segment, moved map[int64]bool, err error) {
 	moved = make(map[int64]bool)
 	cur := newSegment(metric)
 	buckets = append(buckets, cur)
 	for _, ss := range inputs {
 		ss.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+			if err != nil {
+				return // a prior slot failed to decode; abort the pack
+			}
+			pl, derr := ss.payloadDecoded(slot)
+			if derr != nil {
+				err = derr
+				return
+			}
 			if len(cur.slotDoc) >= maxSegSize {
 				cur = newSegment(metric)
 				buckets = append(buckets, cur)
 			}
-			// Immutable segment; the payload blob was written by encodePayload at
-			// seal, so it is well-formed. A decode error yields a nil Payload, which
-			// re-encodes to an empty blob — never a crash mid-merge.
-			pl, _ := ss.payloadDecoded(slot)
 			cur.append(docID, stored, norm, pl)
 			moved[docID] = true
 		})
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	// Drop a trailing empty bucket (all inputs were fully tombstoned).
 	if len(buckets) > 1 && len(buckets[len(buckets)-1].slotDoc) == 0 {
 		buckets = buckets[:len(buckets)-1]
 	}
-	return buckets, moved
+	return buckets, moved, nil
 }
 
 // mergePlan is the under-lock snapshot a merge builds before releasing s.mu for
@@ -165,7 +181,13 @@ func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergeP
 		}
 		inputSS = append(inputSS, ss)
 	}
-	buckets, moved := packLiveDocs(inputSS, s.metric, bucketCap)
+	buckets, moved, err := packLiveDocs(inputSS, s.metric, bucketCap)
+	if err != nil {
+		// A corrupt sealed payload blob aborts the merge fail-closed (consistent
+		// with Get): better to refuse the merge than launder corruption into a
+		// clean-but-lossy output that silently drops the doc's attrs.
+		return nil, err
+	}
 	if len(buckets) == 1 && len(buckets[0].slotDoc) == 0 {
 		// All inputs fully tombstoned: no output, but the inputs must still be
 		// dropped + their dirs deleted. Represent that as a plan with zero buckets.

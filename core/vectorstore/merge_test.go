@@ -56,7 +56,8 @@ func TestPackLiveDocs_BinPacksAndCarriesPayload(t *testing.T) {
 	b := mk([]string{"b0", "b1"}, [][]float32{{2, 0}, {0, 2}})
 
 	// maxSegSize 2 → 5 live docs pack into 3 buckets (2,2,1).
-	buckets, moved := packLiveDocs([]*sealedSegment{a, b}, DotProduct, 2)
+	buckets, moved, err := packLiveDocs([]*sealedSegment{a, b}, DotProduct, 2)
+	requireNoError(t, err)
 	if len(buckets) != 3 {
 		t.Fatalf("buckets = %d, want 3", len(buckets))
 	}
@@ -104,7 +105,8 @@ func TestPackLiveDocs_ExcludesTombstoned(t *testing.T) {
 	requireNoError(t, err)
 	requireNoError(t, ss.tombstoneSlot(1)) // tombstone "y"
 
-	buckets, moved := packLiveDocs([]*sealedSegment{ss}, DotProduct, 50)
+	buckets, moved, err := packLiveDocs([]*sealedSegment{ss}, DotProduct, 50)
+	requireNoError(t, err)
 	got := 0
 	for _, bk := range buckets {
 		got += len(bk.slotDoc)
