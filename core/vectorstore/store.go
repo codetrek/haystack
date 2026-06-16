@@ -3,6 +3,7 @@ package vectorstore
 import (
 	"encoding/binary"
 	"errors"
+	"path/filepath"
 	"sync"
 
 	"github.com/codetrek/haystack/core/idtable"
@@ -299,27 +300,73 @@ func (s *Store) Delete(id string) error {
 }
 
 // Search returns the k nearest live records to q under the store's metric,
-// brute-scanning the single head segment. An empty store returns (nil, nil).
-// Results are in docId space (see SearchResult / decision #4).
+// merging every leg into one shared top-k heap: the head (brute), each pending
+// sealed segment (brute over its live slots), and each indexed sealed segment
+// (its HNSW, post-filtered by that segment's tombstone bitmap — the immutable
+// graph can return tombstoned nodes, the single most important correctness
+// gotcha). All legs emit exact same-metric distances into one heap; no cross-leg
+// dedup is needed because a docId is live in exactly one segment. Results are in
+// docId space, ascending by distance. An empty store returns (nil, nil).
 func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
 	if k <= 0 {
 		return nil, errors.New("vectorstore: k must be positive")
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if err := validateVector(q, s.seg.dim, s.metric); err != nil {
+	if err := validateVector(q, s.searchDimLocked(), s.metric); err != nil {
 		return nil, err
 	}
 	pq, _ := s.metric.prepare(q)
 	tk := newTopK(k)
+
+	// Head leg (brute).
 	s.seg.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
 		tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
 	})
+
+	// Sealed legs.
+	for i, ss := range s.sealed {
+		bi := s.graphs[s.sealedID[i]]
+		if bi == nil {
+			// Pending: brute over the segment's live slots.
+			ss.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+				tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
+			})
+			continue
+		}
+		// Indexed: reuse the per-segment hnswIndex built once at install/open
+		// (appendix #26), then drop any hit whose docId is no longer live in the
+		// segment — the immutable graph still contains post-seal-tombstoned nodes.
+		hits, err := bi.idx.search(q, k)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range hits {
+			if _, live := ss.slotOfDoc(h.DocID); !live {
+				continue // tombstoned after seal → exclude
+			}
+			tk.offer(h)
+		}
+	}
+
 	out := tk.sorted()
 	if len(out) == 0 {
 		return nil, nil
 	}
 	return out, nil
+}
+
+// searchDimLocked returns the dimension to validate the query against: the head's
+// learned dim if non-zero, else the first sealed segment's dim, else 0 (empty).
+// Caller holds s.mu (R or W).
+func (s *Store) searchDimLocked() int {
+	if s.seg.dim != 0 {
+		return s.seg.dim
+	}
+	if len(s.sealed) > 0 {
+		return s.sealed[0].dim
+	}
+	return 0
 }
 
 // sealedByID returns the live sealed segment with segId, or nil. Caller holds s.mu.
@@ -350,4 +397,127 @@ func (s *Store) attachSealedForTest(ss *sealedSegment, id segID) {
 	if id >= s.nextSeg {
 		s.nextSeg = id + 1
 	}
+}
+
+// Seal freezes the current head into a new immutable sealed records-segment on
+// disk, atomically updates the manifest (head→new sealed seg, state pending,
+// fresh empty head), truncates the head WAL, then (Phase 2 step) builds the
+// segment's HNSW. The records-segment is durable before the manifest swap and the
+// WAL truncate, so a crash never loses a durably-acked write. An empty head is a
+// no-op.
+func (s *Store) Seal() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sealLocked()
+}
+
+func (s *Store) sealLocked() error {
+	if len(s.seg.slotDoc) == 0 {
+		return nil // nothing to seal
+	}
+	id := s.nextSeg
+	segDir := filepath.Join(s.dir, segDirName(id, 0))
+
+	// (1) Dump head → sealed records-segment files (fsync, fast, durable).
+	if err := writeSealedSegment(segDir, s.seg); err != nil {
+		return err
+	}
+	ss, err := openSealedSegment(segDir, s.metric)
+	if err != nil {
+		return err
+	}
+
+	// (2) Atomic manifest swap: head→new sealed seg (pending), fresh head.
+	s.sealed = append(s.sealed, ss)
+	s.sealedID = append(s.sealedID, id)
+	s.nextSeg++
+	for slot := 0; slot < ss.count(); slot++ {
+		if !ss.tombGet(slot) {
+			s.docToSeg[ss.slotDoc(slot)] = id
+		}
+	}
+	s.seg = newSegment(s.metric)
+	if err := s.writeManifestLocked(); err != nil {
+		return err
+	}
+
+	// (3) Truncate the old head WAL — the writes it carried are now in the durable
+	// sealed segment + manifest.
+	if err := s.wal.Reset(); err != nil {
+		return err
+	}
+
+	// (4) Build the graph (synchronous for now; backgrounded in Task 11).
+	gs, err := buildSegmentGraph(segDir, ss, s.gcfg)
+	if err != nil {
+		return err
+	}
+	s.graphs[id] = newBuiltIndex(gs, s.gcfg)
+	return s.markIndexedLocked(id)
+}
+
+// WaitForIndex blocks until every sealed segment is indexed. With the synchronous
+// Seal of this task it is already true on return; Task 11 makes it wait on the
+// background builder.
+func (s *Store) WaitForIndex() error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return nil
+}
+
+// writeManifestLocked rewrites the manifest from the current segment set. Caller
+// holds s.mu. The manifest Version is bumped exactly once per rewrite
+// (appendix #19 — the draft double-incremented with a dead assignment).
+func (s *Store) writeManifestLocked() error {
+	s.manifestVersion++
+	m := &manifest{Version: s.manifestVersion, Head: headSegID}
+	for i, ss := range s.sealed {
+		st := segPending
+		if s.graphs[s.sealedID[i]] != nil {
+			st = segIndexed
+		}
+		m.Segments = append(m.Segments, segmentEntry{
+			SegID:     s.sealedID[i],
+			Gen:       0,
+			VecCount:  uint64(ss.count()),
+			TombCount: uint64(ss.tombCount()),
+			State:     st,
+		})
+	}
+	return writeManifest(s.dir, m)
+}
+
+// markIndexedLocked re-publishes the manifest so the just-built segment shows as
+// indexed. Caller holds s.mu.
+func (s *Store) markIndexedLocked(id segID) error {
+	_ = id
+	return s.writeManifestLocked()
+}
+
+// segDirName derives the on-disk directory name for a sealed segment (§4.8: paths
+// are derived, not stored).
+func segDirName(id segID, gen uint32) string {
+	return "seg-" + itoaSeg(int64(id)) + "-" + itoaSeg(int64(gen))
+}
+
+func itoaSeg(v int64) string {
+	if v == 0 {
+		return "0"
+	}
+	neg := v < 0
+	if neg {
+		v = -v
+	}
+	var b [20]byte
+	p := len(b)
+	for v > 0 {
+		p--
+		b[p] = byte('0' + v%10)
+		v /= 10
+	}
+	if neg {
+		p--
+		b[p] = '-'
+	}
+	return string(b[p:])
 }
