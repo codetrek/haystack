@@ -31,3 +31,52 @@ func (b *bitmap) count() int {
 	}
 	return n
 }
+
+// and intersects b into the receiver in place (receiver ← receiver ∩ o).
+func (b *bitmap) and(o *bitmap) {
+	for w := range b.words {
+		if w < len(o.words) {
+			b.words[w] &= o.words[w]
+		} else {
+			b.words[w] = 0
+		}
+	}
+}
+
+// andNotWords clears every bit set in the raw tomb word array (receiver ←
+// receiver ∧ ¬tomb). tomb is the dense uint64[] tombstone words of a sealed
+// segment; word w covers slots [w*64, w*64+64). This is the "member AND live"
+// composition (architecture §6: member 位图 AND 段 live 位).
+func (b *bitmap) andNotWords(tomb []uint64) {
+	for w := range b.words {
+		if w < len(tomb) {
+			b.words[w] &^= tomb[w]
+		}
+	}
+}
+
+// iterate calls fn for every set bit in ascending order.
+func (b *bitmap) iterate(fn func(i int)) {
+	for w, word := range b.words {
+		for word != 0 {
+			t := word & -word
+			i := w*64 + bits.TrailingZeros64(word)
+			fn(i)
+			word ^= t
+		}
+	}
+}
+
+// collect returns all set bits ascending (test/helper use).
+func (b *bitmap) collect() []int {
+	var out []int
+	b.iterate(func(i int) { out = append(out, i) })
+	return out
+}
+
+// clone returns a deep copy.
+func (b *bitmap) clone() bitmap {
+	cp := make([]uint64, len(b.words))
+	copy(cp, b.words)
+	return bitmap{words: cp}
+}
