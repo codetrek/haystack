@@ -149,13 +149,16 @@ func (s *MmapStore) growUpper(requiredCap uint64) error {
 }
 
 // remapFile is the common grow logic. Windows cannot resize a file while it is
-// mapped, so map-new-then-unmap-old is not portable; instead it unmaps first but
-// nils the slice and zeros the capacity *before* the fallible truncate/mmap, so
-// a read after a failed grow returns an out-of-range error instead of
-// dereferencing freed memory (audit #3). The caller propagates the error (a
-// batched grow aborts the txn → faults the store).
+// mapped, so it unmaps the old region first. If munmap fails the old mapping is
+// still valid, so it returns the error leaving *data/*cap untouched (reads keep
+// working). Once unmapped it nils the slice and zeros the capacity *before* the
+// fallible truncate/mmap, so a read after a failed grow returns an out-of-range
+// error instead of dereferencing freed memory (audit #3). The caller propagates
+// the error (a batched grow aborts the txn → faults the store).
 func (s *MmapStore) remapFile(f osFile, data *[]byte, cap *uint64, newCap uint64, slotSize int, capHeaderOffset int) error {
-	_ = mmapFree(*data) // best-effort; the region is being replaced regardless
+	if err := mmapFree(*data); err != nil {
+		return fmt.Errorf("grow: munmap: %w", err)
+	}
 	*data = nil
 	*cap = 0
 
