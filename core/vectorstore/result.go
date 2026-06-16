@@ -7,6 +7,19 @@ type SearchResult struct {
 	Distance float32
 }
 
+// VectorIndexInfo is a read-only snapshot of one named index's configuration and
+// build progress (architecture §7 ListVectorIndexes).
+type VectorIndexInfo struct {
+	Name           string
+	Type           string
+	Metric         Metric
+	M              int
+	EfConstruction int
+	EfSearch       int
+	Segments       int // total sealed segments
+	Indexed        int // segments whose graph is built (pending = Segments-Indexed)
+}
+
 // topK keeps the k smallest-distance results seen, using a max-heap (largest
 // distance at the root) so the worst kept result is O(1) to inspect and evict.
 type topK struct {

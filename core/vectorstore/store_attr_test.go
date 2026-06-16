@@ -67,7 +67,7 @@ func TestDropAttrIndex_RemovesDeclarationAndAttrDat(t *testing.T) {
 	requireNoError(t, s.DropAttrIndex("color"))
 	// Filtering on the now-undeclared field still works via a residual payload scan
 	// (architecture §6: non-declared fields are stored + returned, just not indexed).
-	got, err := s.Search([]float32{1, 0, 0}, 10, Eq("color", StringValue("red")))
+	got, err := s.Search("default", []float32{1, 0, 0}, 10, Eq("color", StringValue("red")))
 	requireNoError(t, err)
 	for _, r := range got {
 		// every returned doc must actually be "red"
@@ -137,7 +137,7 @@ func TestSearch_Filter_BruteSFloor_HeadAndSealed_MatchesOracle(t *testing.T) {
 		Range("n", Int64Value(5), Int64Value(30)),
 		And(Eq("color", StringValue("red")), Range("n", Int64Value(0), Int64Value(20))),
 	} {
-		got, err := s.Search(q, 8, pred)
+		got, err := s.Search("default", q, 8, pred)
 		requireNoError(t, err)
 		// Independent oracle: brute over the filter-MATCHING LIVE set via evalPayload.
 		match := map[int64][]float32{}
@@ -198,7 +198,7 @@ func TestSearch_Filter_AfterCompact_DeclsCarried(t *testing.T) {
 
 	q := []float32{2, 4, 1}
 	pred := Eq("color", StringValue("red"))
-	got, err := s.Search(q, 10, pred)
+	got, err := s.Search("default", q, 10, pred)
 	requireNoError(t, err)
 	match := map[int64][]float32{}
 	for doc, raw := range vecs {
@@ -233,7 +233,7 @@ func TestSearch_Filter_UnIndexedSegment_ResidualFallback(t *testing.T) {
 	// index. CreateAttrIndex DOES scan it, so to hit the nil-attr build path we
 	// instead clear it for the test via a fresh predicate eval over a non-declared
 	// field, which always falls back to a residual scan.
-	got, err := s.Search([]float32{1, 0, 0}, 12, Eq("color", StringValue("red")))
+	got, err := s.Search("default", []float32{1, 0, 0}, 12, Eq("color", StringValue("red")))
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("filter over an un-indexed sealed segment returned nothing")

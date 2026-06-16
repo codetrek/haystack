@@ -93,7 +93,7 @@ func TestSearch_Filter_BothBranches_MatchOracle(t *testing.T) {
 				And(Eq("color", StringValue("red")), Range("n", Int64Value(0), Int64Value(120))),
 			} {
 				before := s.graphSDispatches.Load()
-				got, err := s.Search(q, 10, pred)
+				got, err := s.Search("default", q, 10, pred)
 				requireNoError(t, err)
 				took := s.graphSDispatches.Load() - before
 				// Pin the branch per-case (appendix #25): a high T must NEVER take the
@@ -121,9 +121,9 @@ func TestSearch_Filter_BothBranches_MatchOracle(t *testing.T) {
 func TestSearch_Filter_MatchAll_EqualsUnfiltered(t *testing.T) {
 	s, vecs, _ := buildFilterStore(t, 120, 80, func(i int) string { return "red" })
 	q := vecs[s.idToDoc["k1"]]
-	unf, err := s.Search(q, 10, nil)
+	unf, err := s.Search("default", q, 10, nil)
 	requireNoError(t, err)
-	fil, err := s.Search(q, 10, Eq("color", StringValue("red"))) // matches all
+	fil, err := s.Search("default", q, 10, Eq("color", StringValue("red"))) // matches all
 	requireNoError(t, err)
 	wantIDs := make([]int64, len(unf))
 	for i, r := range unf {
@@ -137,7 +137,7 @@ func TestSearch_Filter_MatchAll_EqualsUnfiltered(t *testing.T) {
 func TestSearch_Filter_EmptyMatch_NoPanic(t *testing.T) {
 	s, vecs, _ := buildFilterStore(t, 60, 40, func(i int) string { return "red" })
 	q := vecs[s.idToDoc["k1"]]
-	got, err := s.Search(q, 10, Eq("color", StringValue("nonexistent")))
+	got, err := s.Search("default", q, 10, Eq("color", StringValue("nonexistent")))
 	requireNoError(t, err)
 	if len(got) != 0 {
 		t.Fatalf("empty-match filter returned %d results, want 0", len(got))
@@ -160,7 +160,7 @@ func TestSearch_Filter_DeletedMatchingDoc_NeverLeaks(t *testing.T) {
 		delete(pls, s.idToDoc["k0"])
 		requireNoError(t, s.WaitForIndex())
 		q := vecs[s.idToDoc["k2"]]
-		got, err := s.Search(q, 10, Eq("color", StringValue("red")))
+		got, err := s.Search("default", q, 10, Eq("color", StringValue("red")))
 		requireNoError(t, err)
 		for _, r := range got {
 			if r.DocID == s.idToDoc["k0"] {
@@ -179,7 +179,7 @@ func TestSearch_Filter_UnsupportedPredicate_Errors(t *testing.T) {
 	requireNoError(t, s.Put("a", []float32{1, 0, 0}, Payload{"x": StringValue("y")}))
 	// validatePredicate rejects a Range on a declared Keyword field.
 	requireNoError(t, s.CreateAttrIndex("x", Keyword))
-	if _, err := s.Search([]float32{1, 0, 0}, 5, Range("x", Int64Value(1), Int64Value(2))); err == nil {
+	if _, err := s.Search("default", []float32{1, 0, 0}, 5, Range("x", Int64Value(1), Int64Value(2))); err == nil {
 		t.Fatal("Range on a Keyword field must error from Search")
 	}
 }
@@ -235,7 +235,7 @@ func TestSearch_Filter_GraphDistantSelective_GraphSBranch(t *testing.T) {
 	}
 	pred := Eq("hot", BoolValue(true))
 	before := s.graphSDispatches.Load()
-	got, err := s.Search(q, 5, pred)
+	got, err := s.Search("default", q, 5, pred)
 	requireNoError(t, err)
 	if s.graphSDispatches.Load() == before {
 		t.Fatal("expected the graph∩S branch to run (T=0, |S_seg|>0), but it did not")
@@ -333,7 +333,7 @@ func TestSearch_Filter_AfterMerge_MatchesOracle(t *testing.T) {
 	for _, T := range []int{1 << 30, 0} {
 		s.attrSearchT = T
 		pred := Eq("color", StringValue("red"))
-		got, err := s.Search(q, 10, pred)
+		got, err := s.Search("default", q, 10, pred)
 		requireNoError(t, err)
 		want := bruteOracleFiltered(Cosine, q, vecs, pls, pred, 10)
 		if !setEqual(got, want) {
@@ -387,7 +387,7 @@ func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
 	}
 	q := vecs[k2Doc]
 	pred := Eq("color", StringValue("red"))
-	got, err := s2.Search(q, 10, pred)
+	got, err := s2.Search("default", q, 10, pred)
 	requireNoError(t, err)
 	want := bruteOracleFiltered(Cosine, q, vecs, pls, pred, 10)
 	if !setEqual(got, want) {
@@ -411,7 +411,7 @@ func TestSearch_Filter_UpdateCrossSegment_CountedOnce(t *testing.T) {
 	// Update k0: old "red" copy tombstoned in the sealed segment, new "red" copy in
 	// the head — BOTH match the filter. It must appear exactly once.
 	requireNoError(t, s.Put("k0", []float32{1, 0, 0}, Payload{"color": StringValue("red")}))
-	got, err := s.Search([]float32{1, 0, 0}, 40, Eq("color", StringValue("red")))
+	got, err := s.Search("default", []float32{1, 0, 0}, 40, Eq("color", StringValue("red")))
 	requireNoError(t, err)
 	seen := 0
 	for _, r := range got {
@@ -445,7 +445,7 @@ func TestCreateAttrIndex_ConcurrentWithMerge_Race(t *testing.T) {
 	_ = s.Compact()
 	requireNoError(t, <-done)
 	requireNoError(t, s.WaitForIndex())
-	got, err := s.Search([]float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
+	got, err := s.Search("default", []float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
 	requireNoError(t, err)
 	_ = got // correctness covered elsewhere; this gate is -race clean + no SIGSEGV
 }

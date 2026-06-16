@@ -57,7 +57,7 @@ func TestRecovery_SealedSegmentsAndHeadWAL(t *testing.T) {
 	s2 := reopenStore(t, s, kvStore)
 
 	// All recovered: search recall holds, deleted docs stay gone.
-	got, err := s2.Search(q, 10, nil)
+	got, err := s2.Search("default", q, 10, nil)
 	requireNoError(t, err)
 	want := bruteForceKNN(Cosine, q, vecs, 10)
 	if r := recallAtK(got, want); r < 0.8 {

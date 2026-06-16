@@ -33,6 +33,11 @@ type Options struct {
 // docId→segId map. Sealed segments use ids >= 1 (the manifest version space).
 const headSegID = segID(0)
 
+// defaultIndexName is the reserved name of the vector index that preserves the
+// Phases 1-5 single-index behavior. It always carries the store's primary
+// (records) metric and cannot be re-Created or Dropped (§4.7).
+const defaultIndexName = "default"
+
 // defaultMaxSegSize is the head row-count seal trigger. The architecture's
 // adaptive ~10M/dim target (§4.9) is measure-don't-assert; this fixed default is
 // a safe placeholder the operator can override via the maxSegSize field. Tunable
@@ -62,13 +67,17 @@ type Store struct {
 	wal     *WAL
 	idToDoc map[string]int64 // derived from WAL replay; lets reads avoid allocating
 
-	sealed   []*sealedSegment      // live sealed segments, by attach order
-	sealedID []segID               // parallel: sealed[i] has segId sealedID[i]
-	docToSeg map[int64]segID       // global docId → owning segId (headSegID for head)
-	graphs   map[segID]*builtIndex // segId → built index (absent until indexed)
-	gcfg     graphConfig           // the single index's HNSW config
-	mcfg     mergeConfig           // space-reclamation policy tunables (Phase 4)
-	nextSeg  segID                 // next sealed segId to assign
+	sealed   []*sealedSegment // live sealed segments, by attach order
+	sealedID []segID          // parallel: sealed[i] has segId sealedID[i]
+	docToSeg map[int64]segID  // global docId → owning segId (headSegID for head)
+	// indexes maps a named vector index → its (cfg, metric, per-segment graphs).
+	// The reserved "default" index carries the store's primary metric and preserves
+	// Phases 1-5 behavior byte-identically. Each vindex.graphs is keyed by segID; an
+	// absent key means that (index, segment) is pending → served by the brute leg
+	// (§4.7). This replaces the Phase-2 single Store.graphs/gcfg.
+	indexes map[string]*vindex
+	mcfg    mergeConfig // space-reclamation policy tunables (Phase 4)
+	nextSeg segID       // next sealed segId to assign
 
 	maxSegSize int // head row-count auto-seal trigger (defaultMaxSegSize unless overridden)
 
@@ -166,10 +175,13 @@ func Open(opts Options) (*Store, error) {
 		wal:      w,
 		idToDoc:  make(map[string]int64),
 		docToSeg: make(map[int64]segID),
-		graphs:   make(map[segID]*builtIndex),
-		gcfg:     graphConfig{}.withDefaults(),
-		mcfg:     mergeConfig{}.withDefaults(),
-		nextSeg:  1,
+		indexes: map[string]*vindex{
+			// The "default" index carries the store's primary metric and reproduces
+			// Phases 1-5 exactly (empty graphs map → every segment pending until built).
+			defaultIndexName: {cfg: graphConfig{}.withDefaults(), metric: opts.Metric, graphs: make(map[segID]*builtIndex)},
+		},
+		mcfg:    mergeConfig{}.withDefaults(),
+		nextSeg: 1,
 
 		maxSegSize:  defaultMaxSegSize,
 		attrDecls:   make(map[string]AttrKind),
@@ -251,11 +263,12 @@ func (s *Store) recover() error {
 			}
 		}
 		if e.State == segIndexed {
-			g, gerr := openGraphFile(segDir, "default", ss)
+			g, gerr := openGraphFile(segDir, defaultIndexName, ss)
 			if gerr != nil {
 				return gerr
 			}
-			s.graphs[e.SegID] = newBuiltIndex(g, s.gcfg)
+			vx := s.indexes[defaultIndexName]
+			s.indexes[defaultIndexName].graphs[e.SegID] = newBuiltIndex(g, vx.cfg)
 		}
 	}
 	// Sweep any seg-* directory (and a stranded manifest.tmp) the committed
@@ -273,10 +286,10 @@ func (s *Store) recover() error {
 		return err
 	}
 	for i, sid := range s.sealedID {
-		if s.graphs[sid] == nil {
+		if s.indexes[defaultIndexName].graphs[sid] == nil {
 			segDir := filepath.Join(s.dir, segDirName(sid, 0))
 			s.buildBeginLocked()
-			go s.buildAndPublish(sid, segDir, s.sealed[i])
+			go s.buildAndPublish(defaultIndexName, sid, segDir, s.sealed[i])
 		}
 	}
 	return nil
@@ -321,6 +334,34 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 
 // Metric returns the store's distance metric.
 func (s *Store) Metric() Metric { return s.metric }
+
+// ListVectorIndexes returns a read-only snapshot of every named index, sorted by
+// name, with each index's config + per-segment build progress (architecture §7).
+func (s *Store) ListVectorIndexes() []VectorIndexInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	names := make([]string, 0, len(s.indexes))
+	for n := range s.indexes {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]VectorIndexInfo, 0, len(names))
+	for _, n := range names {
+		vx := s.indexes[n]
+		indexed := 0
+		for _, id := range s.sealedID {
+			if vx.graphs[id] != nil {
+				indexed++
+			}
+		}
+		out = append(out, VectorIndexInfo{
+			Name: n, Type: "hnsw", Metric: vx.metric,
+			M: vx.cfg.M, EfConstruction: vx.cfg.EfConstruction, EfSearch: vx.cfg.EfSearch,
+			Segments: len(s.sealedID), Indexed: indexed,
+		})
+	}
+	return out
+}
 
 // attrDeclsSnapshotLocked returns a private copy of the declared attr set so an
 // off-lock consumer (the merge write phase) reads a stable view while a concurrent
@@ -757,14 +798,19 @@ func (s *Store) Delete(id string) error {
 	return nil
 }
 
-// Search returns the k nearest live records to q under the store's metric,
-// merging every leg into one shared top-k heap: the head (brute), each pending
-// sealed segment (brute over its live slots), and each indexed sealed segment
-// (its HNSW, post-filtered by that segment's tombstone bitmap — the immutable
-// graph can return tombstoned nodes, the single most important correctness
-// gotcha). All legs emit exact same-metric distances into one heap; no cross-leg
-// dedup is needed because a docId is live in exactly one segment. Results are in
-// docId space, ascending by distance. An empty store returns (nil, nil).
+// Search returns the k nearest live records to q in the named index, under THAT
+// index's metric, merging every leg into one shared top-k heap: the head (brute),
+// each pending sealed segment (brute over its live slots), and each indexed sealed
+// segment (its HNSW, post-filtered by that segment's tombstone bitmap — the
+// immutable graph can return tombstoned nodes, the single most important
+// correctness gotcha). All legs emit exact same-metric distances into one heap; no
+// cross-leg dedup is needed because a docId is live in exactly one segment. Results
+// are in docId space, ascending by distance. An empty store returns (nil, nil).
+//
+// The "default" index reproduces the Phases 1-5 behavior exactly. An unknown index
+// name is an error. (Per-index metric — when vx.metric differs from the store's
+// primary metric — is wired in Tasks 11-12; in this phase only "default" exists, so
+// every leg runs under the primary metric.)
 //
 // filter is an optional metadata Predicate (Eq/In/Range/And; nil = unfiltered).
 // A nil filter is exactly the pre-Phase-5 behavior (the indexed leg uses the
@@ -775,19 +821,31 @@ func (s *Store) Delete(id string) error {
 // |S_seg| vs the per-segment threshold attrSearchT: |S_seg| ≤ T brute-scores only
 // those slots (exact), while |S_seg| > T runs the HNSW with a member predicate
 // (filter-during-traversal — graph∩S). Both feed the same shared top-k heap.
-func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, error) {
+func (s *Store) Search(index string, q []float32, k int, filter Predicate) ([]SearchResult, error) {
 	if k <= 0 {
 		return nil, errors.New("vectorstore: k must be positive")
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if err := validateVector(q, s.searchDimLocked(), s.metric); err != nil {
+	vx, ok := s.indexes[index]
+	if !ok {
+		return nil, fmt.Errorf("vectorstore: unknown index %q", index)
+	}
+	return s.searchLocked(vx, q, k, filter)
+}
+
+// searchLocked is the per-index Search core. The caller has already validated k>0,
+// resolved the *vindex, and holds s.mu.RLock(). Every distance is computed under
+// vx.metric (== s.metric for the "default" index, so the default path is identical
+// to Phases 1-5).
+func (s *Store) searchLocked(vx *vindex, q []float32, k int, filter Predicate) ([]SearchResult, error) {
+	if err := validateVector(q, s.searchDimLocked(), vx.metric); err != nil {
 		return nil, err
 	}
 	if err := validatePredicate(filter, s.attrDecls); err != nil {
 		return nil, err
 	}
-	pq, _ := s.metric.prepare(q)
+	pq, _ := vx.metric.prepare(q)
 	tk := newTopK(k)
 
 	// Head leg — ALWAYS brute-S (no graph). When a filter is present AND the head
@@ -805,7 +863,7 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 				if s.seg.tomb.get(slot) { // member ∧ live (§6): deleted docs never leak
 					return
 				}
-				tk.offer(SearchResult{DocID: s.seg.slotDoc[slot], Distance: s.metric.distance(s.seg.vectors[slot], pq)})
+				tk.offer(SearchResult{DocID: s.seg.slotDoc[slot], Distance: vx.metric.distance(s.seg.vectors[slot], pq)})
 			})
 		} else {
 			// Predicate unanswerable by the index view (never happens for the closed
@@ -820,7 +878,7 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 
 	// Sealed legs.
 	for i, ss := range s.sealed {
-		bi := s.graphs[s.sealedID[i]]
+		bi := vx.graphs[s.sealedID[i]]
 		if bi == nil {
 			// Pending: ALWAYS brute over the segment's live slots; filter by brute eval.
 			ss.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
@@ -830,7 +888,7 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 						return
 					}
 				}
-				tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
+				tk.offer(SearchResult{DocID: docID, Distance: vx.metric.distance(stored, pq)})
 			})
 			continue
 		}
@@ -859,7 +917,7 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 		if card <= s.attrSearchT {
 			// Brute-S over ONLY the S_seg slots (exact).
 			sseg.iterate(func(slot int) {
-				tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: s.metric.distance(ss.getVectorRef(slot), pq)})
+				tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: vx.metric.distance(ss.getVectorRef(slot), pq)})
 			})
 			continue
 		}
@@ -1110,7 +1168,7 @@ func (s *Store) sealLocked() error {
 		return nil
 	}
 	s.buildBeginLocked()
-	go s.buildAndPublish(id, segDir, ss)
+	go s.buildAndPublish(defaultIndexName, id, segDir, ss)
 
 	// (5) Opportunistic background reclamation: a fresh seal may push a size tier to
 	// fanout (growth) or expose a deflated segment (delete-driven). maybeMergeLocked
@@ -1121,24 +1179,37 @@ func (s *Store) sealLocked() error {
 	return nil
 }
 
-// buildAndPublish builds the HNSW for a pending sealed segment off the write
-// path, then installs the index and flips the manifest to indexed. The build
-// failure path drops the error: the segment stays pending → still brute-searched,
-// still correct; recovery (or a future RebuildVectorIndex) retries. buildMu
-// serializes the install+manifest rewrite across concurrent builders so two
-// flips never race a single manifest file.
-func (s *Store) buildAndPublish(id segID, segDir string, ss *sealedSegment) {
+// buildAndPublish builds the HNSW for a pending (index, segment) off the write
+// path, then installs the graph into that named index and flips the manifest to
+// indexed. name selects which index's vindex.graphs receives the built graph and
+// which cfg drives the build. The build failure path drops the error: the segment
+// stays pending → still brute-searched, still correct; recovery (or a future
+// RebuildVectorIndex) retries. buildMu serializes the install+manifest rewrite
+// across concurrent builders so two flips never race a single manifest file.
+func (s *Store) buildAndPublish(name string, id segID, segDir string, ss *sealedSegment) {
 	defer s.buildDone()
-	gs, err := buildSegmentGraph(segDir, "default", ss, s.gcfg)
+	vx, ok := s.indexes[name]
+	if !ok {
+		return // index was dropped before this build started (Task 6)
+	}
+	gs, err := buildSegmentGraph(segDir, name, ss, vx.cfg)
 	if err != nil {
 		return // stays pending; brute leg keeps results correct
 	}
-	bi := newBuiltIndex(gs, s.gcfg)
+	bi := newBuiltIndex(gs, vx.cfg)
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.graphs[id] = bi
+	// Re-check the index still exists after taking s.mu: a concurrent
+	// DropVectorIndex (Task 6) may have removed it while this build ran off-lock
+	// (gotcha 5). If gone, discard the freshly-built graph rather than reviving a
+	// dropped index's map.
+	vx, ok = s.indexes[name]
+	if !ok {
+		return
+	}
+	vx.graphs[id] = bi
 	_ = s.writeManifestLocked()
 
 	// Re-evaluate the merge policy on the pending→indexed flip (Phase-4 finding #1).
@@ -1174,11 +1245,12 @@ func (s *Store) WaitForIndex() error {
 	return nil
 }
 
-// isIndexedForTest reports whether sealed segment id has its graph installed.
+// isIndexedForTest reports whether sealed segment id has its graph installed in
+// the default index.
 func (s *Store) isIndexedForTest(id segID) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return s.graphs[id] != nil
+	return s.indexes[defaultIndexName].graphs[id] != nil
 }
 
 // writeManifestLocked rewrites the manifest from the current segment set. Caller
@@ -1198,7 +1270,7 @@ func (s *Store) writeManifestLocked() error {
 	}
 	for i, ss := range s.sealed {
 		st := segPending
-		if s.graphs[s.sealedID[i]] != nil {
+		if s.indexes[defaultIndexName].graphs[s.sealedID[i]] != nil {
 			st = segIndexed
 		}
 		m.Segments = append(m.Segments, segmentEntry{

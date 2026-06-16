@@ -38,7 +38,7 @@ func TestStore_Search_MergesHeadAndIndexedSealed(t *testing.T) {
 	}
 
 	q := randVec()
-	got, err := s.Search(q, 10, nil)
+	got, err := s.Search("default", q, 10, nil)
 	requireNoError(t, err)
 	want := bruteForceKNN(Cosine, q, vecs, 10)
 	if r := recallAtK(got, want); r < 0.8 {
@@ -76,7 +76,7 @@ func TestStore_Search_IndexedSegmentTombstoneFiltered(t *testing.T) {
 	// without the tombstone post-filter).
 	for iter := 0; iter < 20; iter++ {
 		q := randVec()
-		got, err := s.Search(q, 20, nil)
+		got, err := s.Search("default", q, 20, nil)
 		requireNoError(t, err)
 		for _, r := range got {
 			if r.DocID == deletedDoc {
@@ -114,7 +114,7 @@ func TestStore_Search_TombstoneFilterMustFire(t *testing.T) {
 	targetDoc := s.idToDoc["target"]
 
 	// Sanity: with the target live, querying its own vector returns it first.
-	got, err := s.Search(target, 5, nil)
+	got, err := s.Search("default", target, 5, nil)
 	requireNoError(t, err)
 	if len(got) == 0 || got[0].DocID != targetDoc {
 		t.Fatalf("pre-delete: target should be the nearest to itself, got %v", docIDs(got))
@@ -124,7 +124,7 @@ func TestStore_Search_TombstoneFilterMustFire(t *testing.T) {
 	// its exact vector again: the graph still has the node, so the post-filter is
 	// the only thing keeping it out of the results.
 	requireNoError(t, s.Delete("target"))
-	got, err = s.Search(target, 5, nil)
+	got, err = s.Search("default", target, 5, nil)
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("post-delete: expected the 2nd-nearest to be returned, got nothing")
@@ -151,12 +151,12 @@ func TestStore_Search_MergesPendingSealedBrute(t *testing.T) {
 	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
 	ss, err := openSealedSegment(segDir, DotProduct)
 	requireNoError(t, err)
-	s.attachSealedForTest(ss, 7) // no entry in s.graphs → pending → brute leg
+	s.attachSealedForTest(ss, 7) // no graph for seg 7 in any index → pending → brute leg
 
 	// One more doc into the fresh head.
 	requireNoError(t, s.Put("d", []float32{0, 1, 1}, nil))
 
-	got, err := s.Search([]float32{0, 1, 0}, 4, nil)
+	got, err := s.Search("default", []float32{0, 1, 0}, 4, nil)
 	requireNoError(t, err)
 	docs := map[int64]bool{}
 	for _, r := range got {

@@ -116,7 +116,7 @@ func TestSealLocked_NoBuildSpawnWhenClosing(t *testing.T) {
 	// The segment is sealed + pending (no graph installed, no builder spawned).
 	s.mu.RLock()
 	n := len(s.sealed)
-	pending := n == 1 && s.graphs[s.sealedID[0]] == nil
+	pending := n == 1 && s.indexes[defaultIndexName].graphs[s.sealedID[0]] == nil
 	inflight := s.nInflightBuilds
 	s.mu.RUnlock()
 	if !pending {

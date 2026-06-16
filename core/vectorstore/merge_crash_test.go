@@ -144,7 +144,7 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 
 	s.mu.RLock()
 	outID := s.sealedID[0]
-	pendingAtCrash := s.graphs[outID] == nil
+	pendingAtCrash := s.indexes[defaultIndexName].graphs[outID] == nil
 	s.mu.RUnlock()
 	if !pendingAtCrash {
 		t.Fatal("crash-mid-build: output unexpectedly indexed before crash; seam did not force the pending state")
@@ -159,7 +159,7 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 	var sum float64
 	for it := 0; it < 20; it++ {
 		q := randVecN(rng, 8)
-		got, err := s2.Search(q, 5, nil)
+		got, err := s2.Search("default", q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}
@@ -228,7 +228,7 @@ func TestMerge_SurvivesRecovery_EndToEnd(t *testing.T) {
 	var sum float64
 	for it := 0; it < 30; it++ {
 		q := randVec()
-		got, err := s2.Search(q, 5, nil)
+		got, err := s2.Search("default", q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}

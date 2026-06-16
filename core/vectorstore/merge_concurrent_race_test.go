@@ -88,7 +88,7 @@ func TestMerge_ConcurrentDeletePutDuringInFlightMerge(t *testing.T) {
 
 		// (3) Search: d-3 absent, d-11 appears EXACTLY once (no duplicate from output).
 		q := randVecN(rng, dim)
-		got, err := s.Search(q, n, nil)
+		got, err := s.Search("default", q, n, nil)
 		requireNoError(t, err)
 		nDel, nPut := 0, 0
 		for _, r := range got {

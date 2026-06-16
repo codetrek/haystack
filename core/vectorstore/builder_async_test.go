@@ -26,7 +26,7 @@ func TestStore_Seal_BuildsInBackground_PendingThenIndexed(t *testing.T) {
 	// Right after Seal returns, the segment is pending (no graph yet) but the
 	// store is immediately writable (fresh head) and searchable (brute leg).
 	put("hot-after-seal", randVec()) // must not block / error
-	got, err := s.Search(randVec(), 5, nil)
+	got, err := s.Search("default", randVec(), 5, nil)
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("search returned nothing while build pending (brute leg missing)")
@@ -82,7 +82,7 @@ func TestStore_DeleteDuringPendingBuild_NoRace(t *testing.T) {
 			return v
 		}
 		for i := 0; i < 50; i++ {
-			_, _ = s.Search(sv(), 5, nil)
+			_, _ = s.Search("default", sv(), 5, nil)
 		}
 	}()
 	wg.Wait()

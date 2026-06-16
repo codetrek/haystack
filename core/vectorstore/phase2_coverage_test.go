@@ -68,7 +68,7 @@ func TestRecovery_StrandedManifestTmpIgnored(t *testing.T) {
 	if _, statErr := os.Stat(tmp); !os.IsNotExist(statErr) {
 		t.Fatal("stranded manifest.tmp not swept on recovery")
 	}
-	res, err := s2.Search([]float32{1, 0, 0, 0}, 1, nil)
+	res, err := s2.Search("default", []float32{1, 0, 0, 0}, 1, nil)
 	requireNoError(t, err)
 	if len(res) != 1 {
 		t.Fatalf("recovered store lost the sealed doc: got %d results", len(res))

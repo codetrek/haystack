@@ -219,7 +219,7 @@ func TestMerge_CompactOfOne(t *testing.T) {
 	var sum float64
 	for it := 0; it < 20; it++ {
 		q := randVec()
-		got, err := s.Search(q, 5, nil)
+		got, err := s.Search("default", q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}

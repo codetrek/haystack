@@ -57,7 +57,7 @@ func TestSearch_HeadLeg_UsesHeadAttr_MatchesOracle(t *testing.T) {
 
 	for _, tc := range preds {
 		before := s.headBruteS.Load()
-		got, err := s.Search(q, 8, tc.p)
+		got, err := s.Search("default", q, 8, tc.p)
 		requireNoError(t, err)
 		took := s.headBruteS.Load() - before
 

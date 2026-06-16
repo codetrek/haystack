@@ -59,7 +59,7 @@ func TestStore_Search_HeavyDeleteRecall(t *testing.T) {
 	var sum float64
 	for it := 0; it < iters; it++ {
 		q := randVec()
-		got, err := s.Search(q, 10, nil)
+		got, err := s.Search("default", q, 10, nil)
 		requireNoError(t, err)
 		want := bruteForceKNN(Cosine, q, live, 10)
 		sum += recallAtK(got, want)

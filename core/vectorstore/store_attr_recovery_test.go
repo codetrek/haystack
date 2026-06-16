@@ -25,7 +25,7 @@ func TestStore_CreateAttrIndex_SurvivesReopen(t *testing.T) {
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())
-	got, err := s2.Search([]float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
+	got, err := s2.Search("default", []float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("declared filter lost across reopen → no results")
@@ -57,7 +57,7 @@ func TestStore_AttrFile_Corrupt_RebuildsOnOpen(t *testing.T) {
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())
-	got, err := s2.Search([]float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
+	got, err := s2.Search("default", []float32{1, 0, 0}, 5, Eq("color", StringValue("red")))
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("corrupt attr.dat must be rebuilt from payload → filter still works")

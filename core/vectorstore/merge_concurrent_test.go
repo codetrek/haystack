@@ -56,7 +56,7 @@ func TestMerge_DeleteDuringWindow_NotResurrected(t *testing.T) {
 	}
 	// They must not appear in Search results either.
 	for it := 0; it < 30; it++ {
-		got, err := s.Search(randVec(), 30, nil)
+		got, err := s.Search("default", randVec(), 30, nil)
 		requireNoError(t, err)
 		for _, r := range got {
 			if r.DocID == s.idToDoc["d-7"] || r.DocID == s.idToDoc["d-13"] {
@@ -68,7 +68,7 @@ func TestMerge_DeleteDuringWindow_NotResurrected(t *testing.T) {
 	var sum float64
 	for it := 0; it < 20; it++ {
 		q := randVec()
-		got, err := s.Search(q, 5, nil)
+		got, err := s.Search("default", q, 5, nil)
 		requireNoError(t, err)
 		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
 	}
@@ -117,7 +117,7 @@ func TestMerge_PutRehomeDuringWindow_NotDuplicated(t *testing.T) {
 		t.Fatalf("Get(d-4) = (%v, found=%v), want new head vector {99,99,99}", v, found)
 	}
 	// d-4 must appear exactly once across Search (no duplicate from the output).
-	got, err := s.Search([]float32{99, 99, 99}, 20, nil)
+	got, err := s.Search("default", []float32{99, 99, 99}, 20, nil)
 	requireNoError(t, err)
 	count := 0
 	for _, r := range got {
@@ -194,7 +194,7 @@ func TestMerge_DeleteDuringWindow_DurableAcrossRestart(t *testing.T) {
 	var sum float64
 	for it := 0; it < 20; it++ {
 		q := randVecN(rng, 8)
-		got, err := s2.Search(q, 5, nil)
+		got, err := s2.Search("default", q, 5, nil)
 		requireNoError(t, err)
 		for _, r := range got {
 			if r.DocID == d9 {

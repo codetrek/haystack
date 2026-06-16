@@ -153,8 +153,9 @@ type mergePlan struct {
 // segment that is still pending has a background buildAndPublish goroutine reading
 // its mmap via eachLive OFF the store lock. The merge swap (step 2b) close()s the
 // input — mmapFree on vecMap/tombMap/plMap — which would unmap memory the builder
-// is mid-read, a SIGSEGV-on-free. A graph is installed (s.graphs[id] != nil) only
-// as the builder's LAST action under s.mu, so requiring it proves no builder is
+// is mid-read, a SIGSEGV-on-free. A graph is installed (the default index's
+// graphs[id] != nil) only as the builder's LAST action under s.mu, so requiring it
+// proves no builder is
 // in flight for that input. This also satisfies the "do not merge a just-sealed
 // pending segment before its graph is built" fidelity point (appendix #3).
 func (s *Store) planMergeLocked(inputIDs []segID) (*mergePlan, error) {
@@ -176,7 +177,7 @@ func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergeP
 		if ss == nil {
 			return nil, nil // already merged/swept; nothing to do
 		}
-		if s.graphs[id] == nil {
+		if s.indexes[defaultIndexName].graphs[id] == nil {
 			return nil, nil // still pending/building — defer (avoids close-during-build, appendix #8)
 		}
 		inputSS = append(inputSS, ss)
@@ -309,7 +310,7 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 				break
 			}
 		}
-		delete(s.graphs, id)
+		delete(s.indexes[defaultIndexName].graphs, id)
 	}
 
 	// (2c) Append outputs (pending) and rehome the surviving moved docs. A doc
@@ -349,7 +350,7 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	// function's return (and thus the deferred mergeDone), so a quiescence drain holds.
 	for i, ss := range outSS {
 		s.buildBeginLocked()
-		go s.buildAndPublish(p.outIDs[i], p.outDirs[i], ss)
+		go s.buildAndPublish(defaultIndexName, p.outIDs[i], p.outDirs[i], ss)
 	}
 	s.mu.Unlock()
 

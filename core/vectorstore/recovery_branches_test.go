@@ -108,7 +108,7 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 
 	// Searchable immediately (pending brute leg).
 	q := randVec()
-	got, err := s2.Search(q, 5, nil)
+	got, err := s2.Search("default", q, 5, nil)
 	requireNoError(t, err)
 	if len(got) == 0 {
 		t.Fatal("search returned nothing on a resumed pending segment")
@@ -193,7 +193,7 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 			t.Fatalf("doc c-%d lost after crash-window recovery", i)
 		}
 	}
-	got, err := s2.Search(randVec(), n, nil)
+	got, err := s2.Search("default", randVec(), n, nil)
 	requireNoError(t, err)
 	seen := make(map[int64]bool, len(got))
 	for _, h := range got {
