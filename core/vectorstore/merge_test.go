@@ -30,6 +30,85 @@ func TestStore_HasMergeConfig(t *testing.T) {
 	}
 }
 
+func TestPackLiveDocs_BinPacksAndCarriesPayload(t *testing.T) {
+	s := openTestStore(t, DotProduct)
+	// Build two sealed segments with known live docs.
+	mk := func(ids []string, vecs [][]float32) *sealedSegment {
+		seg := newSegment(DotProduct)
+		for i, id := range ids {
+			doc, err := s.docIDForAlloc(id)
+			requireNoError(t, err)
+			st, nrm := DotProduct.prepare(vecs[i])
+			seg.append(doc, st, nrm, []byte(id)) // payload = id bytes (asserted below)
+		}
+		dir := t.TempDir()
+		requireNoError(t, writeSealedSegment(dir, seg))
+		ss, err := openSealedSegment(dir, DotProduct)
+		requireNoError(t, err)
+		return ss
+	}
+	a := mk([]string{"a0", "a1", "a2"}, [][]float32{{1, 0}, {0, 1}, {1, 1}})
+	b := mk([]string{"b0", "b1"}, [][]float32{{2, 0}, {0, 2}})
+
+	// maxSegSize 2 → 5 live docs pack into 3 buckets (2,2,1).
+	buckets, moved := packLiveDocs([]*sealedSegment{a, b}, DotProduct, 2)
+	if len(buckets) != 3 {
+		t.Fatalf("buckets = %d, want 3", len(buckets))
+	}
+	total := 0
+	seen := map[int64]bool{}
+	for _, bk := range buckets {
+		if len(bk.slotDoc) > 2 {
+			t.Fatalf("bucket overflow: %d rows > maxSegSize 2", len(bk.slotDoc))
+		}
+		bk.eachLive(func(slot int, doc int64, stored []float32, norm float32) {
+			total++
+			seen[doc] = true
+			// payload travels with the doc.
+			_, _, pl, _ := bk.read(slot)
+			if len(pl) == 0 {
+				t.Fatalf("doc %d lost its payload during pack", doc)
+			}
+		})
+	}
+	if total != 5 {
+		t.Fatalf("packed live docs = %d, want 5", total)
+	}
+	if len(moved) != 5 {
+		t.Fatalf("moved set = %d, want 5", len(moved))
+	}
+	for d := range seen {
+		if !moved[d] {
+			t.Fatalf("doc %d packed but not in moved set", d)
+		}
+	}
+}
+
+func TestPackLiveDocs_ExcludesTombstoned(t *testing.T) {
+	s := openTestStore(t, DotProduct)
+	seg := newSegment(DotProduct)
+	for _, id := range []string{"x", "y", "z"} {
+		doc, err := s.docIDForAlloc(id)
+		requireNoError(t, err)
+		st, nrm := DotProduct.prepare([]float32{1, 0})
+		seg.append(doc, st, nrm, nil)
+	}
+	dir := t.TempDir()
+	requireNoError(t, writeSealedSegment(dir, seg))
+	ss, err := openSealedSegment(dir, DotProduct)
+	requireNoError(t, err)
+	requireNoError(t, ss.tombstoneSlot(1)) // tombstone "y"
+
+	buckets, moved := packLiveDocs([]*sealedSegment{ss}, DotProduct, 50)
+	got := 0
+	for _, bk := range buckets {
+		got += len(bk.slotDoc)
+	}
+	if got != 2 || len(moved) != 2 {
+		t.Fatalf("packed %d docs (moved %d), want 2 (tombstoned excluded)", got, len(moved))
+	}
+}
+
 func TestStore_segStatsLocked(t *testing.T) {
 	s := openTestStore(t, DotProduct)
 	requireNoError(t, s.Put("a", []float32{1, 0, 0}, nil))

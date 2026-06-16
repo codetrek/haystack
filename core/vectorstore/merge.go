@@ -72,3 +72,34 @@ func (s *Store) segStatsLocked() []segLiveStats {
 	}
 	return out
 }
+
+// packLiveDocs streams the live (non-tombstoned) docs of the input sealed
+// segments through eachLive and bin-packs them into in-memory *segment buckets of
+// at most maxSegSize rows each, returning the buckets and the set of moved docIds.
+//
+// Vectors from eachLive are already in metric-natural stored form (cosine = unit
+// + separate norm); segment.append stores them VERBATIM — do NOT re-run
+// metric.prepare (would double-normalize, gotcha 1). append copies the slice and
+// payload, so aliasing the input mmap is safe. eachLive holds each input's tomb
+// RLock for a consistent per-segment snapshot. The returned moved set is the
+// authoritative list of docs whose global segId the swap must rehome.
+func packLiveDocs(inputs []*sealedSegment, metric Metric, maxSegSize int) (buckets []*segment, moved map[int64]bool) {
+	moved = make(map[int64]bool)
+	cur := newSegment(metric)
+	buckets = append(buckets, cur)
+	for _, ss := range inputs {
+		ss.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
+			if len(cur.slotDoc) >= maxSegSize {
+				cur = newSegment(metric)
+				buckets = append(buckets, cur)
+			}
+			cur.append(docID, stored, norm, ss.payload(slot))
+			moved[docID] = true
+		})
+	}
+	// Drop a trailing empty bucket (all inputs were fully tombstoned).
+	if len(buckets) > 1 && len(buckets[len(buckets)-1].slotDoc) == 0 {
+		buckets = buckets[:len(buckets)-1]
+	}
+	return buckets, moved
+}
