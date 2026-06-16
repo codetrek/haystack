@@ -344,8 +344,24 @@ func (h *hnswIndex) deleteOneLocked(docId int64) error {
 	return h.deleteNodeLocked(nodeId)
 }
 
-// search returns the k nearest neighbors of query (Algorithm 2).
+// search returns the k nearest neighbors of query (Algorithm 2). It is
+// searchFiltered with a nil member predicate (accept all) — the unfiltered path
+// is byte-identical to the pre-Phase-5 behavior, so every existing 2-arg caller
+// and test stays green.
 func (h *hnswIndex) search(query []float32, k int) ([]SearchResult, error) {
+	return h.searchFiltered(query, k, nil)
+}
+
+// searchFiltered is search with an optional member predicate keyed by nodeId. A
+// nil member means "accept all" (identical to the unfiltered search). When
+// non-nil, layer-0 traversal still EXPANDS THROUGH non-member neighbors (graph
+// connectivity is preserved), but only member nodes are ADMITTED to the result
+// heap (filter-during-traversal, architecture §6/§7). The caller raises k (via
+// fetchK = k + tombs + slack) so a selective filter does not under-return: the
+// layer-0 ef is max(efSearch, k), so a larger fetchK widens the beam enough to
+// reach graph-distant members a post-filter would miss. The member func resolves
+// nodeId→slot via the segment's nodeSlot table (graphstore.go) and tests S_seg.
+func (h *hnswIndex) searchFiltered(query []float32, k int, member func(nodeId uint64) bool) ([]SearchResult, error) {
 	if k <= 0 {
 		return nil, fmt.Errorf("vectorstore: k must be > 0, got %d", k)
 	}
@@ -368,7 +384,9 @@ func (h *hnswIndex) search(query []float32, k int) ([]SearchResult, error) {
 		return nil, nil
 	}
 
-	// Phase 1: From top layer down to 1, greedy search with ef=1.
+	// Phase 1: From top layer down to 1, greedy search with ef=1. The descent is
+	// pure navigation (no filtering): it must reach the query's neighborhood even
+	// when the entry region holds no members.
 	curEp := epId
 	// Compare against stored vectors in stored form (cosine: unit vectors).
 	prepared, _ := h.metric.prepare(query)
@@ -398,12 +416,12 @@ func (h *hnswIndex) search(query []float32, k int) ([]SearchResult, error) {
 		}
 	}
 
-	// Phase 2: Layer 0 search with ef=max(efSearch, k).
+	// Phase 2: Layer 0 search with ef=max(efSearch, k), gated by member.
 	ef := h.efSearch
 	if k > ef {
 		ef = k
 	}
-	results, err := h.searchLayer(prepared, curEp, ef, 0)
+	results, err := h.searchLayerFiltered(prepared, curEp, ef, 0, member)
 	if err != nil {
 		return nil, err
 	}
@@ -643,7 +661,100 @@ func (h *hnswIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 	return out, nil
 }
 
-// --- selectNeighborsHeuristic: Algorithm 4 ---
+// searchLayerFiltered is searchLayer with an optional member gate
+// (filter-during-traversal). It keeps TWO bounded max-heaps:
+//
+//   - beam: every visited node (member AND non-member), bounded by ef. It governs
+//     traversal — the expansion frontier and the stop condition — so the search
+//     EXPANDS THROUGH non-member nodes and stays connected. This is the single most
+//     error-prone point: gating the beam/candidate push (not just the result push)
+//     would sever connectivity and under-return for selective filters.
+//   - results: MEMBER nodes only, bounded by ef. This is the admission set returned.
+//
+// A node enters the beam (and thus becomes a traversal candidate) by the usual
+// closeness test against the beam's farthest; it additionally enters results only
+// when member==nil or member(nodeId) is true. With member==nil the two heaps stay
+// identical and the function reduces exactly to searchLayer (regression-guarded).
+func (h *hnswIndex) searchLayerFiltered(query []float32, entryId uint64, ef int, layer int, member func(nodeId uint64) bool) ([]distItem, error) {
+	if member == nil {
+		return h.searchLayer(query, entryId, ef, layer)
+	}
+
+	entryDist, err := h.nodeDist(entryId, query)
+	if err != nil {
+		return nil, err
+	}
+
+	visited := visitedPool.Get().(*visitedSet)
+	visited.begin()
+	defer visitedPool.Put(visited)
+	visited.mark(entryId)
+
+	// candidates: min-heap (closest first) — the unexpanded frontier.
+	cands := &minDistHeap{}
+	cands.push(distItem{id: entryId, dist: entryDist})
+
+	// beam: max-heap bounded by ef over ALL visited nodes — drives traversal.
+	beam := &maxDistHeap{}
+	beam.push(distItem{id: entryId, dist: entryDist})
+
+	// results: max-heap bounded by ef over MEMBER nodes only — the admission set.
+	results := &maxDistHeap{}
+	if member(entryId) {
+		results.push(distItem{id: entryId, dist: entryDist})
+	}
+
+	for cands.Len() > 0 {
+		c := cands.pop()
+
+		// Stop when the closest unexpanded candidate is farther than the farthest
+		// node in the (full) beam: no closer region remains to expand into. Using
+		// the BEAM (not results) here is what lets traversal cross non-member gaps.
+		if beam.Len() >= ef && c.dist > (*beam)[0].dist {
+			break
+		}
+
+		neighbors, err := h.store.GetNeighbors(c.id, layer)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, nbId := range neighbors {
+			if visited.seen(nbId) {
+				continue
+			}
+			visited.mark(nbId)
+
+			nbDist, err := h.nodeDist(nbId, query)
+			if err != nil {
+				continue // node may have been deleted
+			}
+
+			// Beam admission (traversal): closer than the beam's farthest, or beam
+			// not yet full. Always expand through it regardless of membership.
+			if beam.Len() < ef || nbDist < (*beam)[0].dist {
+				cands.push(distItem{id: nbId, dist: nbDist})
+				beam.push(distItem{id: nbId, dist: nbDist})
+				if beam.Len() > ef {
+					beam.pop()
+				}
+				// Result admission (the gate): members only.
+				if member(nbId) {
+					results.push(distItem{id: nbId, dist: nbDist})
+					if results.Len() > ef {
+						results.pop()
+					}
+				}
+			}
+		}
+	}
+
+	out := make([]distItem, results.Len())
+	for i := range out {
+		out[i] = (*results)[i]
+	}
+	return out, nil
+}
 
 // selectNeighborsHeuristic selects up to M neighbors using the heuristic
 // from the paper. It ensures diversity by only adding a candidate if it

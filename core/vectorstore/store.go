@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/kv"
@@ -79,6 +80,12 @@ type Store struct {
 	// attrSearchT is the per-segment |S_seg| brute-S/graph∩S threshold
 	// (defaultAttrSearchT unless overridden). Tunable; tests pin it per-case.
 	attrSearchT int
+	// graphSDispatches counts how many times the filtered indexed leg took the
+	// graph∩S branch (|S_seg| > attrSearchT). Test-only observability so the branch
+	// dispatch can be pinned per-case (appendix #25) — brute-S is a correct superset
+	// either way, so a pure oracle check cannot prove the graph∩S path ran. Atomic
+	// so concurrent Search calls (each under s.mu.RLock) increment it race-free.
+	graphSDispatches atomic.Uint64
 
 	buildMu sync.Mutex // serializes builder graph install + manifest rewrite
 	// quiescence accounting (replaces two sync.WaitGroups). nInflightBuilds and
@@ -757,10 +764,10 @@ func (s *Store) Delete(id string) error {
 // HNSW). When non-nil, each leg restricts to the filter-MATCHING LIVE set: the
 // head/pending legs apply a brute payload eval, and each indexed segment evaluates
 // the filter to its segment-local slot bitmap S_seg, ANDs it with the live set
-// (so deletes never leak — §6 "member AND live"), and brute-scores only those
-// slots. The adaptive graph∩S leg (|S_seg| > T) and the HNSW member predicate are
-// layered on in Phase-5 Task 9; this leg is the exact brute-S correctness floor
-// (equivalent to T = ∞) and is the same exact answer the adaptive path must match.
+// (so deletes never leak — §6 "member AND live"), then ADAPTIVELY dispatches on
+// |S_seg| vs the per-segment threshold attrSearchT: |S_seg| ≤ T brute-scores only
+// those slots (exact), while |S_seg| > T runs the HNSW with a member predicate
+// (filter-during-traversal — graph∩S). Both feed the same shared top-k heap.
 func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, error) {
 	if k <= 0 {
 		return nil, errors.New("vectorstore: k must be positive")
@@ -809,14 +816,51 @@ func (s *Store) Search(q []float32, k int, filter Predicate) ([]SearchResult, er
 			continue
 		}
 		// Filtered indexed leg: eval filter → S_seg (segment-local slot bitmap),
-		// AND with live, then brute-score the matching slots. (The adaptive
-		// graph∩S branch for |S_seg| > T arrives in Task 9; this is its exact
-		// brute-S floor.)
+		// AND with live (§6: deletes never leak), then ADAPTIVELY dispatch on
+		// |S_seg| vs the per-segment threshold T (§6 "阈值 T 按段内 |S_seg| 判"):
+		//   - |S_seg| ≤ T → brute-S: exact distance over only the matching slots.
+		//   - |S_seg| > T → graph∩S: HNSW filter-during-traversal, a member predicate
+		//     (nodeId→slot→S_seg) admitting only matching nodes to the result heap
+		//     while still traversing through non-members for connectivity.
+		// Both legs feed the same shared top-k heap.
 		sseg := s.evalSegLocked(ss, filter)
-		s.andLive(ss, sseg) // member ∧ live (§6: deletes never leak)
-		sseg.iterate(func(slot int) {
-			tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: s.metric.distance(ss.getVectorRef(slot), pq)})
-		})
+		s.andLive(ss, sseg) // member ∧ live
+		card := sseg.count()
+		if card == 0 {
+			continue
+		}
+		if card <= s.attrSearchT {
+			// Brute-S over ONLY the S_seg slots (exact).
+			sseg.iterate(func(slot int) {
+				tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: s.metric.distance(ss.getVectorRef(slot), pq)})
+			})
+			continue
+		}
+		// graph∩S: member keyed by nodeId via the segment's nodeSlot table.
+		s.graphSDispatches.Add(1)
+		gs := bi.store
+		member := func(nodeId uint64) bool {
+			if nodeId >= uint64(len(gs.nodeSlot)) {
+				return false
+			}
+			slot := gs.nodeSlot[nodeId]
+			return slot >= 0 && sseg.get(slot)
+		}
+		// Over-fetch for both tombstones and non-members: ef = max(efSearch, fetchK),
+		// so a selective filter still reaches enough members (Task 10 red-proofs this).
+		fetchK := k + ss.tombCount() + 1
+		hits, err := bi.idx.searchFiltered(q, fetchK, member)
+		if err != nil {
+			return nil, err
+		}
+		for _, h := range hits {
+			// sseg is already ANDed live, but re-resolve once for the rare
+			// concurrent-delete window (cheap insurance, mirrors the unfiltered leg).
+			if _, live := ss.slotOfDoc(h.DocID); !live {
+				continue
+			}
+			tk.offer(h)
+		}
 	}
 
 	out := tk.sorted()
