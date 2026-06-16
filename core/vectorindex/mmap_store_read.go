@@ -53,6 +53,15 @@ func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
 // algorithm's skip-on-error logic keeps dead nodes out of search navigation and
 // entry-point selection (mirrors GetDocId's guard).
 func (s *MmapStore) nodeLive(id uint64) bool {
+	// A faulted store has un-rolled-back in-place writes from an aborted/crashed
+	// transaction (inflated TotalSlots, leaked Occupied bytes), so no node can be
+	// trusted as live until a reopen replays only committed records. Recovery is
+	// via reopen; reject every node here so the live instance stops serving
+	// uncommitted state (VEC-009). Safe to read s.faulted: every nodeLive caller
+	// holds muWrite.RLock, which excludes fault() (muWrite.Lock).
+	if s.faulted != nil {
+		return false
+	}
 	if id >= s.nodeCapacity || id >= s.meta.TotalSlots {
 		return false
 	}
@@ -203,6 +212,10 @@ func (s *MmapStore) GetNodeLevel(id uint64) (int, error) {
 // GetEntryPoint returns the entry point node ID and its level.
 func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 	s.muWrite.RLock()
+	if s.faulted != nil {
+		s.muWrite.RUnlock()
+		return 0, 0, s.faulted // VEC-009: don't serve an aborted/uncommitted entry point
+	}
 	ep := s.meta.EntryPoint
 	el := s.meta.EntryLevel
 	s.muWrite.RUnlock()
@@ -257,6 +270,10 @@ func (s *MmapStore) HighestLiveNodeExcluding(exclude uint64) (uint64, int, bool,
 // Triggers a lazy build of docToNode on first call (write-path only; held under muWrite).
 func (s *MmapStore) GetNodeId(docId int64) (uint64, bool, error) {
 	s.muWrite.Lock()
+	if s.faulted != nil {
+		s.muWrite.Unlock()
+		return 0, false, s.faulted // VEC-009: don't map docIds on a faulted store
+	}
 	s.ensureDocToNode()
 	s.muWrite.Unlock()
 
@@ -279,6 +296,9 @@ func (s *MmapStore) GetDocId(id uint64) (int64, bool, error) {
 	s.muWrite.RLock()
 	defer s.muWrite.RUnlock()
 
+	if s.faulted != nil {
+		return 0, false, s.faulted // VEC-009: don't surface aborted-txn docIds
+	}
 	if id >= s.nodeCapacity {
 		return 0, false, fmt.Errorf("MmapStore.GetDocId: id %d out of range (cap %d)", id, s.nodeCapacity)
 	}
