@@ -179,3 +179,43 @@ func indexInfoByName(t *testing.T, s *Store, name string) VectorIndexInfo {
 	t.Fatalf("index %q not found", name)
 	return VectorIndexInfo{}
 }
+
+func TestStore_IndexLag_CountsPendingSegments(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(21))
+	dim := 8
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	for i := 0; i < 40; i++ {
+		requireNoError(t, s.Put("a-"+itoa(i), randVec(), nil))
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+
+	// default index: fully indexed → zero lag.
+	lag := s.IndexLag("default")
+	if lag.PendingSegments != 0 || lag.PendingVectors != 0 {
+		t.Fatalf("default lag should be zero, got %+v", lag)
+	}
+
+	// A brand-new index is pending for the one sealed segment until builds finish.
+	requireNoError(t, s.CreateVectorIndex("slow", VectorIndexConfig{Type: "hnsw", Metric: Cosine}))
+	lagNew := s.IndexLag("slow")
+	if lagNew.PendingSegments != 1 || lagNew.PendingVectors != 40 {
+		t.Fatalf("new index lag = %+v, want 1 segment / 40 vectors pending", lagNew)
+	}
+	requireNoError(t, s.WaitForIndex())
+	if l := s.IndexLag("slow"); l.PendingSegments != 0 {
+		t.Fatalf("slow index should be fully built, got %+v", l)
+	}
+
+	// Unknown index → Exists=false.
+	if l := s.IndexLag("ghost"); l.Exists {
+		t.Fatalf("unknown index must report Exists=false, got %+v", l)
+	}
+}

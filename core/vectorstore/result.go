@@ -20,6 +20,14 @@ type VectorIndexInfo struct {
 	Indexed        int // segments whose graph is built (pending = Segments-Indexed)
 }
 
+// IndexLagInfo reports how much of a named index is still pending (no graph yet),
+// in segments and (live) vectors. PendingSegments == 0 means fully built (§7).
+type IndexLagInfo struct {
+	Exists          bool
+	PendingSegments int
+	PendingVectors  int
+}
+
 // topK keeps the k smallest-distance results seen, using a max-heap (largest
 // distance at the root) so the worst kept result is O(1) to inspect and evict.
 type topK struct {

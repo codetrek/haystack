@@ -363,6 +363,26 @@ func (s *Store) ListVectorIndexes() []VectorIndexInfo {
 	return out
 }
 
+// IndexLag returns the pending build progress of a named index (architecture §7).
+// An unknown index reports Exists=false with zero counts. The vector count sums
+// the LIVE rows of each pending segment, the unit a WaitForIndex drain converges.
+func (s *Store) IndexLag(name string) IndexLagInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	vx, ok := s.indexes[name]
+	if !ok {
+		return IndexLagInfo{}
+	}
+	li := IndexLagInfo{Exists: true}
+	for i, sid := range s.sealedID {
+		if vx.graphs[sid] == nil {
+			li.PendingSegments++
+			li.PendingVectors += s.sealed[i].count() - s.sealed[i].tombCount()
+		}
+	}
+	return li
+}
+
 // attrDeclsSnapshotLocked returns a private copy of the declared attr set so an
 // off-lock consumer (the merge write phase) reads a stable view while a concurrent
 // CreateAttrIndex/DropAttrIndex (under s.mu) may mutate the live map. Caller holds
