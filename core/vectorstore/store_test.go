@@ -204,3 +204,34 @@ func TestStore_Search_RejectsBadVectorAndK(t *testing.T) {
 		t.Fatal("k<=0 should be rejected")
 	}
 }
+
+func TestStore_Reopen_AfterClose(t *testing.T) {
+	dir := t.TempDir()
+	store := newTestKV(t) // shared across both opens, closed at cleanup
+
+	s1, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, []byte("pa")))
+	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, []byte("pb")))
+	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, []byte("pa2"))) // upsert
+	requireNoError(t, s1.Delete("b"))
+	requireNoError(t, s1.Close()) // graceful: commits idtable + flushes WAL
+
+	s2, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	requireNoError(t, err)
+	defer s2.Close()
+
+	v, pl, found, err := s2.Get("a")
+	requireNoError(t, err)
+	if !found || string(pl) != "pa2" || !approxEqual(v[2], 1, 1e-4) {
+		t.Fatalf("after reopen Get(a) = %v,%q,%v, want [0 0 1],pa2,true", v, pl, found)
+	}
+	if _, _, found, _ := s2.Get("b"); found {
+		t.Fatal("deleted id b must stay deleted after reopen")
+	}
+	res, err := s2.Search([]float32{0, 0, 1}, 5)
+	requireNoError(t, err)
+	if len(res) != 1 {
+		t.Fatalf("live results after reopen = %d, want 1", len(res))
+	}
+}
