@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// TestFaultedStoreRejectsAbortedReads_VEC009 red-proofs VEC-009: after a partial
+// TestFaultedStoreRejectsAbortedReads red-proofs VEC-009: after a partial
 // transaction ABORT, the faulted MmapStore must not keep serving the aborted
 // (never-committed) node's data or a stale entry point on the LIVE instance.
 //
@@ -15,7 +15,7 @@ import (
 // GetDocId/GetEntryPoint therefore surfaced the zombie node and aborted EP until
 // the store was reopened. The contract is "recovery is via reopen", so a faulted
 // store must reject reads rather than hand out uncommitted state.
-func TestFaultedStoreRejectsAbortedReads_VEC009(t *testing.T) {
+func TestFaultedStoreRejectsAbortedReads(t *testing.T) {
 	dir := t.TempDir()
 	s, err := OpenMmapStore(dir, MmapStoreOptions{Metric: DotProduct, Dim: 4, M: 4})
 	if err != nil {
