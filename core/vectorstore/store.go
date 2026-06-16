@@ -138,3 +138,63 @@ func (s *Store) applyPut(r putRecord) {
 	}
 	s.seg.append(r.DocID, r.Stored, r.Norm, r.Payload)
 }
+
+// Put inserts or replaces the vector and payload for id. It is crash-atomic: a
+// single WAL record (the string id, its docId, the old slot to tombstone if any,
+// and the new stored vector + norm + payload) is fsync'd before the in-memory
+// state is mutated, so a crash either loses the whole Put or applies it whole on
+// replay. The string→docId mapping is recovered from the same WAL record, so Put
+// is fully durable on return without depending on idtable's lazy commit.
+func (s *Store) Put(id string, v []float32, payload []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := validateVector(v, s.seg.dim, s.metric); err != nil {
+		return err
+	}
+	docID, err := s.docIDForAlloc(id)
+	if err != nil {
+		return err
+	}
+	stored, norm := s.metric.prepare(v)
+
+	oldSlot := int64(-1)
+	if slot, ok := s.seg.slotOfDoc(docID); ok {
+		oldSlot = int64(slot)
+	}
+	rec := putRecord{ID: id, DocID: docID, OldSlot: oldSlot, Stored: stored, Norm: norm, Payload: payload}
+	if _, err := s.wal.Append(recPut, encodePut(rec)); err != nil {
+		return err
+	}
+	if err := s.wal.Sync(); err != nil {
+		return err
+	}
+	s.idToDoc[id] = docID
+	s.applyPut(rec)
+	return nil
+}
+
+// Get returns the original (restored) vector and payload for id. Reads never
+// allocate a docId: an unknown id (never Put) returns found=false. The returned
+// vector and payload are fresh copies the caller may mutate freely.
+func (s *Store) Get(id string) (v []float32, payload []byte, found bool, err error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	docID, ok := s.idToDoc[id]
+	if !ok {
+		return nil, nil, false, nil
+	}
+	slot, ok := s.seg.slotOfDoc(docID)
+	if !ok {
+		return nil, nil, false, nil
+	}
+	stored, norm, pl, live := s.seg.read(slot)
+	if !live {
+		return nil, nil, false, nil
+	}
+	// restore is the identity for non-cosine metrics, so it may alias the
+	// segment's internal buffer. Always hand the caller a private copy.
+	out := append([]float32(nil), s.metric.restore(stored, norm)...)
+	plcp := append([]byte(nil), pl...)
+	return out, plcp, true, nil
+}
