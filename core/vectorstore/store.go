@@ -64,6 +64,9 @@ type Store struct {
 
 	buildMu sync.Mutex     // serializes builder graph install + manifest rewrite
 	builds  sync.WaitGroup // tracks in-flight background builds (WaitForIndex/Close)
+	merges  sync.WaitGroup // tracks in-flight merges (WaitForMerge/Close)
+	closing bool           // set under s.mu in Close; gates new merge launches so a
+	//                        merges.Add never races a zero-counter merges.Wait (appendix #1)
 
 	manifestVersion uint64 // monotonic manifest version (bumped per rewrite)
 }
@@ -241,12 +244,22 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 // Metric returns the store's distance metric.
 func (s *Store) Metric() Metric { return s.metric }
 
-// Close waits for any in-flight background builds, then flushes and releases the
-// WAL, sealed-segment mmaps, and idtable. Builds are awaited BEFORE taking s.mu
-// because buildAndPublish itself acquires s.mu to install its graph — holding the
-// lock across the wait would deadlock. Closing the allocator commits any pending
-// id→docId mappings re-driven during replay, making the recovered state durable.
+// Close waits for any in-flight background merges and builds, then flushes and
+// releases the WAL, sealed-segment mmaps, and idtable. The drain order is
+// load-bearing: a merge spawns output builds, so merges must settle first; both
+// are awaited BEFORE taking s.mu because mergeAndPublish/buildAndPublish acquire
+// s.mu transiently — holding it across the wait would deadlock. To make
+// merges.Wait()/builds.Wait() safe against a concurrent merge launch (which calls
+// merges.Add), Close first sets s.closing under s.mu; every launch site
+// (mergeNow/Compact/maybeMergeLocked) checks s.closing under s.mu and refuses to
+// Add once closing, so a merges.Add never races a zero-counter merges.Wait
+// (appendix #1). Closing the allocator commits any pending id→docId mappings
+// re-driven during replay, making the recovered state durable.
 func (s *Store) Close() error {
+	s.mu.Lock()
+	s.closing = true
+	s.mu.Unlock()
+	s.merges.Wait()
 	s.builds.Wait()
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -1,6 +1,11 @@
 package vectorstore
 
-import "testing"
+import (
+	"math/rand"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestMergeConfig_Defaults(t *testing.T) {
 	c := mergeConfig{}.withDefaults()
@@ -131,5 +136,134 @@ func TestStore_segStatsLocked(t *testing.T) {
 	}
 	if r := st.liveRatio(); r < 0.66 || r > 0.67 {
 		t.Fatalf("liveRatio = %v, want ~0.666", r)
+	}
+}
+
+// TestMerge_CompactOfOne reclaims a heavy-tombstone single segment: a "merge of
+// one" rewrites only the live docs into a fresh segment, the old dir is deleted,
+// docIds survive, and Search still returns the live set. (architecture §4.9
+// "单段 compact = merge 1 个".)
+func TestMerge_CompactOfOne(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(3))
+	dim := 8
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	live := map[int64][]float32{}
+	for i := 0; i < 40; i++ {
+		id := "d-" + itoa(i)
+		v := randVec()
+		requireNoError(t, s.Put(id, v, nil))
+		live[s.idToDoc[id]] = v
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+	oldDir := filepath.Join(s.dir, "seg-1-0")
+
+	// Delete 60% → liveRatio 0.4 < mergeFloor; merge reclaims it.
+	for i := 0; i < 40; i++ {
+		if i%5 < 3 { // 60% deleted
+			id := "d-" + itoa(i)
+			requireNoError(t, s.Delete(id))
+			delete(live, s.idToDoc[id])
+		}
+	}
+
+	requireNoError(t, s.mergeNow([]segID{1}))
+	requireNoError(t, s.WaitForMerge())
+
+	// Old input dir gone (space reclaimed); a NEW segId replaced it.
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
+		t.Fatal("merge did not delete the old input segment dir")
+	}
+	s.mu.RLock()
+	nSealed := len(s.sealed)
+	newID := s.sealedID[0]
+	newCount := s.sealed[0].count()
+	newTomb := s.sealed[0].tombCount()
+	s.mu.RUnlock()
+	if nSealed != 1 {
+		t.Fatalf("sealed segments after merge = %d, want 1", nSealed)
+	}
+	if newID == segID(1) {
+		t.Fatal("merge reused old segId; multi-id model requires a fresh segId")
+	}
+	if newCount != 16 || newTomb != 0 {
+		t.Fatalf("merged seg count=%d tomb=%d, want 16 live / 0 tomb (repacked)", newCount, newTomb)
+	}
+
+	// docToSeg rehomed every surviving doc to the new segment.
+	s.mu.RLock()
+	for doc := range live {
+		if s.docToSeg[doc] != newID {
+			s.mu.RUnlock()
+			t.Fatalf("doc %d not rehomed to merged segId %d (got %d)", doc, newID, s.docToSeg[doc])
+		}
+	}
+	s.mu.RUnlock()
+
+	// Survivors readable, deleted gone, recall holds.
+	if _, _, found, _ := s.Get("d-0"); found { // d-0: i%5==0 → deleted
+		t.Fatal("deleted d-0 resurrected by merge")
+	}
+	if _, _, found, _ := s.Get("d-3"); !found { // d-3: i%5==3 → live
+		t.Fatal("live d-3 lost by merge")
+	}
+	var sum float64
+	for it := 0; it < 20; it++ {
+		q := randVec()
+		got, err := s.Search(q, 5)
+		requireNoError(t, err)
+		sum += recallAtK(got, bruteForceKNN(Cosine, q, live, 5))
+	}
+	if avg := sum / 20; avg < 0.8 {
+		t.Fatalf("post-merge recall@5 = %.3f, want >= 0.8", avg)
+	}
+}
+
+// TestMerge_MultiInputRehomesOnlyMovedDocs proves the two-level id invariant: a
+// 2-input merge updates docToSeg ONLY for the merged docs; a third untouched
+// segment keeps its segId and its docs' mapping (architecture §4.6).
+func TestMerge_MultiInputRehomesOnlyMovedDocs(t *testing.T) {
+	s := openTestStore(t, DotProduct)
+	mkSeg := func(ids []string) {
+		for _, id := range ids {
+			requireNoError(t, s.Put(id, []float32{float32(len(id)), 1, 0}, nil))
+		}
+		requireNoError(t, s.Seal())
+	}
+	mkSeg([]string{"a", "aa"}) // seg 1
+	mkSeg([]string{"b", "bb"}) // seg 2
+	mkSeg([]string{"c", "cc"}) // seg 3 (the bystander)
+	requireNoError(t, s.WaitForIndex())
+
+	cDoc, ccDoc := s.idToDoc["c"], s.idToDoc["cc"]
+
+	requireNoError(t, s.mergeNow([]segID{1, 2}))
+	requireNoError(t, s.WaitForMerge())
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	// Bystander seg 3 still present with its original segId.
+	if s.sealedByID(3) == nil {
+		t.Fatal("untouched segment 3 vanished after merging 1+2")
+	}
+	if s.docToSeg[cDoc] != segID(3) || s.docToSeg[ccDoc] != segID(3) {
+		t.Fatalf("bystander docs c/cc wrongly rehomed: %d,%d (want 3)", s.docToSeg[cDoc], s.docToSeg[ccDoc])
+	}
+	// Merged docs point at a brand-new segId that is not 1, 2, or 3.
+	aDoc := s.idToDoc["a"]
+	newID := s.docToSeg[aDoc]
+	if newID == 1 || newID == 2 || newID == 3 || newID == headSegID {
+		t.Fatalf("merged doc 'a' segId = %d, want a fresh sealed id", newID)
+	}
+	// Inputs 1 and 2 are gone from the set.
+	if s.sealedByID(1) != nil || s.sealedByID(2) != nil {
+		t.Fatal("merge inputs 1/2 still in the sealed set after swap")
 	}
 }
