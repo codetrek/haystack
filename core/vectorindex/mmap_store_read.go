@@ -11,21 +11,38 @@ import (
 // returned slice is owned by the caller. For cosine the stored unit vector is
 // restored to its original scale via the stored norm; for the raw metrics the
 // stored vector is the original.
+//
+// The copy/restore is done while holding muWrite.RLock, which excludes a
+// writer's grow (remap): the zero-copy mmap view must never escape the lock to
+// be read by lock-less caller code, or a concurrent munmap turns it into a
+// use-after-free (audit #2).
 func (s *MmapStore) GetVector(id uint64) ([]float32, error) {
-	ref, err := s.GetVectorRef(id)
-	if err != nil {
-		return nil, err
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
+
+	if id >= s.vecCapacity {
+		return nil, fmt.Errorf("MmapStore.GetVector: id %d out of range (cap %d)", id, s.vecCapacity)
 	}
+	if !s.nodeLive(id) {
+		return nil, fmt.Errorf("MmapStore.GetVector: node %d is not live (deleted/zombie/unoccupied)", id)
+	}
+	offset := int64(pageSize) + int64(id)*int64(s.vecSlotSize)
+	if offset%4 != 0 {
+		return nil, fmt.Errorf("MmapStore.GetVector: unaligned offset %d for id %d", offset, id)
+	}
+	ptr := (*float32)(unsafe.Pointer(&s.vectors[offset]))
+	ref := unsafe.Slice(ptr, s.dim) // valid only while the lock is held
+
 	if s.metric.storesNormalized() {
-		norm, err := s.GetNorm(id)
-		if err != nil {
-			return nil, err
-		}
-		return s.metric.restore(ref, norm), nil // allocates a fresh slice
+		// Read the norm from the node slot under the same lock, then restore
+		// into a fresh slice — all before releasing the lock that pins the mmap.
+		normOff := int64(pageSize) + int64(id)*int64(nodeSlotSize)
+		norm := math.Float32frombits(binary.LittleEndian.Uint32(s.nodes[normOff+4 : normOff+8]))
+		return s.metric.restore(ref, norm), nil // restore allocates a fresh slice
 	}
-	vec := make([]float32, len(ref))
-	copy(vec, ref)
-	return vec, nil
+	out := make([]float32, len(ref))
+	copy(out, ref)
+	return out, nil
 }
 
 // nodeLive reports whether id refers to a committed, occupied, non-deleted

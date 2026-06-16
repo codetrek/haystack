@@ -107,18 +107,20 @@ func TestRemapFileMunmapError(t *testing.T) {
 	orig := mmapFree
 	defer func() { mmapFree = orig }()
 	mmapFree = func([]byte) error { return errInjected }
-	// munmap fails first, before the region is touched, so the store stays usable.
-	if err := s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, s.vecCapacity+1, s.vecSlotSize, 8); err == nil {
-		t.Fatal("expected munmap error")
+	// map-new-then-unmap-old: the old mapping is unmapped last and best-effort,
+	// so a munmap failure does NOT fail the grow — the store is already swapped
+	// onto the new mapping and stays usable.
+	if err := s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, s.vecCapacity+1, s.vecSlotSize, 8); err != nil {
+		t.Fatalf("grow should succeed despite a best-effort unmap failure: %v", err)
 	}
 }
 
 func TestRemapFileTruncateError(t *testing.T) {
 	s := openTestStore(t)
 	defer s.Close()
-	// Operate on a throwaway file+mapping so the store's real vectors region is
-	// left intact (remapFile unmaps the region before truncating, so failing on
-	// the real one would leave a dangling mapping).
+	// Operate on a throwaway file+mapping (belt-and-suspenders): remapFile now
+	// truncates before unmapping, so a truncate failure already leaves the real
+	// region intact, but keep this isolated regardless.
 	f, err := fsCreate(t.TempDir() + "/throw.dat")
 	if err != nil {
 		t.Fatal(err)

@@ -148,25 +148,33 @@ func (s *MmapStore) growUpper(requiredCap uint64) error {
 	return err
 }
 
-// remapFile is the common grow logic: munmap → ftruncate → update header capacity → re-mmap.
+// remapFile is the common grow logic. It grows the file, maps the new larger
+// region, then unmaps the old one (map-new-then-unmap-old): a failure at any
+// step before the swap leaves the old mapping intact and *data/*cap unchanged,
+// so reads never touch unmapped memory (audit #3).
 func (s *MmapStore) remapFile(f osFile, data *[]byte, cap *uint64, newCap uint64, slotSize int, capHeaderOffset int) error {
-	if err := mmapFree(*data); err != nil {
-		return fmt.Errorf("grow: munmap: %w", err)
-	}
-
 	newSize := int64(pageSize) + int64(newCap)*int64(slotSize)
+
+	// Grow the file first. The old mapping stays valid (it just doesn't cover
+	// the new tail), so a truncate failure leaves the store fully readable.
 	if err := f.Truncate(newSize); err != nil {
 		return fmt.Errorf("grow: truncate: %w", err)
 	}
 
+	// Map the new region BEFORE unmapping the old one, so a mmap failure also
+	// leaves the old mapping in place.
 	mapped, err := mmapAlloc(f.Fd(), 0, int(newSize), mmapRead|mmapWrite)
 	if err != nil {
 		return fmt.Errorf("grow: mmap: %w", err)
 	}
-	*data = mapped
 
-	// Update capacity in header.
-	binary.LittleEndian.PutUint64(mapped[capHeaderOffset:], newCap)
+	old := *data
+	*data = mapped
+	binary.LittleEndian.PutUint64(mapped[capHeaderOffset:], newCap) // update header capacity
 	*cap = newCap
+
+	// The old mapping is no longer referenced; unmap best-effort — a failure
+	// here only leaks address space, the store is already on the new mapping.
+	_ = mmapFree(old)
 	return nil
 }
