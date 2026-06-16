@@ -26,8 +26,11 @@ type MmapStoreOptions struct {
 //   - All write methods (PutNode, SetNeighbors, SetNorm, SetEntryPoint,
 //     DeleteNode, NextNodeId, and the transaction primitive txnBegin,
 //     txnCommit, txnAbort) are serialised by muWrite.Lock().
-//   - Read methods use fine-grained RLocks (muVec, muGraph, muNodes, muDoc).
-//   - GetEntryPoint uses muWrite.RLock to safely read meta fields.
+//   - Read methods that touch the vector mmap (GetVector, GetVectorRef) and the
+//     node slots (GetNorm, GetNodeLevel, GetDocId, GetEntryPoint) hold
+//     muWrite.RLock, which excludes every writer (and thus any grow/remap), so
+//     the mmap slices stay valid for the read. Graph reads use muGraph; the
+//     docToNode map uses muDoc.
 //   - Grow functions (ensureCapacity / growFile) are called under muWrite
 //     and do not acquire additional locks.
 type MmapStore struct {
@@ -58,7 +61,6 @@ type MmapStore struct {
 	docToNodeBuilt bool // docToNode is built lazily on first write
 
 	muWrite sync.RWMutex // serialises all write methods; readers use RLock for meta fields
-	muVec   sync.RWMutex
 	muGraph sync.RWMutex
 	muNodes sync.RWMutex
 	muDoc   sync.RWMutex // protects docToNode
@@ -238,9 +240,12 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 		EntryPoint: ^uint64(0), // sentinel: no entry point
 	}
 
-	if err := writeMetaHeader(s.dir, &s.meta); err != nil {
-		return err
-	}
+	// Create the 4 data files BEFORE publishing meta.bin. meta.bin is the
+	// new-vs-existing sentinel (OpenMmapStore stats it), and writeMetaHeader now
+	// fsyncs the rename so meta.bin is durable. If meta.bin were written first, a
+	// crash before the .dat files exist would leave a durable sentinel with no
+	// data files, and the reopen would take the existing-index branch and fail in
+	// mmapAll. Publishing meta.bin last makes a half-built index reopen as "new".
 
 	// vectors.dat
 	vecHdr := VectorsHeader{Magic: magicVectors, Dim: uint32(s.dim), Capacity: cap}
@@ -274,9 +279,16 @@ func (s *MmapStore) initAllFiles(cap uint64) error {
 		return fmt.Errorf("graph_upper.dat: %w", err)
 	}
 
-	// fsync the directory so the newly-created data files' entries are durable.
+	// fsync the directory so the newly-created data files' entries are durable
+	// before we publish meta.bin as the existence sentinel.
 	if err := fsyncDir(s.dir); err != nil {
 		return fmt.Errorf("initAllFiles: fsync dir: %w", err)
+	}
+
+	// Publish meta.bin LAST: writeMetaHeader does its own atomic rename + dir
+	// fsync, so once this returns the index is complete and durable.
+	if err := writeMetaHeader(s.dir, &s.meta); err != nil {
+		return err
 	}
 
 	return nil

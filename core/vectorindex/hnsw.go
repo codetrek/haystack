@@ -81,13 +81,22 @@ func NewHNSWIndex(store NodeStore, opts ...Option) *HNSWIndex {
 }
 
 // randomLevel returns a random level using the formula from the paper:
-// floor(-ln(uniform(0,1)) * mL)
+// floor(-ln(uniform(0,1)) * mL), clamped to defaultMaxLayers. The store
+// pre-allocates exactly defaultMaxLayers upper layers per slot, addressed as
+// layerIdx = layer-1 in [0, maxLayers); the highest valid node level is thus
+// defaultMaxLayers itself (its top layer maps to layerIdx maxLayers-1). A level
+// above that would make setNeighborsUpper error on the missing layer, aborting
+// the insert txn and faulting the store.
 func (h *HNSWIndex) randomLevel() int {
 	r := h.rng.Float64()
 	if r == 0 {
 		r = 1e-18 // avoid log(0)
 	}
-	return int(math.Floor(-math.Log(r) * h.mL))
+	level := int(math.Floor(-math.Log(r) * h.mL))
+	if level > defaultMaxLayers {
+		level = defaultMaxLayers
+	}
+	return level
 }
 
 // runInTxnLocked brackets apply() in a store transaction. On apply error it
@@ -130,8 +139,12 @@ func (h *HNSWIndex) validateVector(v []float32) error {
 	// vector, so reject instead of persisting NaN/Inf or poisoning a search
 	// (audit #6/#10). norm() uses the SIMD fast path, so this is cheap.
 	if h.metric == Cosine {
-		if n := h.metric.norm(v); math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
+		n := h.metric.norm(v)
+		if math.IsNaN(float64(n)) || math.IsInf(float64(n), 0) {
 			return fmt.Errorf("vectorindex: cosine vector norm is not finite (NaN/Inf component or overflow)")
+		}
+		if n != 0 && math.IsInf(float64(1.0/n), 0) {
+			return fmt.Errorf("vectorindex: cosine vector norm %g is too small to normalize without overflow", n)
 		}
 	}
 	return nil
@@ -327,6 +340,9 @@ func (h *HNSWIndex) deleteOneLocked(docId int64) error {
 
 // Search returns the k nearest neighbors of query (Algorithm 2).
 func (h *HNSWIndex) Search(query []float32, k int) ([]SearchResult, error) {
+	if k <= 0 {
+		return nil, fmt.Errorf("vectorindex: k must be > 0, got %d", k)
+	}
 	if err := h.validateVector(query); err != nil {
 		return nil, err
 	}

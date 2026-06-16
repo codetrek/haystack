@@ -64,8 +64,9 @@ func (s *MmapStore) growFile(which fileType, requiredCap uint64) error {
 }
 
 func (s *MmapStore) growVectors(requiredCap uint64) error {
-	// Caller holds muWrite. We also need muVec to block concurrent readers
-	// of s.vectors while remapFile replaces the slice.
+	// Caller holds muWrite, which excludes every reader of s.vectors (GetVector
+	// and GetVectorRef both take muWrite.RLock), so remapFile can replace the
+	// slice with no separate vector lock.
 
 	// Re-check capacity.
 	if requiredCap <= s.vecCapacity {
@@ -79,10 +80,7 @@ func (s *MmapStore) growVectors(requiredCap uint64) error {
 		newCap *= 2
 	}
 
-	s.muVec.Lock()
-	err := s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, newCap, s.vecSlotSize, 8) // VectorsHeader.Capacity at offset 8
-	s.muVec.Unlock()
-	return err
+	return s.remapFile(s.vecFile, &s.vectors, &s.vecCapacity, newCap, s.vecSlotSize, 8) // VectorsHeader.Capacity at offset 8
 }
 
 func (s *MmapStore) growNodes(requiredCap uint64) error {

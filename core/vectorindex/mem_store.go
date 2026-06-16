@@ -80,6 +80,8 @@ func (m *MemNodeStore) PutNode(id uint64, level int, vector []float32, docId int
 	defer m.mu.Unlock()
 	if m.dim == 0 && len(vector) > 0 {
 		m.dim = len(vector) // learn dim from the first inserted vector
+	} else if m.dim != 0 && len(vector) != m.dim {
+		return fmt.Errorf("MemNodeStore.PutNode: vector dimension mismatch: got %d, want %d", len(vector), m.dim)
 	}
 	stored, norm := m.metric.prepare(vector)
 	cp := make([]float32, len(stored))
