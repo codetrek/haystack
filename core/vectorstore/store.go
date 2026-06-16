@@ -94,6 +94,14 @@ type Store struct {
 	//     (the highest-risk reconciliation durability window, appendix #7).
 	testHookAfterWrite func(p *mergePlan) bool
 	testHookAfterSwap  func(p *mergePlan) bool
+	// testHookInMergeWindow (nil in production) is invoked in mergeAndPublish AFTER
+	// the off-lock output write+reopen and BEFORE the swap takes buildMu/s.mu — the
+	// exact window in which a concurrent Delete/Put can mutate an input doc's
+	// liveness. Unlike the two crash seams it does NOT abort: it lets a test block
+	// here on a real concurrent goroutine, deterministically forcing the reconcile
+	// path (step 2a) to run against mutations that landed mid-merge. It holds NO
+	// lock, so the concurrent mutation can take s.mu freely.
+	testHookInMergeWindow func(p *mergePlan)
 }
 
 // Open creates or recovers a Store at opts.Dir, replaying the WAL to rebuild the

@@ -212,6 +212,14 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		outSS[i] = ss
 	}
 
+	// Off-lock merge window seam (test-only): outputs are written+reopened but the
+	// swap has not taken s.mu yet. A test blocks here on a concurrent goroutine to
+	// deterministically race a Delete/Put against the reconcile path (step 2a). It
+	// holds no lock, so the concurrent mutation proceeds; we then take the swap lock.
+	if s.testHookInMergeWindow != nil {
+		s.testHookInMergeWindow(p)
+	}
+
 	// Crash-before-swap seam (test-only, appendix #4): the outputs are written +
 	// fsynced + reopened but the manifest does NOT yet reference them. Returning
 	// here simulates a process death in exactly that window. We close the opened
