@@ -30,6 +30,12 @@ type Options struct {
 // docId→segId map. Sealed segments use ids >= 1 (the manifest version space).
 const headSegID = segID(0)
 
+// defaultMaxSegSize is the head row-count seal trigger. The architecture's
+// adaptive ~10M/dim target (§4.9) is measure-don't-assert; this fixed default is
+// a safe placeholder the operator can override via the maxSegSize field. Tunable
+// later when the adaptive sizing lands.
+const defaultMaxSegSize = 50000
+
 // Store is the segmented records layer (Phase 2): one in-memory brute head plus
 // an ordered set of immutable on-disk sealed segments, each with a tombstone
 // bitmap and (when indexed) a per-segment HNSW. Writes go to the head; Delete is
@@ -51,6 +57,8 @@ type Store struct {
 	graphs   map[segID]*builtIndex // segId → built index (absent until indexed)
 	gcfg     graphConfig           // the single index's HNSW config
 	nextSeg  segID                 // next sealed segId to assign
+
+	maxSegSize int // head row-count auto-seal trigger (defaultMaxSegSize unless overridden)
 
 	buildMu sync.Mutex     // serializes builder graph install + manifest rewrite
 	builds  sync.WaitGroup // tracks in-flight background builds (WaitForIndex/Close)
@@ -91,6 +99,8 @@ func Open(opts Options) (*Store, error) {
 		graphs:   make(map[segID]*builtIndex),
 		gcfg:     graphConfig{}.withDefaults(),
 		nextSeg:  1,
+
+		maxSegSize: defaultMaxSegSize,
 	}
 	if err := s.recover(); err != nil {
 		w.Close()
@@ -329,6 +339,17 @@ func (s *Store) Put(id string, v []float32, payload []byte) error {
 	s.idToDoc[id] = docID
 	s.docToSeg[docID] = headSegID
 	s.applyPut(rec)
+
+	// Auto-seal when the head fills (§4.2): freeze it into a sealed segment and
+	// start a fresh head, so callers never have to call Seal() explicitly. Put
+	// already holds s.mu, which sealLocked requires; sealLocked publishes the
+	// segment pending and spawns the background builder, so Put latency stays O(1)
+	// — the (slow) HNSW build happens off the write path.
+	if len(s.seg.slotDoc) >= s.maxSegSize {
+		if err := s.sealLocked(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
