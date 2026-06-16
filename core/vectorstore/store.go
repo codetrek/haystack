@@ -532,7 +532,14 @@ func (s *Store) Search(q []float32, k int) ([]SearchResult, error) {
 		// Indexed: reuse the per-segment hnswIndex built once at install/open
 		// (appendix #26), then drop any hit whose docId is no longer live in the
 		// segment — the immutable graph still contains post-seal-tombstoned nodes.
-		hits, err := bi.idx.search(q, k)
+		// Over-fetch by the segment's tombstone count so k LIVE hits survive the
+		// post-filter: fetching exactly k and then dropping tombstones makes a
+		// heavily-deleted segment under-return (recall ≈ 1-delFrac). Inflating k by
+		// the live-tombstone count restores the k live results the merge heap needs
+		// (the graph caps its own ef at the available node count, so an over-large
+		// fetchK is harmless).
+		fetchK := k + ss.tombCount()
+		hits, err := bi.idx.search(q, fetchK)
 		if err != nil {
 			return nil, err
 		}
