@@ -210,6 +210,29 @@ func (s *MmapStore) SetEntryPoint(id uint64, maxLayer int) error {
 	return s.maybeCheckpoint()
 }
 
+// ClearEntryPoint resets the entry point to the no-entry sentinel (^uint64(0)),
+// WAL-logged so a reopen replays the cleared marker. It reuses WalSetEntry with
+// the sentinel id: DecodeSetEntry/applyWALRecord round-trip entryId verbatim and
+// GetEntryPoint special-cases ^uint64(0) as "no entry", so no new WAL record
+// type is needed and the clear is crash-safe. maxLevel=0 cannot raise MaxLevel;
+// MaxLevel is intentionally left as a harmless high-water mark (as today).
+func (s *MmapStore) ClearEntryPoint() error {
+	s.muWrite.Lock()
+	defer s.muWrite.Unlock()
+
+	if s.faulted != nil {
+		return s.faulted
+	}
+
+	if _, err := s.wal.Append(WalSetEntry, EncodeSetEntry(^uint64(0), 0)); err != nil {
+		return fmt.Errorf("MmapStore.ClearEntryPoint: WAL: %w", err)
+	}
+
+	s.meta.EntryPoint = ^uint64(0)
+	s.meta.EntryLevel = 0
+	return s.maybeCheckpoint()
+}
+
 // DeleteNode marks a node as deleted (tombstone).
 func (s *MmapStore) DeleteNode(id uint64) error {
 	s.muWrite.Lock()

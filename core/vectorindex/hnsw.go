@@ -504,7 +504,8 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 	// Update entry point if we deleted it.
 	epId, _, err := h.store.GetEntryPoint()
 	if err == nil && epId == nodeId {
-		// Find a new entry point: pick a neighbor from the highest possible layer.
+		// Fast path: pick the highest-level node from the deleted node's own
+		// neighbor lists (likely link-reachable from the rest of the graph).
 		var newEp uint64
 		newLevel := -1
 		for layer := level; layer >= 0; layer-- {
@@ -527,10 +528,34 @@ func (h *HNSWIndex) deleteNodeLocked(nodeId uint64) error {
 			}
 		}
 		if newLevel >= 0 {
-			_ = h.store.SetEntryPoint(newEp, newLevel)
+			if err := h.store.SetEntryPoint(newEp, newLevel); err != nil {
+				return err
+			}
+		} else {
+			// The deleted EP had no live neighbors. Reseat the EP to any other
+			// live node (highest level preferred) so Search still returns the
+			// remaining nodes; if none remain, clear the EP marker. nodeId is
+			// still occupied here (DeleteNode runs below), so exclude it from
+			// the scan.
+			//
+			// KNOWN LIMITATION (VEC-007, out of scope): a reseated EP is not
+			// guaranteed to be link-reachable from every other live node, so
+			// recall may be degraded until the next Insert re-links the graph.
+			// We only restore availability here, not full graph connectivity.
+			candID, candLevel, ok, err := h.store.HighestLiveNodeExcluding(nodeId)
+			if err != nil {
+				return err
+			}
+			if ok {
+				if err := h.store.SetEntryPoint(candID, candLevel); err != nil {
+					return err
+				}
+			} else {
+				if err := h.store.ClearEntryPoint(); err != nil {
+					return err
+				}
+			}
 		}
-		// If newLevel < 0, the index is empty. Delete the entry point marker
-		// so Search correctly returns empty results.
 	}
 
 	// Remove the node data (also clears docId from slot and forward map).

@@ -213,6 +213,46 @@ func (s *MmapStore) GetEntryPoint() (uint64, int, error) {
 	return ep, int(el), nil
 }
 
+// HighestLiveNodeExcluding scans nodes.dat for the highest-level live node other
+// than `exclude`. Live == occupied && !deleted && id < TotalSlots (same liveness
+// test as nodeLive / GetDocId; rejects zombie/aborted-txn slots). The scan is
+// inlined under muWrite.RLock and deliberately does NOT call nodeLive/
+// GetNodeLevel — those re-take muWrite.RLock, and a re-entrant RLock can deadlock
+// against a queued writer. The ascending-index scan keeps the lowest id at the
+// max level (deterministic, matching MemNodeStore's tie-break).
+func (s *MmapStore) HighestLiveNodeExcluding(exclude uint64) (uint64, int, bool, error) {
+	s.muWrite.RLock()
+	defer s.muWrite.RUnlock()
+
+	bestID := uint64(0)
+	bestLevel := -1
+	found := false
+	total := s.meta.TotalSlots
+	if total > s.nodeCapacity {
+		total = s.nodeCapacity // defensive: TotalSlots <= capacity normally
+	}
+	for i := uint64(0); i < total; i++ {
+		if i == exclude {
+			continue
+		}
+		off := int64(pageSize) + int64(i)*int64(nodeSlotSize)
+		flags := s.nodes[off+1] // Flags is byte 1
+		if flags&nodeFlagOccupied == 0 || flags&nodeFlagDeleted != 0 {
+			continue
+		}
+		lvl := int(s.nodes[off]) // Level is byte 0
+		if !found || lvl > bestLevel {
+			bestID = i
+			bestLevel = lvl
+			found = true
+		}
+	}
+	if !found {
+		return 0, 0, false, nil
+	}
+	return bestID, bestLevel, true, nil
+}
+
 // GetNodeId looks up the node ID for a document ID.
 // Triggers a lazy build of docToNode on first call (write-path only; held under muWrite).
 func (s *MmapStore) GetNodeId(docId int64) (uint64, bool, error) {

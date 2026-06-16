@@ -160,6 +160,46 @@ func (m *MemNodeStore) SetEntryPoint(id uint64, maxLayer int) error {
 	return nil
 }
 
+// ClearEntryPoint resets the entry point so GetEntryPoint reports no entry.
+// MemNodeStore keys "no entry" off hasEntry (not the ^uint64(0) sentinel), so
+// SetEntryPoint(^uint64(0), 0) alone would NOT make GetEntryPoint error — this
+// dedicated method keeps clearing consistent with MmapStore.
+func (m *MemNodeStore) ClearEntryPoint() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.hasEntry = false
+	m.entryID = 0
+	m.maxLayer = 0
+	return nil
+}
+
+// HighestLiveNodeExcluding returns the highest-level node other than `exclude`.
+// A node is live iff it is present in m.vectors (DeleteNode removes it). Ties
+// are resolved by lowest id for deterministic test behavior, matching
+// MmapStore's ascending-index scan.
+func (m *MemNodeStore) HighestLiveNodeExcluding(exclude uint64) (uint64, int, bool, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	bestID := uint64(0)
+	bestLevel := -1
+	found := false
+	for id := range m.vectors {
+		if id == exclude {
+			continue
+		}
+		lvl := m.levels[id]
+		if !found || lvl > bestLevel || (lvl == bestLevel && id < bestID) {
+			bestID = id
+			bestLevel = lvl
+			found = true
+		}
+	}
+	if !found {
+		return 0, 0, false, nil
+	}
+	return bestID, bestLevel, true, nil
+}
+
 func (m *MemNodeStore) GetNodeLevel(id uint64) (int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

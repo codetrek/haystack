@@ -28,6 +28,16 @@ type NodeStore interface {
 	SetNeighbors(id uint64, layer int, neighbors []uint64) error
 	GetEntryPoint() (uint64, int, error)
 	SetEntryPoint(id uint64, maxLayer int) error
+	// ClearEntryPoint resets the entry point to the no-entry sentinel,
+	// consistently across stores (MmapStore: WAL-logged + meta sentinel ^uint64(0);
+	// MemNodeStore: hasEntry=false). After this GetEntryPoint returns an error.
+	// Used when the last live node is deleted.
+	ClearEntryPoint() error
+	// HighestLiveNodeExcluding returns the live (occupied, non-deleted) node with
+	// the highest level, excluding the node `exclude`. ok is false if no other
+	// live node exists. Used by deleteNodeLocked to reseat the entry point when
+	// the deleted node was the EP and its own neighbor lists were empty.
+	HighestLiveNodeExcluding(exclude uint64) (id uint64, level int, ok bool, err error)
 	GetNodeLevel(id uint64) (int, error)
 	GetNodeId(docId int64) (uint64, bool, error)
 	GetDocId(id uint64) (int64, bool, error)

@@ -15,21 +15,23 @@ type errorStore struct {
 	mu    sync.RWMutex
 	inner *MemNodeStore
 
-	GetVectorErr     error
-	GetVectorRefErr  error
-	PutNodeErr       error
-	DeleteNodeErr    error
-	GetNeighborsErr  error
-	SetNeighborsErr  error
-	GetEntryPointErr error
-	SetEntryPointErr error
-	GetNodeLevelErr  error
-	GetNodeIdErr     error
-	GetDocIdErr      error
-	NextNodeIdErr    error
-	GetNormErr       error
-	SetNormErr       error
-	CloseErr         error
+	GetVectorErr                error
+	GetVectorRefErr             error
+	PutNodeErr                  error
+	DeleteNodeErr               error
+	GetNeighborsErr             error
+	SetNeighborsErr             error
+	GetEntryPointErr            error
+	SetEntryPointErr            error
+	ClearEntryPointErr          error
+	HighestLiveNodeExcludingErr error
+	GetNodeLevelErr             error
+	GetNodeIdErr                error
+	GetDocIdErr                 error
+	NextNodeIdErr               error
+	GetNormErr                  error
+	SetNormErr                  error
+	CloseErr                    error
 }
 
 func newErrorStore() *errorStore {
@@ -100,6 +102,20 @@ func (e *errorStore) SetEntryPoint(id uint64, maxLayer int) error {
 		return err
 	}
 	return e.inner.SetEntryPoint(id, maxLayer)
+}
+
+func (e *errorStore) ClearEntryPoint() error {
+	if err := e.getErr(e.ClearEntryPointErr); err != nil {
+		return err
+	}
+	return e.inner.ClearEntryPoint()
+}
+
+func (e *errorStore) HighestLiveNodeExcluding(exclude uint64) (uint64, int, bool, error) {
+	if err := e.getErr(e.HighestLiveNodeExcludingErr); err != nil {
+		return 0, 0, false, err
+	}
+	return e.inner.HighestLiveNodeExcluding(exclude)
 }
 
 func (e *errorStore) GetNodeLevel(id uint64) (int, error) {
