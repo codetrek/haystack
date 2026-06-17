@@ -349,3 +349,61 @@ func TestStore_Recover_RestoresAllIndexesAndResumesPending(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_Merge_BuildsAllIndexGraphsPerOutput(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	// Shrink the merge policy so a single deflated segment triggers a repack.
+	s.mcfg = mergeConfig{MergeFloor: 0.9, Fanout: 99, MaxMergedSize: 1 << 20, TargetSegCount: 99}
+	rng := rand.New(rand.NewSource(71))
+	dim := 16
+	vecs := make(map[int64][]float32)
+	put := func(id string, v []float32) {
+		requireNoError(t, s.Put(id, v, nil))
+		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
+	}
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	for i := 0; i < 100; i++ {
+		put("m-"+itoa(i), randVec())
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
+	requireNoError(t, s.WaitForIndex()) // seg 1 indexed in BOTH default and aux
+
+	// Delete >10% so the segment falls below MergeFloor → delete-driven repack.
+	for i := 0; i < 30; i++ {
+		requireNoError(t, s.Delete("m-"+itoa(i)))
+		delete(vecs, s.idToDoc["m-"+itoa(i)])
+	}
+	requireNoError(t, s.Compact())
+	requireNoError(t, s.WaitForMerge())
+	requireNoError(t, s.WaitForIndex()) // both indexes built on the merged output
+
+	// Every index must be fully indexed on the new segment set, and both must return
+	// correct top-k over the surviving (non-deleted) docs.
+	for _, in := range s.ListVectorIndexes() {
+		if in.Indexed != in.Segments {
+			t.Fatalf("index %q not fully indexed after merge: %+v", in.Name, in)
+		}
+	}
+	q := randVec()
+	want := bruteForceKNN(Cosine, q, vecs, 10)
+	for _, name := range []string{"default", "aux"} {
+		got, err := s.Search(name, q, 10, nil)
+		requireNoError(t, err)
+		if r := recallAtK(got, want); r < 0.8 {
+			t.Fatalf("index %q recall after merge = %.2f, want >= 0.8", name, r)
+		}
+		// Deleted docs must not resurface in the merged output.
+		for _, h := range got {
+			if _, ok := vecs[h.DocID]; !ok {
+				t.Fatalf("index %q returned a deleted/merged-away doc %d", name, h.DocID)
+			}
+		}
+	}
+}

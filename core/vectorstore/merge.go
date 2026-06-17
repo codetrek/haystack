@@ -149,15 +149,15 @@ type mergePlan struct {
 // (under the lock) keeps s.nextSeg monotonic and collision-free against concurrent
 // seals.
 //
-// Why skip an input whose graph is not yet installed (appendix #8): a sealed
-// segment that is still pending has a background buildAndPublish goroutine reading
-// its mmap via eachLive OFF the store lock. The merge swap (step 2b) close()s the
-// input — mmapFree on vecMap/tombMap/plMap — which would unmap memory the builder
-// is mid-read, a SIGSEGV-on-free. A graph is installed (the default index's
-// graphs[id] != nil) only as the builder's LAST action under s.mu, so requiring it
-// proves no builder is
-// in flight for that input. This also satisfies the "do not merge a just-sealed
-// pending segment before its graph is built" fidelity point (appendix #3).
+// Why skip an input not yet indexed in EVERY index (appendix #8, gotcha 3): a
+// sealed segment still pending in some index has a background buildAndPublish
+// goroutine reading its mmap via eachLive OFF the store lock. The merge swap (step
+// 2b) close()s the input — mmapFree on vecMap/tombMap/plMap — which would unmap
+// memory the builder is mid-read, a SIGSEGV-on-free. A graph is installed in an
+// index (vx.graphs[id] != nil) only as that builder's LAST action under s.mu, so
+// requiring it installed in ALL N indexes proves no builder is in flight for that
+// input. This also satisfies the "do not merge a just-sealed pending segment before
+// its graph is built" fidelity point (appendix #3).
 func (s *Store) planMergeLocked(inputIDs []segID) (*mergePlan, error) {
 	return s.planMergeWithCapLocked(inputIDs, s.maxSegSize)
 }
@@ -177,8 +177,8 @@ func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergeP
 		if ss == nil {
 			return nil, nil // already merged/swept; nothing to do
 		}
-		if s.indexes[defaultIndexName].graphs[id] == nil {
-			return nil, nil // still pending/building — defer (avoids close-during-build, appendix #8)
+		if !s.fullyIndexedLocked(id) {
+			return nil, nil // pending in SOME index — defer (avoids close-during-build across all N graphs, gotcha 3)
 		}
 		inputSS = append(inputSS, ss)
 	}
@@ -204,7 +204,27 @@ func (s *Store) planMergeWithCapLocked(inputIDs []segID, bucketCap int) (*mergeP
 	return p, nil
 }
 
-// mergeAndPublish runs the SLOW phase off the store lock: write each output bucket
+// fullyIndexedLocked reports whether segment id has its graph built in EVERY named
+// index. A merge may only consume such a segment: the swap close()s its mmap, which
+// would unmap memory a still-pending index's background builder is mid-read
+// (SIGSEGV, gotcha 3 — the close-during-build guard generalized from one index to
+// N). Caller holds s.mu.
+//
+// Liveness (appendix #18): a freshly CreateVectorIndex'd index is pending for every
+// segment until its background builds finish, so this gate defers ALL merges until
+// the new index converges. That deferral is bounded — WaitForIndex drains the
+// builds, after which the gate passes and the merge fires — and it matches §4.7
+// (every index covers every segment before a shared segment is repacked). It is a
+// pause, not a deadlock; TestStore_Merge_BuildsAllIndexGraphsPerOutput proves a
+// merge eventually fires after WaitForIndex with two indexes.
+func (s *Store) fullyIndexedLocked(id segID) bool {
+	for _, vx := range s.indexes {
+		if vx.graphs[id] == nil {
+			return false
+		}
+	}
+	return true
+}
 // to disk (fsync via writeSealedSegment) and reopen it. It then re-takes buildMu +
 // s.mu for the atomic swap: reconcile any tombstones that arrived on the inputs
 // during the off-lock window, mutate the segment set (drop inputs, add outputs,
@@ -310,7 +330,13 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 				break
 			}
 		}
-		delete(s.indexes[defaultIndexName].graphs, id)
+		// Drop this input's per-segment graph from EVERY named index, not just
+		// default: each index built (or is keyed by) the input's segId, and the
+		// fullyIndexedLocked gate above guaranteed all N were installed, so no builder
+		// is mid-read of the input mmap we just close()d (gotcha 3, §4.7).
+		for _, vx := range s.indexes {
+			delete(vx.graphs, id)
+		}
 	}
 
 	// (2c) Append outputs (pending) and rehome the surviving moved docs. A doc
@@ -349,8 +375,10 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	// re-trigger a merge, finding #1). Every buildBeginLocked() here precedes this
 	// function's return (and thus the deferred mergeDone), so a quiescence drain holds.
 	for i, ss := range outSS {
-		s.buildBeginLocked()
-		go s.buildAndPublish(defaultIndexName, p.outIDs[i], p.outDirs[i], ss)
+		for name := range s.indexes {
+			s.buildBeginLocked()
+			go s.buildAndPublish(name, p.outIDs[i], p.outDirs[i], ss)
+		}
 	}
 	s.mu.Unlock()
 
