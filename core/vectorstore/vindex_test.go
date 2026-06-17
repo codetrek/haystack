@@ -407,3 +407,48 @@ func TestStore_Merge_BuildsAllIndexGraphsPerOutput(t *testing.T) {
 		}
 	}
 }
+
+func TestStore_RebuildVectorIndex_DropsAndReconverges(t *testing.T) {
+	s := openTestStore(t, Cosine)
+	rng := rand.New(rand.NewSource(81))
+	dim := 16
+	vecs := make(map[int64][]float32)
+	put := func(id string, v []float32) {
+		requireNoError(t, s.Put(id, v, nil))
+		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
+	}
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	for i := 0; i < 90; i++ {
+		put("r-"+itoa(i), randVec())
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+	if l := s.IndexLag("default"); l.PendingSegments != 0 {
+		t.Fatalf("precondition: default should be built, got %+v", l)
+	}
+
+	requireNoError(t, s.RebuildVectorIndex("default"))
+	// Immediately after rebuild kickoff the segment is pending again (brute), and the
+	// graph file was deleted then rebuilt.
+	requireNoError(t, s.WaitForIndex())
+	if l := s.IndexLag("default"); l.PendingSegments != 0 {
+		t.Fatalf("default did not reconverge after rebuild, got %+v", l)
+	}
+	q := randVec()
+	got, err := s.Search("default", q, 10, nil)
+	requireNoError(t, err)
+	want := bruteForceKNN(Cosine, q, vecs, 10)
+	if r := recallAtK(got, want); r < 0.8 {
+		t.Fatalf("recall after rebuild = %.2f, want >= 0.8", r)
+	}
+
+	if err := s.RebuildVectorIndex("ghost"); err == nil {
+		t.Fatal("rebuilding an unknown index must error")
+	}
+}

@@ -676,6 +676,44 @@ func (s *Store) dropGraphFilesLocked(name string) error {
 	return nil
 }
 
+// RebuildVectorIndex marks a named index pending for every sealed segment (clears
+// its built graphs), deletes its graph files, persists the pending state, and
+// respawns the per-segment builds (the same machinery CreateVectorIndex and
+// recover use). It is the entry point for a param/metric change repair or a torn-
+// graph rebuild from records. The index stays queryable throughout via the brute
+// fallback. Unknown name → error; the reserved "default" CAN be rebuilt.
+//
+// It takes buildMu+s.mu (like DropVectorIndex) so the clear+delete never races a
+// buildAndPublish writing the graphs map it is resetting. dropGraphFilesLocked
+// fsyncs each seg dir before the manifest commit, so a crash never leaves the
+// manifest ahead of a non-durable unlink (appendix #21). buildBeginLocked runs
+// under s.mu before each goroutine so WaitForIndex counts the respawned builds.
+func (s *Store) RebuildVectorIndex(name string) error {
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	vx, ok := s.indexes[name]
+	if !ok {
+		return fmt.Errorf("vectorstore: unknown index %q", name)
+	}
+	if s.closing {
+		return errors.New("vectorstore: store is closing")
+	}
+	vx.graphs = make(map[segID]*builtIndex) // all (index,seg) → pending
+	if err := s.dropGraphFilesLocked(name); err != nil {
+		return err
+	}
+	if err := s.writeManifestLocked(); err != nil {
+		return err
+	}
+	for i, sid := range s.sealedID {
+		s.buildBeginLocked()
+		go s.buildAndPublish(name, sid, filepath.Join(s.dir, segDirName(sid, 0)), s.sealed[i])
+	}
+	return nil
+}
+
 // --- quiescence accounting (cond-based; all under s.mu) ----------------------
 //
 // These replace two sync.WaitGroups. Keeping the counts under s.mu (the same lock
