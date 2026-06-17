@@ -241,14 +241,29 @@ func (s *Store) recover() error {
 	for _, d := range m.AttrDecls {
 		s.attrDecls[d.Property] = d.Kind
 	}
-	// Build a lookup of the default index's per-segment build state from the v4
-	// IndexSegs block (Task 7 keeps recover behavior-neutral by deriving the single
-	// "default" view; Task 8 generalizes the reopen/resume over all m.Indexes).
-	defaultState := make(map[segID]segState)
-	for _, is := range m.IndexSegs {
-		if is.Index == defaultIndexName {
-			defaultState[is.SegID] = is.State
+	// Reconstruct the named indexes from the manifest BEFORE opening segments. A v4
+	// manifest always carries at least the "default" index; synthesize it if somehow
+	// absent (an empty Indexes block, e.g. a hand-built crash-window manifest) so the
+	// default path is always present. Each vindex starts with an empty graphs map;
+	// the reopen/resume pass below fills indexed graphs and spawns pending builds.
+	if len(m.Indexes) == 0 {
+		s.indexes = map[string]*vindex{
+			defaultIndexName: {cfg: graphConfig{}.withDefaults(), metric: s.metric, graphs: make(map[segID]*builtIndex)},
 		}
+	} else {
+		s.indexes = make(map[string]*vindex, len(m.Indexes))
+		for _, ic := range m.Indexes {
+			s.indexes[ic.Name] = newVindex(VectorIndexConfig{
+				Type: ic.Type, Metric: ic.Metric, M: ic.M, EfConstruction: ic.EfConstruction, EfSearch: ic.EfSearch,
+			})
+		}
+	}
+	// Lookup of every (index, segment) build state from the v4 IndexSegs block,
+	// keyed by "<index>\x00<segId>" (a NUL-joined string, robust to arbitrary index
+	// names). An absent key defaults to segPending → resumed below.
+	indexedState := make(map[string]segState, len(m.IndexSegs))
+	for _, is := range m.IndexSegs {
+		indexedState[is.Index+"\x00"+itoaSeg(int64(is.SegID))] = is.State
 	}
 	for _, e := range m.Segments {
 		segDir := filepath.Join(s.dir, segDirName(e.SegID, e.Gen))
@@ -271,34 +286,41 @@ func (s *Store) recover() error {
 				s.docToSeg[ss.slotDoc(slot)] = e.SegID
 			}
 		}
-		if defaultState[e.SegID] == segIndexed {
-			g, gerr := openGraphFile(segDir, defaultIndexName, ss)
-			if gerr != nil {
-				return gerr
-			}
-			vx := s.indexes[defaultIndexName]
-			s.indexes[defaultIndexName].graphs[e.SegID] = newBuiltIndex(g, vx.cfg)
-		}
 	}
 	// Sweep any seg-* directory (and a stranded manifest.tmp) the committed
 	// manifest does not reference — a crash mid-seal leaves half-written files
-	// the manifest swap never committed to (appendix #3).
+	// the manifest swap never committed to (appendix #3). Also sweep stray
+	// graph-<name>.dat files for indexes no longer in the manifest (a crash after a
+	// Drop's manifest commit but before its unlink hit disk leaves an orphan in a
+	// LIVE seg dir; sweeping it here prevents a later re-Create from opening a stale
+	// graph — appendix #21).
 	if err := s.sweepOrphansLocked(m); err != nil {
 		return err
 	}
 	// Head WAL replay last (against the now-populated docToSeg), exactly once
 	// (appendix #15: replay must not run twice — that would double-apply every
-	// head record). Then resume builds for any segment left pending (crash
-	// mid-build); the resume runs AFTER replay so the build reads a consistent
-	// tombstone view (a replayed head Delete may tombstone a sealed slot).
+	// head record). Then, per index, reopen its indexed graphs from disk and resume
+	// every pending (index, segment) build (crash mid-build). The resume runs AFTER
+	// replay so the build reads a consistent tombstone view (a replayed head Delete
+	// may tombstone a sealed slot).
 	if err := s.replay(); err != nil {
 		return err
 	}
-	for i, sid := range s.sealedID {
-		if s.indexes[defaultIndexName].graphs[sid] == nil {
+	for name, vx := range s.indexes {
+		for i, sid := range s.sealedID {
 			segDir := filepath.Join(s.dir, segDirName(sid, 0))
-			s.buildBeginLocked()
-			go s.buildAndPublish(defaultIndexName, sid, segDir, s.sealed[i])
+			if indexedState[name+"\x00"+itoaSeg(int64(sid))] == segIndexed {
+				g, gerr := openGraphFile(segDir, name, s.sealed[i])
+				if gerr == nil {
+					vx.graphs[sid] = newBuiltIndex(g, vx.cfg)
+					continue
+				}
+				// A torn/missing graph file falls through to a rebuild from records.
+			}
+			if vx.graphs[sid] == nil {
+				s.buildBeginLocked()
+				go s.buildAndPublish(name, sid, segDir, s.sealed[i])
+			}
 		}
 	}
 	return nil
@@ -310,11 +332,20 @@ func (s *Store) recover() error {
 // commit point, so anything not in it is an orphan (§4.8, appendix #3). The
 // stranded manifest.tmp from a crashed write is harmless to readManifest (which
 // reads "manifest", not the tmp) but is cleaned here so it cannot accumulate or
-// be mistaken for a committed manifest later. Caller holds s.mu.
+// be mistaken for a committed manifest later. It also removes any stray
+// graph-<name>.dat in a LIVE seg dir for an index NOT in the manifest: a crash
+// after a Drop's manifest commit but before its unlink reached disk leaves such an
+// orphan, and a later re-Create of that name must not open the stale graph
+// (appendix #21). Caller holds s.mu.
 func (s *Store) sweepOrphansLocked(m *manifest) error {
 	referenced := make(map[string]bool, len(m.Segments))
 	for _, e := range m.Segments {
 		referenced[segDirName(e.SegID, e.Gen)] = true
+	}
+	// The set of index graph files the manifest still references, by file name.
+	liveGraphFiles := make(map[string]bool, len(m.Indexes))
+	for _, ic := range m.Indexes {
+		liveGraphFiles[graphFileName(ic.Name)] = true
 	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -331,10 +362,37 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 		if !ent.IsDir() || len(name) < 4 || name[:4] != "seg-" {
 			continue
 		}
-		if referenced[name] {
+		if !referenced[name] {
+			if err := os.RemoveAll(filepath.Join(s.dir, name)); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(s.dir, name)); err != nil {
+		// A live seg dir: sweep stray graph-<name>.dat for indexes the manifest no
+		// longer carries (orphaned by a Drop whose unlink did not survive the crash).
+		if err := s.sweepStrayGraphsLocked(filepath.Join(s.dir, name), liveGraphFiles); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sweepStrayGraphsLocked removes any graph-*.dat in segDir whose index name is not
+// in liveGraphFiles (the manifest's referenced index set). Caller holds s.mu.
+func (s *Store) sweepStrayGraphsLocked(segDir string, liveGraphFiles map[string]bool) error {
+	entries, err := os.ReadDir(segDir)
+	if err != nil {
+		return err
+	}
+	for _, ent := range entries {
+		fn := ent.Name()
+		if ent.IsDir() || len(fn) < len("graph-")+len(".dat") || fn[:len("graph-")] != "graph-" || fn[len(fn)-len(".dat"):] != ".dat" {
+			continue
+		}
+		if liveGraphFiles[fn] {
+			continue
+		}
+		if err := fsRemove(filepath.Join(segDir, fn)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
@@ -1296,8 +1354,14 @@ func (s *Store) sealLocked() error {
 	if s.closing {
 		return nil
 	}
-	s.buildBeginLocked()
-	go s.buildAndPublish(defaultIndexName, id, segDir, ss)
+	// Build a graph for EVERY named index over the new segment (§4.7 "对 head 建 N
+	// 张图"). Each (index, segment) is born pending; its background build flips it to
+	// indexed. buildBeginLocked under s.mu before each spawn so WaitForIndex counts
+	// all N (gotcha 4). The global nInflightBuilds counter already aggregates them.
+	for name := range s.indexes {
+		s.buildBeginLocked()
+		go s.buildAndPublish(name, id, segDir, ss)
+	}
 
 	// (5) Opportunistic background reclamation: a fresh seal may push a size tier to
 	// fanout (growth) or expose a deflated segment (delete-driven). maybeMergeLocked
@@ -1342,10 +1406,17 @@ func (s *Store) buildAndPublish(name string, id segID, segDir string, ss *sealed
 	defer s.mu.Unlock()
 	// Re-check the index still exists after taking s.mu: a concurrent
 	// DropVectorIndex (Task 6) may have removed it while this build ran off-lock
-	// (gotcha 5). If gone, discard the freshly-built graph rather than reviving a
-	// dropped index's map.
+	// (gotcha 5). If gone, discard the freshly-built graph AND delete the file we
+	// just wrote: Drop's dropGraphFilesLocked ran while this build had not yet
+	// written graph-<name>.dat (it found nothing to remove), so without this cleanup
+	// the file is an orphan on disk with no map/manifest entry (appendix #21). We
+	// hold buildMu+s.mu, so no concurrent re-Create/build can be mid-flight here.
 	vx, ok = s.indexes[name]
 	if !ok {
+		p := segFilePath(segDir, graphFileName(name))
+		if rerr := fsRemove(p); rerr == nil {
+			_ = fsyncDir(segDir)
+		}
 		return
 	}
 	vx.graphs[id] = bi

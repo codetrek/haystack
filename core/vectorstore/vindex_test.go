@@ -291,3 +291,61 @@ func TestStore_DropVectorIndex_DefaultRefusedUnknownNoop(t *testing.T) {
 	}
 	requireNoError(t, s.DropVectorIndex("never-existed")) // no-op
 }
+
+func TestStore_Recover_RestoresAllIndexesAndResumesPending(t *testing.T) {
+	dir := t.TempDir()
+	kvs := newTestKV(t)
+	rng := rand.New(rand.NewSource(61))
+	dim := 16
+	vecs := make(map[int64][]float32)
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+
+	{
+		s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+		requireNoError(t, err)
+		put := func(id string, v []float32) {
+			requireNoError(t, s.Put(id, v, nil))
+			vecs[s.idToDoc[id]] = append([]float32(nil), v...)
+		}
+		for i := 0; i < 60; i++ {
+			put("a-"+itoa(i), randVec())
+		}
+		requireNoError(t, s.Seal()) // seg 1 (default builds N=1 graph)
+		requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
+		requireNoError(t, s.WaitForIndex()) // both indexes built for seg 1
+		requireNoError(t, s.Close())
+	}
+
+	// Reopen: both indexes' configs + states load from the manifest; indexed graphs
+	// reopen from disk, no rebuild needed.
+	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	requireNoError(t, err)
+	t.Cleanup(func() { _ = s2.Close() })
+	requireNoError(t, s2.WaitForIndex())
+
+	names := s2.ListVectorIndexes()
+	if len(names) != 2 {
+		t.Fatalf("recover lost an index, got %+v", names)
+	}
+	for _, in := range names {
+		if in.Indexed != in.Segments || in.Segments != 1 {
+			t.Fatalf("index %q not fully indexed after recover: %+v", in.Name, in)
+		}
+	}
+
+	q := randVec()
+	want := bruteForceKNN(Cosine, q, vecs, 10)
+	for _, name := range []string{"default", "aux"} {
+		got, err := s2.Search(name, q, 10, nil)
+		requireNoError(t, err)
+		if r := recallAtK(got, want); r < 0.8 {
+			t.Fatalf("index %q recall after recover = %.2f, want >= 0.8", name, r)
+		}
+	}
+}
