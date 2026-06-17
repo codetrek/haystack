@@ -47,9 +47,10 @@ func TestStore_Payload_SurvivesSealAndMerge(t *testing.T) {
 	}
 }
 
-// TestStore_Payload_SurvivesRecovery proves the structured payload survives a WAL
-// replay (Put, then reopen before any seal): the version-gated blob round-trips
-// through encodePut/decodePut and decodePayload on recovery.
+// TestStore_Payload_SurvivesRecovery proves the structured payload survives a
+// head-bucket rebuild (Put, then reopen before any seal): the version-gated blob
+// round-trips through the head bucket value (encodePayload on Put, decodePayload on
+// recovery).
 func TestStore_Payload_SurvivesRecovery(t *testing.T) {
 	dir := t.TempDir()
 	kvs := newTestKV(t)

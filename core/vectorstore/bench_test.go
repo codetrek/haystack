@@ -47,7 +47,7 @@ func benchVecs(n, dim int, seed int64) [][]float32 {
 }
 
 // BenchmarkPut_128 measures per-vector insert cost into the brute head (idtable
-// alloc + WAL append). vec/s = sustained insert throughput.
+// alloc + head-bucket commit). vec/s = sustained insert throughput.
 func BenchmarkPut_128(b *testing.B) {
 	s := benchOpenStore(b, Cosine)
 	pool := benchVecs(benchN, benchDim, 1)

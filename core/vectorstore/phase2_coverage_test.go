@@ -31,9 +31,9 @@ func TestSealedSegment_TombstoneOutOfRange(t *testing.T) {
 }
 
 // TestRecovery_StrandedManifestTmpIgnored covers appendix #3 in the bbolt world: a
-// legacy manifest / manifest.tmp file (left by the pre-bbolt control plane or a
-// crashed legacy write) must NOT break recovery — the control store is loaded from
-// control.db — and must be swept, never mistaken for live control state.
+// legacy manifest / manifest.tmp / records.wal file (left by the pre-bbolt control
+// plane or the pre-incr-2 head WAL) must NOT break recovery — the control store is
+// loaded from control.db — and must be swept, never mistaken for live state.
 func TestRecovery_StrandedManifestTmpIgnored(t *testing.T) {
 	kvStore := newTestKV(t)
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
@@ -44,16 +44,21 @@ func TestRecovery_StrandedManifestTmpIgnored(t *testing.T) {
 
 	tmp := filepath.Join(s.dir, "manifest.tmp")
 	legacy := filepath.Join(s.dir, "manifest")
+	wal := filepath.Join(s.dir, "records.wal")
 	requireNoError(t, os.WriteFile(tmp, []byte("garbage-not-a-manifest"), 0644))
 	requireNoError(t, os.WriteFile(legacy, []byte("legacy-manifest-bytes"), 0644))
+	requireNoError(t, os.WriteFile(wal, []byte("legacy-records-wal-bytes"), 0644))
 
 	s2 := reopenStore(t, s, kvStore)
-	// The control store loaded (the doc is searchable) and both legacy files are swept.
+	// The control store loaded (the doc is searchable) and every legacy file is swept.
 	if _, statErr := os.Stat(tmp); !os.IsNotExist(statErr) {
 		t.Fatal("stranded manifest.tmp not swept on recovery")
 	}
 	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
 		t.Fatal("legacy manifest file not swept on recovery")
+	}
+	if _, statErr := os.Stat(wal); !os.IsNotExist(statErr) {
+		t.Fatal("legacy records.wal not swept on recovery")
 	}
 	res, err := s2.Search("default", []float32{1, 0, 0, 0}, 1, nil)
 	requireNoError(t, err)

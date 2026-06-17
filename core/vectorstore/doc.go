@@ -43,16 +43,17 @@
 // stored a second time. The "default"/same-metric path skips reconstruction and
 // is byte-identical to the single-index engine.
 //
-// Durability has two persistent faces (architecture §4.8): a per-write head WAL
-// (Put/Delete fsync before mutation) and a single-file manifest atomically
-// rewritten on each structural change (tmp+fsync+rename+dir-fsync). The v4
-// manifest lists the sealed records-segments + head segId, the N index configs,
-// and a per-(index, segment) {gen, pending|indexed} state block. Recovery loads
-// the manifest, mmaps the sealed segments, rebuilds the global docId→segId map
-// from each segment's on-disk slot→docId, reopens every index's indexed graphs,
-// replays the head WAL, resumes any pending build for ALL indexes, and sweeps
-// orphan seg dirs not referenced by the manifest (half-written seal files from a
-// crash). Sealed segments are immutable except for their tombstone bitmaps.
+// Durability lives in a single embedded bbolt control store (control.db,
+// architecture §4.8): every Put/Delete commits the durable head row (head bucket)
+// before mutating the in-memory head, and every structural change commits one
+// bbolt write-txn (copy-on-write page swap, fsync) that snapshots the sealed
+// records-segments + head segId, the N index configs, and a per-(index, segment)
+// {gen, pending|indexed} state. Recovery loads the control plane in one read-txn,
+// mmaps the sealed segments, rebuilds the global docId→segId map from each
+// segment's on-disk slot→docId, reopens every index's indexed graphs, rebuilds the
+// head from the head bucket, resumes any pending build for ALL indexes, and sweeps
+// orphan seg dirs not referenced by the segments bucket (half-written seal files
+// from a crash). Sealed segments are immutable except for their tombstone bitmaps.
 //
 // The two-level id model (architecture §4.6) spans segments: a stable int64
 // docId (via core/idtable) maps to an owning segId, and each segment maps

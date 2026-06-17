@@ -378,11 +378,12 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		}
 	}
 
-	// (2d) ONE atomic manifest swap — the commit point replacing N inputs with M
-	// outputs. A crash before this leaves the outputs unreferenced (swept on
+	// (2d) ONE atomic control-store commit — the commit point replacing N inputs
+	// with M outputs. A crash before this leaves the outputs unreferenced (swept on
 	// recover); a crash after leaves the inputs unreferenced (swept). No
-	// alloc.Commit / wal.Reset: idtable mappings for moved docs are already durable
-	// and the head/WAL is untouched (gotcha 4).
+	// alloc.Commit and no head-bucket change: idtable mappings for moved docs are
+	// already durable and the head (in-memory + head bucket) is untouched because a
+	// merge only retires sealed segments, never the head (gotcha 4).
 	if err := s.writeManifestLocked(); err != nil {
 		s.mu.Unlock()
 		return err

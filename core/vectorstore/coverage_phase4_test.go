@@ -97,6 +97,45 @@ func TestSealLocked_WriteFaultPropagates(t *testing.T) {
 	}
 }
 
+// TestCommitSealLocked_ReconcileErrorRollsBack covers commitSealLocked's in-txn
+// error branch: when reconcileControlTx fails inside the seal write-txn, the whole
+// bbolt commit rolls back — neither the new segment row NOR the head-bucket clear
+// is persisted (the seal's atomicity guarantee). Seal surfaces the error; the
+// sealed flat files written before the commit become a crash-before-commit orphan.
+// A crash-reopen must recover all docs from the still-intact head bucket, proving
+// the head clear did NOT commit, and must sweep the orphaned segment dir.
+func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
+	kvStore := newTestKV(t)
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	rng := rand.New(rand.NewSource(909))
+	for i := 0; i < 6; i++ {
+		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+	}
+	testHookReconcileErr = errInjected
+	if err := s.Seal(); err == nil {
+		testHookReconcileErr = nil
+		t.Fatal("Seal should surface a reconcile error from the seal commit")
+	}
+	testHookReconcileErr = nil
+
+	// Crash-reopen over the same dir + KV: the seal commit rolled back, so the head
+	// bucket still holds all 6 docs and the uncommitted seg dir is swept as an orphan.
+	s2 := reopenUnclean(t, s, kvStore)
+	for i := 0; i < 6; i++ {
+		if _, _, found, _ := s2.Get("d-" + itoa(i)); !found {
+			t.Fatalf("doc d-%d lost after a rolled-back seal commit (head bucket clear must not have committed)", i)
+		}
+	}
+	s2.mu.RLock()
+	nSealed := len(s2.sealed)
+	s2.mu.RUnlock()
+	if nSealed != 0 {
+		t.Fatalf("sealed segments after rolled-back seal = %d, want 0 (orphan dir must be swept)", nSealed)
+	}
+}
+
 // TestSealLocked_NoBuildSpawnWhenClosing covers sealLocked's s.closing branch (the
 // late return that skips the background build spawn): the segment is durably sealed
 // + pending, but no builder goroutine is launched (recover would resume it). We

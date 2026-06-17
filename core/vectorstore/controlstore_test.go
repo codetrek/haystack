@@ -497,3 +497,115 @@ func segIDs(es []segmentEntry) []segID {
 	}
 	return out
 }
+
+// TestControlStore_HeadRecordRoundTrip pins the head-bucket adapter: put two rows
+// keyed by docId, list them back in ascending docId order with id/vector/norm/
+// payload intact, delete one, and clear the rest.
+func TestControlStore_HeadRecordRoundTrip(t *testing.T) {
+	cs, _ := openTestControlStore(t)
+	r1 := headRecord{ID: "alpha", DocID: 7, Stored: []float32{0.6, 0.8}, Norm: 5, Payload: []byte("pa")}
+	r2 := headRecord{ID: "beta", DocID: 2, Stored: []float32{1, 2, 3}, Norm: 0, Payload: nil}
+	requireNoError(t, cs.update(func(tx *bolt.Tx) error {
+		if err := putHeadRecord(tx, r1); err != nil {
+			return err
+		}
+		return putHeadRecord(tx, r2)
+	}))
+
+	var got []headRecord
+	requireNoError(t, cs.view(func(tx *bolt.Tx) error {
+		var lerr error
+		got, lerr = listHeadRecords(tx)
+		return lerr
+	}))
+	// Ascending docId order: docId 2 (beta) before docId 7 (alpha).
+	if len(got) != 2 || got[0].ID != "beta" || got[1].ID != "alpha" {
+		t.Fatalf("listHeadRecords order = %+v, want [beta(2) alpha(7)]", got)
+	}
+	if got[1].DocID != 7 || got[1].Norm != 5 || len(got[1].Stored) != 2 || got[1].Stored[1] != 0.8 || string(got[1].Payload) != "pa" {
+		t.Fatalf("alpha row mismatch: %+v", got[1])
+	}
+	if len(got[0].Payload) != 0 {
+		t.Fatalf("beta row should have empty payload, got %v", got[0].Payload)
+	}
+
+	// Delete beta, then clear the bucket.
+	requireNoError(t, cs.update(func(tx *bolt.Tx) error { return deleteHeadRecord(tx, 2) }))
+	requireNoError(t, cs.view(func(tx *bolt.Tx) error {
+		recs, lerr := listHeadRecords(tx)
+		if lerr != nil {
+			return lerr
+		}
+		if len(recs) != 1 || recs[0].ID != "alpha" {
+			t.Fatalf("after delete: %+v, want [alpha]", recs)
+		}
+		return nil
+	}))
+	requireNoError(t, cs.update(clearHead))
+	requireNoError(t, cs.view(func(tx *bolt.Tx) error {
+		recs, lerr := listHeadRecords(tx)
+		if lerr != nil {
+			return lerr
+		}
+		if len(recs) != 0 {
+			t.Fatalf("after clearHead: %d rows, want 0", len(recs))
+		}
+		return nil
+	}))
+}
+
+// TestControlStore_HeadValueCorruptionRejected drives decodeHeadValue's length-
+// overrun guards: a too-short value, an id length that overruns, a vec length that
+// overruns, and a payload length that overruns must each fail (loud), not panic.
+func TestControlStore_HeadValueCorruptionRejected(t *testing.T) {
+	good := encodeHeadValue(headRecord{ID: "x", DocID: 1, Stored: []float32{1, 2}, Norm: 1, Payload: []byte("p")})
+	cases := map[string][]byte{
+		"too short":        {0x00, 0x01},
+		"id overruns":      {0xff, 0xff, 0xff, 0x7f}, // huge idLen, nothing after
+		"vec overruns":     append([]byte(nil), corruptVecLen(good)...),
+		"payload overruns": append([]byte(nil), corruptPayloadLen(good)...),
+	}
+	for name, v := range cases {
+		if _, err := decodeHeadValue(1, v); err == nil {
+			t.Fatalf("decodeHeadValue(%q) = nil error, want corruption error", name)
+		}
+	}
+	// listHeadRecords must reject a wrong-length key, too.
+	cs, _ := openTestControlStore(t)
+	requireNoError(t, cs.update(func(tx *bolt.Tx) error {
+		return tx.Bucket(bktHead).Put([]byte{0x01, 0x02}, good) // 2-byte key, want 8
+	}))
+	if err := cs.view(func(tx *bolt.Tx) error {
+		_, lerr := listHeadRecords(tx)
+		return lerr
+	}); err == nil {
+		t.Fatal("listHeadRecords must reject a wrong-length head key")
+	}
+}
+
+// corruptVecLen rewrites the vec-length field of an encoded head value to a value
+// that overruns the buffer. Layout: idLen(4)|id|norm(4)|vecLen(4)|...
+func corruptVecLen(v []byte) []byte {
+	out := append([]byte(nil), v...)
+	idLen := int(uint32(out[0]) | uint32(out[1])<<8 | uint32(out[2])<<16 | uint32(out[3])<<24)
+	off := 4 + idLen + 4 // past idLen, id, norm
+	out[off] = 0xff
+	out[off+1] = 0xff
+	out[off+2] = 0xff
+	out[off+3] = 0x7f
+	return out
+}
+
+// corruptPayloadLen rewrites the payload-length field to overrun the buffer.
+func corruptPayloadLen(v []byte) []byte {
+	out := append([]byte(nil), v...)
+	idLen := int(uint32(out[0]) | uint32(out[1])<<8 | uint32(out[2])<<16 | uint32(out[3])<<24)
+	off := 4 + idLen + 4 // past idLen, id, norm → vecLen
+	n := int(uint32(out[off]) | uint32(out[off+1])<<8 | uint32(out[off+2])<<16 | uint32(out[off+3])<<24)
+	plOff := off + 4 + n*4 // past vecLen + vec → payloadLen
+	out[plOff] = 0xff
+	out[plOff+1] = 0xff
+	out[plOff+2] = 0xff
+	out[plOff+3] = 0x7f
+	return out
+}

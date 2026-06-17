@@ -169,7 +169,8 @@ func TestManifest_V3_AttrDeclsRoundTrip(t *testing.T) {
 
 // TestManifest_MissingIsFreshStore pins that a never-committed control store reads
 // back as "not present" — the fresh-store signal that used to be a missing manifest
-// file (os.IsNotExist) and now drives recover()'s head-only WAL replay.
+// file (os.IsNotExist) and now drives recover()'s head-only rebuild from the head
+// bucket.
 func TestManifest_MissingIsFreshStore(t *testing.T) {
 	cs, _ := openTestControlStore(t)
 	if _, ok := loadManifest(t, cs); ok {

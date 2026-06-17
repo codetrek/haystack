@@ -23,7 +23,7 @@ const (
 )
 
 // Options configures a Store. KV backs the string→docId idtable; Dir holds the
-// records WAL (records.wal).
+// bbolt control store (control.db) and the flat sealed-segment data dirs.
 type Options struct {
 	Dir    string
 	KV     kv.Store
@@ -56,8 +56,9 @@ const defaultAttrSearchT = 512
 // Store is the segmented records layer (Phase 2): one in-memory brute head plus
 // an ordered set of immutable on-disk sealed segments, each with a tombstone
 // bitmap and (when indexed) a per-segment HNSW. Writes go to the head; Delete is
-// routed to the owning segment via the global docId→segId map. A manifest +
-// head WAL provide crash recovery. All public methods are serialized by mu.
+// routed to the owning segment via the global docId→segId map. The bbolt control
+// store provides crash recovery (head record durability + manifest). All public
+// methods are serialized by mu.
 type Store struct {
 	mu     sync.RWMutex
 	metric Metric
@@ -65,15 +66,15 @@ type Store struct {
 	kv     kv.Store
 	alloc  *idtable.Allocator
 	seg    *segment // the head
-	wal    *WAL
 	// cs is the bbolt-backed CONTROL plane: the small, transactional store
-	// metadata (meta/segments/indexes/indexsegs/attrdecls) that replaced the
-	// hand-rolled manifest's serialize+CRC+tmp+fsync+rename+dir-fsync rewrite. One
-	// cs write-txn == one atomic structural change (seal/merge/create/drop/rebuild).
-	// The DATA plane (sealed vectors.dat + graph-<name>.dat + zero-copy mmap) stays
-	// flat-mmap and is never moved into bbolt (durability.md plane boundary).
+	// metadata (meta/segments/indexes/indexsegs/attrdecls) plus the durable head
+	// record (head bucket) that replaced the hand-rolled manifest rewrite AND the
+	// per-write records.wal append+fsync. One cs write-txn == one atomic structural
+	// or record change (Put/Delete/seal/merge/create/drop/rebuild). The DATA plane
+	// (sealed vectors.dat + graph-<name>.dat + zero-copy mmap) stays flat-mmap and is
+	// never moved into bbolt (durability.md plane boundary).
 	cs      *controlStore
-	idToDoc map[string]int64 // derived from WAL replay; lets reads avoid allocating
+	idToDoc map[string]int64 // derived from the head bucket at Open; lets reads avoid allocating
 
 	sealed   []*sealedSegment // live sealed segments, by attach order
 	sealedID []segID          // parallel: sealed[i] has segId sealedID[i]
@@ -163,8 +164,8 @@ type Store struct {
 // builder goroutine exists yet, so even a widened reopen-write cannot race.
 var testHookRecoverBeforeReopenWrite func()
 
-// Open creates or recovers a Store at opts.Dir, replaying the WAL to rebuild the
-// head segment, the id↔docId map, and the allocator state.
+// Open creates or recovers a Store at opts.Dir, rebuilding the in-memory head
+// segment, the id↔docId map, and the allocator state from the bbolt head bucket.
 func Open(opts Options) (*Store, error) {
 	if opts.KV == nil {
 		return nil, errors.New("vectorstore: Options.KV is required")
@@ -179,20 +180,14 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The directory must exist before OpenWAL (records.wal) and openControlStore
-	// (control.db) create their files in it; create it here so a fresh Dir works.
+	// The directory must exist before openControlStore (control.db) creates its
+	// file in it; create it here so a fresh Dir works.
 	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
-		alloc.Close()
-		return nil, err
-	}
-	w, err := OpenWAL(opts.Dir)
-	if err != nil {
 		alloc.Close()
 		return nil, err
 	}
 	cs, err := openControlStore(opts.Dir)
 	if err != nil {
-		w.Close()
 		alloc.Close()
 		return nil, err
 	}
@@ -202,7 +197,6 @@ func Open(opts Options) (*Store, error) {
 		kv:       opts.KV,
 		alloc:    alloc,
 		seg:      newSegment(opts.Metric),
-		wal:      w,
 		cs:       cs,
 		idToDoc:  make(map[string]int64),
 		docToSeg: make(map[int64]segID),
@@ -221,7 +215,6 @@ func Open(opts Options) (*Store, error) {
 	s.quiesced = sync.NewCond(&s.mu)
 	if err := s.recover(); err != nil {
 		cs.Close()
-		w.Close()
 		alloc.Close()
 		return nil, err
 	}
@@ -232,8 +225,9 @@ func Open(opts Options) (*Store, error) {
 // into an in-memory *manifest (the same carrier recover() already consumes). ok
 // is false when the meta record has never been written — a fresh / Phase-1 store
 // (exactly what a missing manifest file used to signal), so recover() falls back
-// to a head-only WAL replay. The single read-txn gives a consistent snapshot of
-// meta + segments + index configs + per-(index,segment) state + attr decls.
+// to a head-only rebuild from the head bucket. The single read-txn gives a
+// consistent snapshot of meta + segments + index configs + per-(index,segment)
+// state + attr decls.
 func (s *Store) loadControlManifest() (*manifest, bool, error) {
 	m := &manifest{}
 	var ok bool
@@ -270,22 +264,20 @@ func (s *Store) loadControlManifest() (*manifest, bool, error) {
 }
 
 // recover rebuilds the full segmented state. An empty control store (no committed
-// meta record) means a fresh or Phase-1 store: just replay the head WAL. Otherwise
-// load the control plane from bbolt (meta + segments + index configs + per-(index,
-// segment) state + attr decls), mmap every sealed segment, rebuild the global
-// docId→segId from each segment's slotDoc over LIVE slots (the persisted tombstone
-// bitmap is authoritative), reopen each indexed segment's graph, then replay the
-// head WAL last so a head put that supersedes a sealed old slot resolves against
-// the now-populated docToSeg.
+// meta record) means a fresh or Phase-1 store: just rebuild the head from the head
+// bucket. Otherwise load the control plane from bbolt (meta + segments + index
+// configs + per-(index, segment) state + attr decls), mmap every sealed segment,
+// rebuild the global docId→segId from each segment's slotDoc over LIVE slots (the
+// persisted tombstone bitmap is authoritative), reopen each indexed segment's
+// graph, then rebuild the head from the head bucket last so a head put that
+// supersedes a sealed old slot resolves against the now-populated docToSeg.
 //
 // Crash-safety (appendix #8/#19): the control store is authoritative for every
-// segment it lists. If a crash happened after the bbolt commit but BEFORE the
-// head WAL was truncated, the old WAL still carries the just-sealed pre-seal
-// records. Re-homing those into the head would tombstone the (immutable) sealed
-// slot and double-store the doc. So replay SKIPS any record whose docId is still
-// live in a sealed segment loaded from bbolt — it is already durable there. A
-// genuine post-seal Update already tombstoned the sealed slot at Put time, so that
-// doc is NOT live in the segment and is correctly re-homed.
+// segment it lists. Seal clears the head bucket in the SAME txn that adds the
+// segment, so a committed segment and its pre-seal head rows are never both present
+// — the head-bucket rebuild and the sealed segment can never double-store a doc.
+// (The head bucket needs no equivalent of the WAL's "skip a still-live sealed
+// docId" guard: the atomic seal commit already removed those rows.)
 func (s *Store) recover() error {
 	m, ok, err := s.loadControlManifest()
 	if err != nil {
@@ -294,13 +286,13 @@ func (s *Store) recover() error {
 	if !ok {
 		// Fresh / Phase-1 store, OR a crash during the very FIRST seal (segment
 		// dir written, control-store commit not yet durable). Sweep orphans before
-		// the head-only WAL replay: with no committed control state, every seg-* dir
+		// the head-only rebuild: with no committed control state, every seg-* dir
 		// is unreferenced and must be reclaimed, else a first-seal crash leaks a
 		// half-written segment dir forever (appendix #3).
 		if serr := s.sweepOrphansLocked(&manifest{}); serr != nil {
 			return serr
 		}
-		return s.replay()
+		return s.rebuildHead()
 	}
 	s.manifestVersion = m.Version
 	// The on-disk vector form is metric-dependent (cosine stores unit+|v|;
@@ -371,13 +363,12 @@ func (s *Store) recover() error {
 	if err := s.sweepOrphansLocked(m); err != nil {
 		return err
 	}
-	// Head WAL replay last (against the now-populated docToSeg), exactly once
-	// (appendix #15: replay must not run twice — that would double-apply every
-	// head record). Then, per index, reopen its indexed graphs from disk and resume
-	// every pending (index, segment) build (crash mid-build). The resume runs AFTER
-	// replay so the build reads a consistent tombstone view (a replayed head Delete
-	// may tombstone a sealed slot).
-	if err := s.replay(); err != nil {
+	// Head rebuild last (against the now-populated docToSeg), exactly once. Then,
+	// per index, reopen its indexed graphs from disk and resume every pending
+	// (index, segment) build (crash mid-build). The resume runs AFTER the head
+	// rebuild so the build reads a consistent tombstone view (a head Delete that
+	// was committed before a crash may tombstone a sealed slot).
+	if err := s.rebuildHead(); err != nil {
 		return err
 	}
 	// Two phases, and the ORDER is load-bearing for data-race freedom. Phase A
@@ -431,13 +422,14 @@ func (s *Store) recover() error {
 }
 
 // sweepOrphansLocked removes any seg-* directory on disk not referenced by the
-// loaded control state, plus any legacy manifest / manifest.tmp file. A crash
-// mid-seal leaves a half-written segment the control store never committed to; the
-// bbolt commit is the commit point, so any seg-* dir not in the segments bucket is
-// an orphan (§4.8, appendix #3). The legacy "manifest"/"manifest.tmp" files are
-// vestiges of the pre-bbolt control plane: a store opened from that format (or a
-// crashed legacy write) leaves them behind, and they are swept here so they cannot
-// accumulate or be mistaken for live control state. It also removes any stray
+// loaded control state, plus any legacy manifest / manifest.tmp / records.wal file.
+// A crash mid-seal leaves a half-written segment the control store never committed
+// to; the bbolt commit is the commit point, so any seg-* dir not in the segments
+// bucket is an orphan (§4.8, appendix #3). The legacy "manifest"/"manifest.tmp"
+// files (pre-bbolt control plane) and "records.wal" (pre-incr-2 head durability) are
+// vestiges of older on-disk formats: a store opened from one of those (or a crashed
+// legacy write) leaves them behind, and they are swept here so they cannot
+// accumulate or be mistaken for live state. It also removes any stray
 // graph-<name>.dat in a LIVE seg dir for an index NOT in the loaded set: a crash
 // after a Drop's bbolt commit but before its unlink reached disk leaves such an
 // orphan, and a later re-Create of that name must not open the stale graph
@@ -458,7 +450,7 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 	}
 	for _, ent := range entries {
 		name := ent.Name()
-		if (name == "manifest" || name == "manifest.tmp") && !ent.IsDir() {
+		if (name == "manifest" || name == "manifest.tmp" || name == "records.wal") && !ent.IsDir() {
 			if err := fsRemove(filepath.Join(s.dir, name)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -829,16 +821,16 @@ func (s *Store) waitQuiescentLocked() {
 }
 
 // Close waits for any in-flight background merges and builds, then flushes and
-// releases the WAL, sealed-segment mmaps, and idtable. It sets s.closing under
-// s.mu so every launch site (sealLocked/mergeNow/Compact/maybeMergeLocked) refuses
-// to start new work, then drains to quiescence (no merge AND no build in flight)
-// under the same s.mu the quiescence cond uses — so a launch can never race the
-// drain. Because both the swap path (mergeAndPublish) and the build path
-// (buildAndPublish) acquire s.mu transiently to do their accounting Done +
-// Broadcast, Close must NOT hold s.mu across the drain except as the cond requires
-// (quiesced.Wait releases it while parked). Closing the allocator commits any
-// pending id→docId mappings re-driven during replay, making the recovered state
-// durable.
+// releases the sealed-segment mmaps, the bbolt control store, and idtable. It sets
+// s.closing under s.mu so every launch site (sealLocked/mergeNow/Compact/
+// maybeMergeLocked) refuses to start new work, then drains to quiescence (no merge
+// AND no build in flight) under the same s.mu the quiescence cond uses — so a
+// launch can never race the drain. Because both the swap path (mergeAndPublish)
+// and the build path (buildAndPublish) acquire s.mu transiently to do their
+// accounting Done + Broadcast, Close must NOT hold s.mu across the drain except as
+// the cond requires (quiesced.Wait releases it while parked). Closing the allocator
+// commits any pending id→docId mappings re-driven during the head rebuild, making
+// the recovered state durable.
 func (s *Store) Close() error {
 	s.mu.Lock()
 	s.closing = true
@@ -847,12 +839,8 @@ func (s *Store) Close() error {
 	for _, ss := range s.sealed {
 		ss.close()
 	}
-	werr := s.wal.Close()
 	s.alloc.Close()
-	if cerr := s.cs.Close(); cerr != nil && werr == nil {
-		werr = cerr
-	}
-	return werr
+	return s.cs.Close()
 }
 
 // docIDForAlloc maps a string id to its stable int64 docId via the idtable,
@@ -870,8 +858,8 @@ func (s *Store) docIDForAlloc(id string) (int64, error) {
 // path (Get). It consults the in-memory idToDoc cache first; on a miss it reads
 // the idtable's durable key→id entry directly from the KV (the same key encoding
 // the allocator uses: {idtableKeyTypeKey}+id, value = 8-byte big-endian docId).
-// This is required so a sealed doc — whose Put record was truncated from the head
-// WAL at seal time and whose string id is therefore absent from idToDoc after
+// This is required so a sealed doc — whose head row was moved out of the head
+// bucket at seal time and whose string id is therefore absent from idToDoc after
 // recovery — is still resolvable on Get. A truly-unknown id (never Put) yields
 // found=false and, unlike GetId, allocates nothing.
 func (s *Store) lookupDocID(id string) (int64, bool, error) {
@@ -891,84 +879,68 @@ func (s *Store) lookupDocID(id string) (int64, bool, error) {
 	return int64(binary.BigEndian.Uint64(v)), true, nil
 }
 
-// replay rebuilds in-memory state from the records WAL. Records are applied in
-// LSN order; recPut re-drives the allocator for its string id (reconstructing
-// the same monotonic docId the original run assigned — see store.go decision #9),
-// tombstones the recorded old slot if any, then appends the new slot. recDelete
-// tombstones the recorded slot. The idToDoc map is rebuilt as a side effect so
-// reads never need to allocate. (Filled here; on a fresh Open the log is empty.)
-func (s *Store) replay() error {
-	return s.wal.Replay(func(typ recType, payload []byte) error {
-		switch typ {
-		case recPut:
-			r := decodePut(payload)
-			if r.badVersion {
-				return fmt.Errorf("vectorstore: incompatible WAL record format (pre-Phase-5 WAL not supported)")
-			}
-			// Re-establish id→docId in the allocator and the derived map.
-			if _, err := s.docIDForAlloc(r.ID); err != nil {
-				return err
-			}
-			s.idToDoc[r.ID] = r.DocID
-			// Crash-window guard (appendix #8/#19): if this docId is still LIVE in a
-			// sealed segment loaded from the manifest, this is a pre-seal record the
-			// seal already folded into that segment; the WAL just wasn't truncated
-			// before the crash. Skip it — re-homing would tombstone the immutable
-			// sealed slot and double-store the doc.
-			if prev, ok := s.docToSeg[r.DocID]; ok && prev != headSegID {
-				if ss := s.sealedByID(prev); ss != nil {
-					if _, live := ss.slotOfDoc(r.DocID); live {
-						return nil
-					}
-				}
-			}
-			s.docToSeg[r.DocID] = headSegID
-			if err := s.applyPut(r); err != nil {
-				return err
-			}
-		case recDelete:
-			d := decodeDelete(payload)
-			if _, err := s.docIDForAlloc(d.ID); err != nil {
-				return err
-			}
-			s.idToDoc[d.ID] = d.DocID
-			if segId, ok := s.docToSeg[d.DocID]; ok {
-				if segId == headSegID {
-					s.seg.tombstone(int(d.Slot))
-				} else if ss := s.sealedByID(segId); ss != nil {
-					if slot, found := ss.slotOfDoc(d.DocID); found {
-						_ = ss.tombstoneSlot(slot)
-					}
-				}
-				delete(s.docToSeg, d.DocID)
-			}
-		}
-		return nil
-	})
-}
-
-// applyPut mutates the segment for a (durably logged) put: tombstone the prior
-// slot, then append the new one. The WAL record carries the serialized payload
-// blob; applyPut decodes it to the typed Payload the head stores. Shared by Put
-// and replay.
-func (s *Store) applyPut(r putRecord) error {
-	if r.OldSlot >= 0 {
-		s.seg.tombstone(int(r.OldSlot))
-	}
-	pl, err := decodePayload(r.Payload)
-	if err != nil {
+// rebuildHead reconstructs the in-memory flat head from the durable head bucket.
+// Rows are applied in docId order (the head bucket's big-endian key order, which
+// is the monotonic Put insertion order); each row re-drives the allocator for its
+// string id (reconstructing the same docId the original run assigned — see
+// store.go decision #9) and appends a fresh head slot. The idToDoc map is rebuilt
+// as a side effect so reads never need to allocate. (On a fresh Open the bucket is
+// empty.) This replaces the records.wal replay: the per-write bbolt commits are
+// already durable, so there is no torn tail to truncate.
+//
+// Cross-segment durability (appendix #7): a Put that overwrites a doc currently in
+// a SEALED segment commits the head row durably, THEN tombstones the sealed slot in
+// the mmap'd tomb.dat (an msync that is NOT as crash-atomic as the bbolt commit). If
+// a crash lands between the two, the sealed slot is still live on reopen while the
+// head bucket already owns the doc. The head bucket is authoritative — its row means
+// the doc belongs in the head — so the rebuild re-applies the stale sealed slot's
+// tombstone here before re-homing the doc. (Seal's own crash window is gone: seal
+// clears the head bucket atomically with the segment add, so a sealed doc never has
+// a leftover head row.)
+func (s *Store) rebuildHead() error {
+	var recs []headRecord
+	if err := s.cs.view(func(tx *bolt.Tx) error {
+		var lerr error
+		recs, lerr = listHeadRecords(tx)
+		return lerr
+	}); err != nil {
 		return err
 	}
-	s.seg.append(r.DocID, r.Stored, r.Norm, pl)
+	for _, r := range recs {
+		// Re-establish id→docId in the allocator and the derived map.
+		if _, err := s.docIDForAlloc(r.ID); err != nil {
+			return err
+		}
+		s.idToDoc[r.ID] = r.DocID
+		// If this docId is still live in a sealed segment (a Put-time cross-segment
+		// tombstone that did not reach disk before a crash), tombstone that stale slot
+		// now: the durable head row is authoritative, so the doc must live only here.
+		if prev, ok := s.docToSeg[r.DocID]; ok && prev != headSegID {
+			if ss := s.sealedByID(prev); ss != nil {
+				if slot, found := ss.slotOfDoc(r.DocID); found {
+					if err := ss.tombstoneSlot(slot); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		s.docToSeg[r.DocID] = headSegID
+		pl, err := decodePayload(r.Payload)
+		if err != nil {
+			return err
+		}
+		s.seg.append(r.DocID, r.Stored, r.Norm, pl)
+	}
 	return nil
 }
 
 // Put inserts or replaces the vector and payload for id. It is crash-atomic: a
-// single WAL record (the string id, its docId, the old slot to tombstone if any,
-// and the new stored vector + norm + payload) is fsync'd before the in-memory
-// state is mutated, so a crash either loses the whole Put or applies it whole on
-// replay. The string→docId mapping is recovered from the same WAL record, so Put
-// is fully durable on return without depending on idtable's lazy commit.
+// single bbolt control-store write-txn writes the head row (the string id, the
+// stored vector + norm + payload) keyed by the id's docId and commits (fsync)
+// BEFORE the in-memory head is mutated, so a crash either loses the whole Put or
+// applies it whole on the head-bucket rebuild. The string→docId mapping is carried
+// in the same head row, so Put is fully durable on return without depending on
+// idtable's lazy commit.
 func (s *Store) Put(id string, v []float32, payload Payload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -986,21 +958,18 @@ func (s *Store) Put(id string, v []float32, payload Payload) error {
 	}
 	stored, norm := s.metric.prepare(v)
 
-	oldSlot := int64(-1)
-	if slot, ok := s.seg.slotOfDoc(docID); ok {
-		oldSlot = int64(slot)
-	}
-	rec := putRecord{ID: id, DocID: docID, OldSlot: oldSlot, Stored: stored, Norm: norm, Payload: plBytes}
-	if _, err := s.wal.Append(recPut, encodePut(rec)); err != nil {
-		return err
-	}
-	if err := s.wal.Sync(); err != nil {
+	// Commit the durable head row FIRST (one bbolt write-txn == the fsync that makes
+	// the Put durable on return). Keyed by docId, an upsert overwrites the prior row.
+	if err := s.cs.update(func(tx *bolt.Tx) error {
+		return putHeadRecord(tx, headRecord{ID: id, DocID: docID, Stored: stored, Norm: norm, Payload: plBytes})
+	}); err != nil {
 		return err
 	}
 	// Cross-segment update (appendix #7): if this docId currently lives in a
 	// SEALED segment, tombstone that sealed slot so it does not stay live in both
-	// the sealed graph and the head. The new copy lands in the head below; the WAL
-	// record (already fsynced) drives the same tombstone on replay.
+	// the sealed graph and the head. The new copy lands in the head below; on
+	// rebuild the head bucket row re-homes the doc to the head and the sealed slot
+	// stays tombstoned (durable in tomb.dat).
 	if prev, ok := s.docToSeg[docID]; ok && prev != headSegID {
 		if ss := s.sealedByID(prev); ss != nil {
 			if slot, found := ss.slotOfDoc(docID); found {
@@ -1010,11 +979,19 @@ func (s *Store) Put(id string, v []float32, payload Payload) error {
 			}
 		}
 	}
+	// Tombstone the prior in-memory head slot (if this id was already in the head),
+	// then append the new slot. The durable head row (already committed) carries
+	// only the latest vector, so a rebuild yields exactly this one live slot.
+	if oldSlot, ok := s.seg.slotOfDoc(docID); ok {
+		s.seg.tombstone(oldSlot)
+	}
 	s.idToDoc[id] = docID
 	s.docToSeg[docID] = headSegID
-	if err := s.applyPut(rec); err != nil {
+	pl, err := decodePayload(plBytes)
+	if err != nil {
 		return err
 	}
+	s.seg.append(docID, stored, norm, pl)
 
 	// Auto-seal when the head fills (§4.2): freeze it into a sealed segment and
 	// start a fresh head, so callers never have to call Seal() explicitly. Put
@@ -1085,7 +1062,8 @@ func (s *Store) Get(id string) (v []float32, payload Payload, found bool, err er
 // Deleting an unknown or already-deleted id is a no-op. The id↔docId mapping is
 // left in place; a later Put reuses the same docId (in the head). For a sealed
 // segment the tombstone is persisted in that segment's mmap'd bitmap (durable on
-// return); for the head it is a WAL-protected in-memory tombstone.
+// return); for the head it is a single bbolt control-store commit that removes the
+// head row (durable on return).
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1105,10 +1083,11 @@ func (s *Store) Delete(id string) error {
 		if !ok {
 			return nil
 		}
-		if _, err := s.wal.Append(recDelete, encodeDelete(id, docID, int64(slot))); err != nil {
-			return err
-		}
-		if err := s.wal.Sync(); err != nil {
+		// Remove the durable head row FIRST (one bbolt write-txn == the fsync that
+		// makes the delete durable on return), then drop the in-memory slot.
+		if err := s.cs.update(func(tx *bolt.Tx) error {
+			return deleteHeadRecord(tx, docID)
+		}); err != nil {
 			return err
 		}
 		s.seg.tombstone(slot)
@@ -1439,13 +1418,14 @@ func (s *Store) attachSealedForTest(ss *sealedSegment, id segID) {
 }
 
 // Seal freezes the current head into a new immutable sealed records-segment on
-// disk, atomically updates the manifest (head→new sealed seg, state pending,
-// fresh empty head), truncates the head WAL, then spawns a BACKGROUND build of
-// the segment's HNSW. The records-segment is durable before the manifest swap and
-// the WAL truncate, so a crash never loses a durably-acked write. Seal returns as
-// soon as the segment is published pending — the store is immediately writable
-// (fresh head) and searchable (pending segment served by its brute leg). An empty
-// head is a no-op.
+// disk, then commits ONE control-store write-txn that adds the segment (state
+// pending) AND clears the head bucket atomically, then spawns a BACKGROUND build
+// of the segment's HNSW. The records-segment is durable before the seal commit, so
+// a crash never loses a durably-acked write, and the segment add + head clear are
+// one atomic commit (no manifest-swap / WAL-reset window). Seal returns as soon as
+// the segment is published pending — the store is immediately writable (fresh
+// head) and searchable (pending segment served by its brute leg). An empty head is
+// a no-op.
 func (s *Store) Seal() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1474,7 +1454,8 @@ func (s *Store) sealLocked() error {
 		ss.attr, _ = openAttrFile(segDir, ss, s.attrDecls)
 	}
 
-	// (2) Publish as PENDING + fresh head + atomic manifest swap.
+	// (2) Publish as PENDING + fresh head + atomic seal commit (segment add + head
+	// clear in one txn, below).
 	s.sealed = append(s.sealed, ss)
 	s.sealedID = append(s.sealedID, id)
 	s.nextSeg++
@@ -1485,23 +1466,22 @@ func (s *Store) sealLocked() error {
 	}
 	s.seg = newSegment(s.metric)
 	// Make the idtable's string→docId mappings + nextId counter durable BEFORE the
-	// manifest swap and the WAL reset below. The head WAL is the only other record
-	// of these mappings; once wal.Reset truncates it, the just-sealed docs'
-	// identities exist solely in the idtable. The allocator commits lazily (5s tick
-	// / Close), so without this synchronous commit a crash between Seal and the next
-	// tick loses every sealed doc's mapping → phantom docs (searchable but Get/Delete
-	// not-found) + docId collisions on re-Put. Order is load-bearing: idtable durable
-	// → manifest durable → WAL truncated.
+	// seal commit below. The head bucket is the only other record of these mappings;
+	// once commitSealLocked clears it, the just-sealed docs' identities exist solely
+	// in the idtable. The allocator commits lazily (5s tick / Close), so without this
+	// synchronous commit a crash between Seal and the next tick loses every sealed
+	// doc's mapping → phantom docs (searchable but Get/Delete not-found) + docId
+	// collisions on re-Put. Order is load-bearing: idtable durable → seal commit
+	// (segment add + head clear, atomic).
 	if err := s.alloc.Commit(); err != nil {
 		return err
 	}
-	if err := s.writeManifestLocked(); err != nil {
-		return err
-	}
-
-	// (3) Truncate the old head WAL — the writes it carried are now in the durable
-	// sealed segment + manifest.
-	if err := s.wal.Reset(); err != nil {
+	// (3) ONE control-store write-txn adds the new sealed segment AND clears the head
+	// bucket. The writes the head bucket carried are now in the durable sealed
+	// segment, and the segment add + head clear commit atomically — there is no
+	// separate WAL-truncate step (and no crash window between a manifest swap and a
+	// WAL reset, which the appendix #8/#19 guard formerly had to defend).
+	if err := s.commitSealLocked(); err != nil {
 		return err
 	}
 
@@ -1648,7 +1628,7 @@ func (s *Store) isIndexedForTest(id segID) bool {
 // set, and every named index's config + per-(index,segment) build state — as ONE
 // bbolt write-txn (controlStore). This single atomic commit is the structural-
 // change boundary that replaced the hand-rolled manifest's serialize+CRC32+
-// tmp+fsync+rename+dir-fsync rewrite: a seal/merge/create/drop/rebuild calls it
+// tmp+fsync+rename+dir-fsync rewrite: a merge/create/drop/rebuild calls it
 // once and either the whole new control state is durable or none of it is. Caller
 // holds s.mu. The version is bumped exactly once per commit (appendix #19 — the
 // draft double-incremented with a dead assignment).
@@ -1657,8 +1637,46 @@ func (s *Store) isIndexedForTest(id segID) bool {
 // is (re)written and any bucket key no longer backed by live in-memory state is
 // deleted in the same txn. That is what makes a merge — which replaces N input
 // segments with M outputs — a single commit: the retired inputs' segment +
-// index-seg keys are removed alongside the new outputs' keys.
+// index-seg keys are removed alongside the new outputs' keys. Seal does NOT call
+// this directly: it uses commitSealLocked, which folds the head-bucket clear into
+// the SAME txn so the head rows move into the new sealed segment atomically.
 func (s *Store) writeManifestLocked() error {
+	return s.cs.update(func(tx *bolt.Tx) error {
+		return s.reconcileControlTx(tx)
+	})
+}
+
+// testHookReconcileErr (nil in production) forces reconcileControlTx to fail
+// INSIDE a live control-store write-txn, so a test can cover the in-txn error
+// branch of commitSealLocked (a bbolt write error mid-reconcile rolls the whole
+// commit back — for a seal the segment add and the head clear are all-or-nothing).
+// It is a package-level var, like testHookRecoverBeforeReopenWrite, because it
+// gates the commit body, not store state.
+var testHookReconcileErr error
+
+// commitSealLocked is the seal commit: it reconciles the control plane (adding the
+// just-written sealed segment) AND clears the head bucket in ONE bbolt write-txn.
+// The atomicity is load-bearing — the head rows leave the head bucket exactly as
+// the segment that absorbed them becomes durable, so a crash leaves either the old
+// head (no new segment) or the new segment (empty head), never a doc in both.
+func (s *Store) commitSealLocked() error {
+	return s.cs.update(func(tx *bolt.Tx) error {
+		if err := s.reconcileControlTx(tx); err != nil {
+			return err
+		}
+		return clearHead(tx)
+	})
+}
+
+// reconcileControlTx is the full control-plane reconciliation body shared by
+// writeManifestLocked and commitSealLocked. It bumps the version once, (re)writes
+// meta + every live attr-decl / segment / index config / (index,segment) state,
+// and deletes any bucket key no longer backed by live in-memory state. Caller
+// holds s.mu and supplies the open write-txn.
+func (s *Store) reconcileControlTx(tx *bolt.Tx) error {
+	if testHookReconcileErr != nil {
+		return testHookReconcileErr // test-only: drive the in-txn reconcile-error branch
+	}
 	s.manifestVersion++
 	// Snapshot the live attr-index set (sorted only for determinism in tests).
 	props := make([]string, 0, len(s.attrDecls))
@@ -1689,60 +1707,58 @@ func (s *Store) writeManifestLocked() error {
 			liveIdxSeg[isKey{n, sid}] = true
 		}
 	}
-	return s.cs.update(func(tx *bolt.Tx) error {
-		if err := putMeta(tx, s.manifestVersion, headSegID, s.metric); err != nil {
+	if err := putMeta(tx, s.manifestVersion, headSegID, s.metric); err != nil {
+		return err
+	}
+	// attrdecls: (re)write the live set, then drop any declaration no longer held.
+	for _, p := range props {
+		if err := putAttrDecl(tx, attrDecl{Property: p, Kind: s.attrDecls[p]}); err != nil {
 			return err
 		}
-		// attrdecls: (re)write the live set, then drop any declaration no longer held.
-		for _, p := range props {
-			if err := putAttrDecl(tx, attrDecl{Property: p, Kind: s.attrDecls[p]}); err != nil {
+	}
+	if err := deleteAttrDeclsNotIn(tx, s.attrDecls); err != nil {
+		return err
+	}
+	// segments: (re)write every live sealed segment, then drop retired ones.
+	for i, ss := range s.sealed {
+		if err := putSegment(tx, segmentEntry{
+			SegID:     s.sealedID[i],
+			Gen:       0,
+			VecCount:  uint64(ss.count()),
+			TombCount: uint64(ss.tombCount()),
+		}); err != nil {
+			return err
+		}
+	}
+	if err := deleteSegmentsNotIn(tx, liveSeg); err != nil {
+		return err
+	}
+	// indexes + indexsegs: (re)write every live index config and one index-seg
+	// entry per (index, sealed segment) — segIndexed once its graph is built,
+	// else segPending (the brute-served state recover() resumes from).
+	for _, n := range inames {
+		vx := s.indexes[n]
+		if err := putIndexConfig(tx, indexConfigEntry{
+			Name: n, Type: "hnsw", Metric: vx.metric,
+			M: vx.cfg.M, EfConstruction: vx.cfg.EfConstruction, EfSearch: vx.cfg.EfSearch,
+		}); err != nil {
+			return err
+		}
+		for _, sid := range s.sealedID {
+			st := segPending
+			if vx.graphs[sid] != nil {
+				st = segIndexed
+			}
+			if err := putIndexSeg(tx, indexSegEntry{Index: n, SegID: sid, Gen: 0, State: st}); err != nil {
 				return err
 			}
 		}
-		if err := deleteAttrDeclsNotIn(tx, s.attrDecls); err != nil {
-			return err
-		}
-		// segments: (re)write every live sealed segment, then drop retired ones.
-		for i, ss := range s.sealed {
-			if err := putSegment(tx, segmentEntry{
-				SegID:     s.sealedID[i],
-				Gen:       0,
-				VecCount:  uint64(ss.count()),
-				TombCount: uint64(ss.tombCount()),
-			}); err != nil {
-				return err
-			}
-		}
-		if err := deleteSegmentsNotIn(tx, liveSeg); err != nil {
-			return err
-		}
-		// indexes + indexsegs: (re)write every live index config and one index-seg
-		// entry per (index, sealed segment) — segIndexed once its graph is built,
-		// else segPending (the brute-served state recover() resumes from).
-		for _, n := range inames {
-			vx := s.indexes[n]
-			if err := putIndexConfig(tx, indexConfigEntry{
-				Name: n, Type: "hnsw", Metric: vx.metric,
-				M: vx.cfg.M, EfConstruction: vx.cfg.EfConstruction, EfSearch: vx.cfg.EfSearch,
-			}); err != nil {
-				return err
-			}
-			for _, sid := range s.sealedID {
-				st := segPending
-				if vx.graphs[sid] != nil {
-					st = segIndexed
-				}
-				if err := putIndexSeg(tx, indexSegEntry{Index: n, SegID: sid, Gen: 0, State: st}); err != nil {
-					return err
-				}
-			}
-		}
-		if err := deleteIndexConfigsNotIn(tx, liveIdx); err != nil {
-			return err
-		}
-		return deleteIndexSegsNotIn(tx, func(index string, id segID) bool {
-			return liveIdxSeg[isKey{index, id}]
-		})
+	}
+	if err := deleteIndexConfigsNotIn(tx, liveIdx); err != nil {
+		return err
+	}
+	return deleteIndexSegsNotIn(tx, func(index string, id segID) bool {
+		return liveIdxSeg[isKey{index, id}]
 	})
 }
 

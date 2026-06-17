@@ -13,7 +13,7 @@ import (
 // makeRecoveredStore seals one indexed segment + leaves a few head docs, then
 // reopens. It returns the recovered store and its kv so further reopens can share
 // the same idtable. The sealed docs' string ids are absent from the reopened
-// idToDoc (the head WAL was truncated at seal), so Get/Delete of them must resolve
+// idToDoc (the head bucket was cleared at seal), so Get/Delete of them must resolve
 // via the durable idtable (lookupDocID's KV fallback).
 func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 	kvStore := newTestKV(t)
@@ -143,15 +143,87 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 	}
 }
 
-// TestRecovery_CrashAfterManifestSwapBeforeWALReset simulates the crash window
-// the appendix #8/#19 guard defends: the sealed records + manifest are durable
-// but the head WAL was NOT yet truncated, so it still carries every pre-seal Put.
-// recover() must treat the manifest as authoritative — each doc must live in
-// exactly ONE segment (the sealed one), the head must be empty, and Search must
-// return no duplicate docIds. Re-homing the pre-seal records into the head (the
-// un-guarded behavior) would double-store every doc and corrupt the sealed tomb
-// bitmap.
-func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
+// TestRecovery_CrossSegmentUpdateTombstoneNotFlushed covers rebuildHead's
+// cross-segment durability branch (appendix #7). A Put that overwrites a doc living
+// in a SEALED segment commits the durable head row, THEN tombstones the sealed slot
+// via an mmap msync that is less crash-atomic than the bbolt commit. We hand-build
+// the crash state where the head row IS durable but the sealed slot is STILL LIVE
+// (the msync lost): a sealed segment with doc X live + a committed control snapshot +
+// a head-bucket row for X carrying a NEW vector. On reopen the durable head row is
+// authoritative, so the rebuild must tombstone the stale sealed slot and re-home X
+// to the head — X must read back as its NEW value and appear in Search exactly once.
+func TestRecovery_CrossSegmentUpdateTombstoneNotFlushed(t *testing.T) {
+	kvStore := newTestKV(t)
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	rng := rand.New(rand.NewSource(7777))
+	dim := 8
+	randVec := func() []float32 {
+		v := make([]float32, dim)
+		for d := range v {
+			v[d] = rng.Float32()
+		}
+		return v
+	}
+	// Seal a batch so doc "x" lives in a sealed segment (slot 0).
+	const n = 6
+	requireNoError(t, s.Put("x", randVec(), Payload{"v": StringValue("old")}))
+	for i := 0; i < n; i++ {
+		requireNoError(t, s.Put("f-"+itoa(i), randVec(), nil))
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex())
+	xDoc := s.idToDoc["x"]
+
+	// Hand-build the crash window: commit a durable head row for "x" with a NEW
+	// vector WITHOUT tombstoning the sealed slot (simulating the lost msync). The
+	// sealed segment on disk still has "x" live. Commit through s's open control DB.
+	newVec, newNorm := Cosine.prepare([]float32{1, 0, 0, 0, 0, 0, 0, 0})
+	plNew, err := encodePayload(Payload{"v": StringValue("new")})
+	requireNoError(t, err)
+	s.mu.Lock()
+	requireNoError(t, s.cs.update(func(tx *bolt.Tx) error {
+		return putHeadRecord(tx, headRecord{ID: "x", DocID: xDoc, Stored: newVec, Norm: newNorm, Payload: plNew})
+	}))
+	s.mu.Unlock()
+
+	// Crash-reopen: the sealed slot for "x" is still live on disk, but the durable
+	// head row owns "x" — rebuildHead must tombstone the stale sealed slot.
+	s2 := reopenUnclean(t, s, kvStore)
+	requireNoError(t, s2.WaitForIndex())
+
+	// "x" reads back as the NEW value (from the head, not the stale sealed slot).
+	v, pl, found, err := s2.Get("x")
+	requireNoError(t, err)
+	if !found || pl["v"].Str != "new" || !approxEqual(v[0], 1, 1e-3) {
+		t.Fatalf("Get(x) = %v,%#v,%v, want new value in head", v, pl, found)
+	}
+	// "x" appears exactly once in Search (not double-stored across head + sealed).
+	got, err := s2.Search("default", []float32{1, 0, 0, 0, 0, 0, 0, 0}, n+2, nil)
+	requireNoError(t, err)
+	seen := 0
+	for _, h := range got {
+		if h.DocID == xDoc {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("docId x appears %d times in Search results, want exactly 1 (no double-store)", seen)
+	}
+}
+
+// TestRecovery_SealHeadClearIsAtomicNoDoubleStore proves the bbolt seal commit is
+// atomic: the head rows leave the head bucket in the SAME write-txn that adds the
+// new sealed segment, so a crash-reopen can never find a doc in BOTH the sealed
+// segment and the rebuilt head. (Under the former WAL design this was the appendix
+// #8/#19 crash window — manifest committed but the WAL not yet truncated, so it
+// still carried every pre-seal Put — and recover() needed an explicit
+// skip-already-sealed guard. With the head in bbolt that window is structurally
+// impossible: there is no separate truncate step to crash between.) After a real
+// Seal + unclean reopen, the head must be empty, the sealed segment present, every
+// doc readable exactly once, and Search must return no duplicate docIds.
+func TestRecovery_SealHeadClearIsAtomicNoDoubleStore(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
 	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
@@ -170,46 +242,25 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 		requireNoError(t, s.Put("c-"+itoa(i), randVec(), nil))
 	}
 
-	// Hand-build the post-commit, pre-WAL-reset crash state on disk: dump the head
-	// to a sealed segment and commit a control-store snapshot listing it as pending
-	// — WITHOUT calling Seal (so the WAL is NOT reset and still holds all 40 Puts).
-	// Commit through s's already-open control DB (a second opener would block on the
-	// flock).
-	segDir := filepath.Join(dir, segDirName(segID(1), 0))
-	s.mu.Lock()
-	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
-	requireNoError(t, s.cs.update(func(tx *bolt.Tx) error {
-		if err := putMeta(tx, 1, headSegID, Cosine); err != nil {
-			return err
-		}
-		if err := putSegment(tx, segmentEntry{SegID: 1, Gen: 0, VecCount: uint64(s.seg.dim), TombCount: 0}); err != nil {
-			return err
-		}
-		if err := putIndexConfig(tx, indexConfigEntry{
-			Name: defaultIndexName, Type: "hnsw", Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: 64,
-		}); err != nil {
-			return err
-		}
-		return putIndexSeg(tx, indexSegEntry{Index: defaultIndexName, SegID: 1, Gen: 0, State: segPending})
-	}))
-	s.mu.Unlock()
-	// Abandon s WITHOUT Close (Close would flush/reset). Release the OS handles a
-	// kill would drop (WAL fd + control-DB lock). Reopen over the same dir+KV: the
-	// durable control store + the un-truncated WAL are exactly the crash state.
-	crashRelease(t, s)
-	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
-	requireNoError(t, err)
-	t.Cleanup(func() { _ = s2.Close() })
+	// Real Seal: dumps the head to a sealed segment AND clears the head bucket in
+	// one atomic control-store commit. alloc.Commit (inside Seal) makes the
+	// string→docId mappings durable in the KV before the head bucket is cleared.
+	requireNoError(t, s.Seal())
+
+	// Crash-reopen WITHOUT Close (no quiesce, no extra idtable commit). The durable
+	// control store (segment present, head bucket empty) is exactly the post-seal
+	// state.
+	s2 := reopenUnclean(t, s, kvStore)
 	requireNoError(t, s2.WaitForIndex())
 
-	// Head must be empty — no pre-seal record was re-homed into it.
+	// Head must be empty — the seal commit cleared it atomically with the segment add.
 	s2.mu.RLock()
 	headLive := 0
 	s2.seg.eachLive(func(int, int64, []float32, float32) { headLive++ })
 	nSealed := len(s2.sealed)
 	s2.mu.RUnlock()
 	if headLive != 0 {
-		t.Fatalf("head live = %d after crash-window recovery, want 0 (pre-seal records re-homed = double-store)", headLive)
+		t.Fatalf("head live = %d after seal+crash recovery, want 0 (head not cleared atomically = double-store)", headLive)
 	}
 	if nSealed != 1 {
 		t.Fatalf("sealed segments = %d, want 1", nSealed)
@@ -218,7 +269,7 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 	// Every doc is present and Search returns no duplicate docIds.
 	for i := 0; i < n; i++ {
 		if _, _, found, _ := s2.Get("c-" + itoa(i)); !found {
-			t.Fatalf("doc c-%d lost after crash-window recovery", i)
+			t.Fatalf("doc c-%d lost after seal+crash recovery", i)
 		}
 	}
 	got, err := s2.Search("default", randVec(), n, nil)

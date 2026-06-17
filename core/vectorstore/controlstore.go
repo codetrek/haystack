@@ -3,6 +3,7 @@ package vectorstore
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 	"path/filepath"
 	"time"
 
@@ -23,12 +24,25 @@ import (
 // bloat the file under long-lived read transactions.
 //
 // This is the foundation increment: the type, the bucket schema, and the
-// serialization adapter for the control-plane records. It is NOT yet wired into
-// Store. The head/docseg/tomb buckets are created on open but filled in by later
-// increments (head durability, recovery map, tombstones).
+// serialization adapter for the control-plane records. The head bucket is wired
+// into Store as of increment 2 (head record durability replaces records.wal); the
+// docseg/tomb buckets are created on open but filled in by later increments
+// (recovery map, tombstones).
 type controlStore struct {
 	db   *bolt.DB
 	path string
+
+	// failNextUpdate, when non-nil, is returned by the NEXT update() call (which it
+	// then clears) INSTEAD of running the bbolt txn — a test-only seam to force a
+	// failed durable commit on the real Put/Delete path (the bbolt analog of the old
+	// WAL fsync fault). bbolt opens its own file internally, so the osFile fault hook
+	// cannot reach its fsync; this seam injects the same "the durable commit failed"
+	// condition at the one call site Put/Delete go through. Nil in production.
+	failNextUpdate error
+	// failClose, when non-nil, is returned by Close() (after still releasing the OS
+	// lock) — a test-only seam to drive Store.Close's control-store error path. Nil
+	// in production.
+	failClose error
 }
 
 // controlDBName is the bbolt file inside a store directory. It sits beside the
@@ -42,13 +56,13 @@ var (
 	bktSegments  = []byte("segments")  // segId(8) → {gen, vecCount, tombCount}
 	bktIndexes   = []byte("indexes")   // name → {type, metric, M, efC, efS}
 	bktIndexSegs = []byte("indexsegs") // (name,segId) → {gen, state}
-	bktHead      = []byte("head")      // docId(8) → {vector, norm, payload} (incr 2)
+	bktHead      = []byte("head")      // docId(8) → {id, vector, norm, payload} (incr 2)
 	bktDocSeg    = []byte("docseg")    // docId(8) → segId(8)                (incr 4/3)
 	bktTomb      = []byte("tomb")      // (segId,slot) → present              (incr 3)
 )
 
-// allBuckets is the full set created on open, in a stable order. head/docseg/tomb
-// are created empty now and populated by later increments.
+// allBuckets is the full set created on open, in a stable order. docseg/tomb are
+// created empty now and populated by later increments; head is wired in incr 2.
 var allBuckets = [][]byte{
 	bktMeta, bktAttrDecls, bktSegments, bktIndexes, bktIndexSegs,
 	bktHead, bktDocSeg, bktTomb,
@@ -101,6 +115,10 @@ func (cs *controlStore) Close() error {
 	if cs == nil || cs.db == nil {
 		return nil
 	}
+	if cs.failClose != nil {
+		_ = cs.db.Close() // still release the OS lock; surface the injected error
+		return cs.failClose
+	}
 	return cs.db.Close()
 }
 
@@ -111,6 +129,11 @@ func (cs *controlStore) Close() error {
 // rewrite. Callers compose several put* helpers inside one update() to make a
 // structural change (e.g. a seal) a single durable step.
 func (cs *controlStore) update(fn func(tx *bolt.Tx) error) error {
+	if cs.failNextUpdate != nil {
+		err := cs.failNextUpdate
+		cs.failNextUpdate = nil
+		return err
+	}
 	return cs.db.Update(fn)
 }
 
@@ -334,6 +357,150 @@ func listIndexSegs(tx *bolt.Tx) ([]indexSegEntry, error) {
 			Gen:   binary.LittleEndian.Uint32(v[0:]),
 			State: segState(v[4]),
 		})
+	}
+	return out, nil
+}
+
+// --- head bucket -----------------------------------------------------------
+//
+// The head bucket is the durable form of the in-memory brute head: one row per
+// LIVE head docId, written transactionally on every Put/Delete (replacing the
+// per-write append+fsync records.wal). One bbolt commit per write IS the
+// durability boundary — a returned Put is durable because db.Update fsyncs the
+// committing page. The in-memory flat head stays for brute-search speed and is
+// rebuilt from this bucket at Open (rebuildHead, NOT a WAL replay).
+//
+// Value layout: idLen(4) | id | norm(4) | vecLen(4) | vec(N*4) | plLen(4) | pl.
+// The string id is stored alongside the vector for the SAME reason the WAL
+// stored it: it makes the id↔docId mapping crash-safe independently of idtable's
+// lazily-committed batch. On Open, rebuildHead re-drives the allocator for each
+// id (reconstructing the same monotonic docId) and rebuilds idToDoc, so a crash
+// with no idtable commit still recovers every head doc's mapping.
+
+// headRecord is one durable head row: the caller's string id, its docId, the
+// stored-form vector + norm, and the serialized payload blob.
+type headRecord struct {
+	ID      string
+	DocID   int64
+	Stored  []float32
+	Norm    float32
+	Payload []byte
+}
+
+// putString writes a length-prefixed string (len uint32 LE, then bytes) at off
+// and returns the offset past it. getString reverses it.
+func putString(buf []byte, off int, s string) int {
+	binary.LittleEndian.PutUint32(buf[off:], uint32(len(s)))
+	off += 4
+	copy(buf[off:], s)
+	return off + len(s)
+}
+
+// encodeHeadValue serializes everything but the docId (which is the bucket key).
+func encodeHeadValue(r headRecord) []byte {
+	size := 4 + len(r.ID) + 4 + 4 + len(r.Stored)*4 + 4 + len(r.Payload)
+	buf := make([]byte, size)
+	off := putString(buf, 0, r.ID)
+	binary.LittleEndian.PutUint32(buf[off:], math.Float32bits(r.Norm))
+	off += 4
+	binary.LittleEndian.PutUint32(buf[off:], uint32(len(r.Stored)))
+	off += 4
+	for _, v := range r.Stored {
+		binary.LittleEndian.PutUint32(buf[off:], math.Float32bits(v))
+		off += 4
+	}
+	binary.LittleEndian.PutUint32(buf[off:], uint32(len(r.Payload)))
+	off += 4
+	copy(buf[off:], r.Payload)
+	return buf
+}
+
+// decodeHeadValue reverses encodeHeadValue, supplying the docId from the key. It
+// validates every length against the buffer so a structurally corrupt value
+// fails recovery loud rather than panicking on an out-of-range slice (the bbolt
+// analog of the old WAL CRC/torn-tail rejection).
+func decodeHeadValue(docID int64, v []byte) (headRecord, error) {
+	r := headRecord{DocID: docID}
+	if len(v) < 4 {
+		return r, fmt.Errorf("controlstore: corrupt head value (len %d)", len(v))
+	}
+	idLen := int(binary.LittleEndian.Uint32(v))
+	off := 4
+	if idLen < 0 || off+idLen+4+4 > len(v) {
+		return r, fmt.Errorf("controlstore: corrupt head value (id len %d overruns %d)", idLen, len(v))
+	}
+	r.ID = string(v[off : off+idLen])
+	off += idLen
+	r.Norm = math.Float32frombits(binary.LittleEndian.Uint32(v[off:]))
+	off += 4
+	n := int(binary.LittleEndian.Uint32(v[off:]))
+	off += 4
+	if n < 0 || off+n*4+4 > len(v) {
+		return r, fmt.Errorf("controlstore: corrupt head value (vec len %d overruns %d)", n, len(v))
+	}
+	r.Stored = make([]float32, n)
+	for i := 0; i < n; i++ {
+		r.Stored[i] = math.Float32frombits(binary.LittleEndian.Uint32(v[off:]))
+		off += 4
+	}
+	pl := int(binary.LittleEndian.Uint32(v[off:]))
+	off += 4
+	if pl < 0 || off+pl > len(v) {
+		return r, fmt.Errorf("controlstore: corrupt head value (payload len %d overruns %d)", pl, len(v))
+	}
+	if pl > 0 {
+		r.Payload = make([]byte, pl)
+		copy(r.Payload, v[off:off+pl])
+	}
+	return r, nil
+}
+
+// putHeadRecord writes (or replaces) one head row keyed by docId. Called inside
+// the Put write-txn; the commit makes the row durable.
+func putHeadRecord(tx *bolt.Tx, r headRecord) error {
+	return tx.Bucket(bktHead).Put(segKey(segID(r.DocID)), encodeHeadValue(r))
+}
+
+// deleteHeadRecord removes the head row for docId (a head Delete). Deleting an
+// absent key is a no-op in bbolt.
+func deleteHeadRecord(tx *bolt.Tx, docID int64) error {
+	return tx.Bucket(bktHead).Delete(segKey(segID(docID)))
+}
+
+// clearHead empties the head bucket in tx. Seal calls it in the SAME write-txn
+// that adds the new sealed segment, so the head rows move out of the head bucket
+// and into the sealed flat segment atomically: a crash leaves either the old head
+// (no segment) or the new segment (empty head), never both.
+func clearHead(tx *bolt.Tx) error {
+	b := tx.Bucket(bktHead)
+	var doomed [][]byte
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		doomed = append(doomed, append([]byte(nil), k...))
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// listHeadRecords returns every head row in docId order (segKey is big-endian, so
+// the cursor yields ascending docId — the monotonic Put insertion order the flat
+// head must be rebuilt in). The slice is the recovery feed for rebuildHead.
+func listHeadRecords(tx *bolt.Tx) ([]headRecord, error) {
+	var out []headRecord
+	c := tx.Bucket(bktHead).Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		if len(k) != 8 {
+			return nil, fmt.Errorf("controlstore: corrupt head key (len %d)", len(k))
+		}
+		r, err := decodeHeadValue(int64(binary.BigEndian.Uint64(k)), v)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, r)
 	}
 	return out, nil
 }

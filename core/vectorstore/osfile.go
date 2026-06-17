@@ -5,10 +5,10 @@ import (
 	"runtime"
 )
 
-// osFile is the subset of *os.File the WAL and the mmap segment data files use,
-// abstracted so tests can inject IO failures. *os.File satisfies it. (Widened from
-// the Phase-1 subset to add Fd/ReadAt/Stat for mmap and the page-aligned data-file
-// headers.)
+// osFile is the subset of *os.File the mmap segment data files (seal/merge writes,
+// mmap headers) use, abstracted so tests can inject IO failures. *os.File
+// satisfies it. (Widened from the Phase-1 subset to add Fd/ReadAt/Stat for mmap and
+// the page-aligned data-file headers.)
 type osFile interface {
 	Read(p []byte) (int, error)
 	Write(p []byte) (int, error)

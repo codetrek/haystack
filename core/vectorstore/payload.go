@@ -88,12 +88,13 @@ func (p Payload) clone() Payload {
 	return cp
 }
 
-// payloadFmtVersion is the on-disk/in-WAL serialization version of a Payload
-// blob. The Phase-1 opaque-[]byte payloads were UNVERSIONED raw bytes; bumping a
-// version byte at the front lets decodePayload reject any pre-Phase-5 blob (the
-// format predates production data — same clean-break precedent as manifest v1,
-// manifest.go). Encoding: ver(1) | count(uvarint) | [ keyLen(uvarint)|key |
-// kind(1)| value ]* with key order sorted for a canonical, byte-stable blob.
+// payloadFmtVersion is the serialization version of a Payload blob (stored in the
+// head bucket value and the sealed payload.dat). The Phase-1 opaque-[]byte
+// payloads were UNVERSIONED raw bytes; bumping a version byte at the front lets
+// decodePayload reject any pre-Phase-5 blob (the format predates production data —
+// same clean-break precedent as manifest v1, manifest.go). Encoding: ver(1) |
+// count(uvarint) | [ keyLen(uvarint)|key | kind(1)| value ]* with key order sorted
+// for a canonical, byte-stable blob.
 const payloadFmtVersion = byte(1)
 
 var errBadPayload = errors.New("vectorstore: malformed payload blob")
