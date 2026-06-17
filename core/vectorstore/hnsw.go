@@ -608,12 +608,16 @@ func (h *hnswIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 	defer visitedPool.Put(visited)
 	visited.mark(entryId)
 
-	// candidates: min-heap (closest first)
-	cands := &minDistHeap{}
+	// candidates: min-heap (closest first). Pre-size both heaps to ef: otherwise
+	// they regrow ~log2(ef) times via append, which dominated searchLayer's alloc
+	// count. cands may exceed ef (it accumulates), so this is a hint, not a bound.
+	candsBuf := make(minDistHeap, 0, ef)
+	cands := &candsBuf
 	cands.push(distItem{id: entryId, dist: entryDist})
 
 	// result: max-heap bounded by ef (farthest first at top)
-	results := &maxDistHeap{}
+	resultsBuf := make(maxDistHeap, 0, ef+1)
+	results := &resultsBuf
 	results.push(distItem{id: entryId, dist: entryDist})
 
 	for cands.Len() > 0 {
@@ -689,16 +693,20 @@ func (h *hnswIndex) searchLayerFiltered(query []float32, entryId uint64, ef int,
 	defer visitedPool.Put(visited)
 	visited.mark(entryId)
 
-	// candidates: min-heap (closest first) — the unexpanded frontier.
-	cands := &minDistHeap{}
+	// candidates: min-heap (closest first) — the unexpanded frontier. Pre-size all
+	// three heaps to ef to avoid the ~log2(ef) append regrowths per call.
+	candsBuf := make(minDistHeap, 0, ef)
+	cands := &candsBuf
 	cands.push(distItem{id: entryId, dist: entryDist})
 
 	// beam: max-heap bounded by ef over ALL visited nodes — drives traversal.
-	beam := &maxDistHeap{}
+	beamBuf := make(maxDistHeap, 0, ef+1)
+	beam := &beamBuf
 	beam.push(distItem{id: entryId, dist: entryDist})
 
 	// results: max-heap bounded by ef over MEMBER nodes only — the admission set.
-	results := &maxDistHeap{}
+	resultsBuf := make(maxDistHeap, 0, ef+1)
+	results := &resultsBuf
 	if member(entryId) {
 		results.push(distItem{id: entryId, dist: entryDist})
 	}
