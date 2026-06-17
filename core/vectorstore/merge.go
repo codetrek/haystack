@@ -294,6 +294,29 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	defer s.buildMu.Unlock()
 	s.mu.Lock()
 
+	// (2·0) Re-validate the close-during-build invariant the swap RELIES on. The
+	// plan-time fullyIndexedLocked gate (planMergeWithCapLocked) proves "no builder is
+	// reading the input mmap" only as of the plan, but the off-lock write window holds
+	// NEITHER buildMu NOR s.mu, so RebuildVectorIndex/CreateVectorIndex (both take
+	// buildMu+s.mu) can re-pend a still-live input AND spawn builders reading its mmap
+	// during that window. If we then close() the input at step 2b, that builder is mid-
+	// read in getVectorRef → SIGSEGV / use-after-free (a real P0). buildMu+s.mu here
+	// serialize against Rebuild/Create, so re-checking fullyIndexedLocked under this
+	// lock is the authoritative point: if any input is no longer indexed in every
+	// index, a Rebuild/Create re-pended it and its builders are live against the input
+	// mmap. ABORT like a crash-before-swap — close + remove the freshly written outputs
+	// (abortMerge), leave EVERY input live and untouched (do NOT close its mmap), and
+	// return WITHOUT the manifest swap. The in-flight rebuild/create builders finish
+	// safely against the still-live inputs; recover()/WaitForIndex converge normally.
+	// A later reclamation round re-plans the merge once the re-pended inputs reindex.
+	for _, id := range p.inputs {
+		if !s.fullyIndexedLocked(id) {
+			s.mu.Unlock()
+			s.abortMerge(p, outSS, len(outSS))
+			return nil
+		}
+	}
+
 	// (2a) Reconcile the off-lock window: a concurrent Delete/Put may have
 	// tombstoned (or rehomed to head) an input doc AFTER the pack snapshot. Such a
 	// doc must NOT be live in the output. For every doc we moved, if it is no
@@ -319,8 +342,10 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 
 	// (2b) Drop inputs from the parallel sealed slices (delete by INDEX to keep
 	// s.sealed and s.sealedID aligned — gotcha 6), closing + scheduling dir delete.
-	// close()'s mmapFree is safe here: planMergeLocked required every input to be
-	// indexed, so no background builder is reading the input mmap (appendix #8).
+	// close()'s mmapFree is safe here: the plan-time fullyIndexedLocked gate AND the
+	// step-2·0 re-validation under this swap's buildMu+s.mu both proved every input is
+	// indexed in every index, so no background builder (including a Rebuild/Create
+	// re-pend in the off-lock window) is reading the input mmap (appendix #8).
 	for _, id := range p.inputs {
 		for i := 0; i < len(s.sealedID); i++ {
 			if s.sealedID[i] == id {
