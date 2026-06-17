@@ -90,13 +90,16 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 	requireNoError(t, s.Close())
 
 	// Simulate a crash mid-build: drop graph-default.dat and rewrite the manifest
-	// marking segment 1 pending (the state recover() must resume from).
+	// marking the default index's (default, seg) state pending (the state recover()
+	// must resume from — v4 keeps build state per-(index,segment) in IndexSegs).
 	segDir := filepath.Join(dir, segDirName(segID(1), 0))
 	requireNoError(t, os.Remove(filepath.Join(segDir, "graph-default.dat")))
 	m, err := readManifest(dir)
 	requireNoError(t, err)
-	for i := range m.Segments {
-		m.Segments[i].State = segPending
+	for i := range m.IndexSegs {
+		if m.IndexSegs[i].Index == defaultIndexName {
+			m.IndexSegs[i].State = segPending
+		}
 	}
 	m.Version++
 	requireNoError(t, writeManifest(dir, m))
@@ -161,7 +164,13 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 		Version: 1,
 		Head:    headSegID,
 		Segments: []segmentEntry{
-			{SegID: 1, Gen: 0, VecCount: uint64(s.seg.dim), TombCount: 0, State: segPending},
+			{SegID: 1, Gen: 0, VecCount: uint64(s.seg.dim), TombCount: 0},
+		},
+		Indexes: []indexConfigEntry{
+			{Name: defaultIndexName, Type: "hnsw", Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: 64},
+		},
+		IndexSegs: []indexSegEntry{
+			{Index: defaultIndexName, SegID: 1, Gen: 0, State: segPending},
 		},
 	}
 	requireNoError(t, writeManifest(dir, m))

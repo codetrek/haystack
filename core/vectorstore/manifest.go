@@ -22,13 +22,36 @@ const (
 )
 
 // segmentEntry is the manifest record for one sealed records segment. The on-disk
-// directory is derived as seg-<SegID>-<Gen>/ (paths are not stored; §4.8).
+// directory is derived as seg-<SegID>-<Gen>/ (paths are not stored; §4.8). As of
+// v4 the per-segment build state moved OFF this entry to the per-(index,segment)
+// IndexSegs block — a segment's records are index-agnostic, so its entry no longer
+// carries a single State byte (§4.8).
 type segmentEntry struct {
 	SegID     segID
 	Gen       uint32
 	VecCount  uint64
 	TombCount uint64
-	State     segState
+}
+
+// indexConfigEntry persists one named vector index's config (architecture §4.8
+// "索引配置 name → VectorIndexConfig"). On-disk bytes: nameLen(2) | name |
+// type(1, 0=hnsw) | metric(1) | M(4) | EfConstruction(4) | EfSearch(4).
+type indexConfigEntry struct {
+	Name                        string
+	Type                        string
+	Metric                      Metric
+	M, EfConstruction, EfSearch int
+}
+
+// indexSegEntry persists one (index, segment) build state (§4.8 "index-段:
+// (indexName,segId)→{gen,状态}"). On-disk bytes: nameLen(2) | name | segId(8) |
+// gen(4) | state(1). An entry with State == segPending means that index has no
+// graph for that segment yet (served by the brute leg until built).
+type indexSegEntry struct {
+	Index string
+	SegID segID
+	Gen   uint32
+	State segState
 }
 
 // attrDecl is one persisted attr-index declaration: the property name and its
@@ -48,6 +71,8 @@ type manifest struct {
 	Metric    Metric
 	AttrDecls []attrDecl // declared attr-index set (v3)
 	Segments  []segmentEntry
+	Indexes   []indexConfigEntry // named vector index configs (v4)
+	IndexSegs []indexSegEntry    // per-(index,segment) build state (v4)
 }
 
 var magicManifest = [4]byte{'V', 'S', 'M', 'F'}
@@ -56,16 +81,34 @@ var magicManifest = [4]byte{'V', 'S', 'M', 'F'}
 // store Metric (1 byte after head) so Open can reject a metric mismatch: the
 // on-disk vector form is metric-dependent, so reopening under a different metric
 // silently mis-reads. v3 adds the declared attr-index set (nDecls + [kind|prop])
-// between metric and the segments block. The format predates any production
-// data, so an older byte is rejected as an incompatible format.
-const manifestVersionByte = 3
+// between metric and the segments block. v4 generalizes the single index to N
+// named vector indexes: it DROPS the per-segment state byte (a segment's records
+// are index-agnostic) and appends two blocks after the segments — the index
+// configs (Indexes) and the per-(index,segment) states (IndexSegs). The format
+// predates any production data, so an older byte is rejected as incompatible.
+const manifestVersionByte = 4
+
+// indexTypeByte encodes a vector index Type for the manifest. v1 supports only
+// "hnsw" (0); future types (e.g. ivfpq) add codes here.
+func indexTypeByte(t string) byte {
+	if t == "hnsw" {
+		return 0
+	}
+	return 0
+}
+
+// indexTypeFromByte decodes the index Type byte. v1 only ever wrote 0 = hnsw.
+func indexTypeFromByte(b byte) string { return "hnsw" }
 
 // serializeManifest encodes a manifest as: magic(4) | fmtver(1) | version(8) |
 // head(8) | metric(1) | nDecls(4) | [kind(1) propLen(2) prop]* | nSeg(4) |
-// [segId(8) gen(4) vec(8) tomb(8) state(1)]* | crc32(4). The CRC covers
-// everything before it.
+// [segId(8) gen(4) vec(8) tomb(8)]* | nIdx(4) |
+// [nameLen(2) name type(1) metric(1) M(4) efC(4) efS(4)]* | nIdxSeg(4) |
+// [nameLen(2) name segId(8) gen(4) state(1)]* | crc32(4). The CRC covers
+// everything before it. (v4 drops the per-seg state byte; state is per-(index,
+// segment) in the IndexSegs block.)
 func serializeManifest(m *manifest) []byte {
-	body := make([]byte, 0, 4+1+8+8+1+4+4+len(m.Segments)*29+4)
+	body := make([]byte, 0, 4+1+8+8+1+4+4+len(m.Segments)*28+4+len(m.Indexes)*24+4+len(m.IndexSegs)*23+4)
 	body = append(body, magicManifest[:]...)
 	body = append(body, manifestVersionByte)
 	body = appendU64(body, m.Version)
@@ -83,7 +126,26 @@ func serializeManifest(m *manifest) []byte {
 		body = appendU32(body, e.Gen)
 		body = appendU64(body, e.VecCount)
 		body = appendU64(body, e.TombCount)
-		body = append(body, byte(e.State))
+	}
+	// index configs (v4).
+	body = appendU32(body, uint32(len(m.Indexes)))
+	for _, ic := range m.Indexes {
+		body = appendU16(body, uint16(len(ic.Name)))
+		body = append(body, ic.Name...)
+		body = append(body, indexTypeByte(ic.Type))
+		body = append(body, byte(ic.Metric))
+		body = appendU32(body, uint32(ic.M))
+		body = appendU32(body, uint32(ic.EfConstruction))
+		body = appendU32(body, uint32(ic.EfSearch))
+	}
+	// per-(index,segment) states (v4).
+	body = appendU32(body, uint32(len(m.IndexSegs)))
+	for _, is := range m.IndexSegs {
+		body = appendU16(body, uint16(len(is.Index)))
+		body = append(body, is.Index...)
+		body = appendU64(body, uint64(is.SegID))
+		body = appendU32(body, is.Gen)
+		body = append(body, byte(is.State))
 	}
 	crc := crc32.ChecksumIEEE(body)
 	return appendU32(body, crc)
@@ -138,6 +200,9 @@ func parseManifest(b []byte) (*manifest, error) {
 	off += 4
 	m.Segments = make([]segmentEntry, nSeg)
 	for i := 0; i < nSeg; i++ {
+		if off+28 > len(b)-4 {
+			return nil, fmt.Errorf("manifest: truncated segment entry")
+		}
 		var e segmentEntry
 		e.SegID = segID(binary.LittleEndian.Uint64(b[off:]))
 		off += 8
@@ -147,9 +212,63 @@ func parseManifest(b []byte) (*manifest, error) {
 		off += 8
 		e.TombCount = binary.LittleEndian.Uint64(b[off:])
 		off += 8
-		e.State = segState(b[off])
-		off++
 		m.Segments[i] = e
+	}
+	// index configs (v4)
+	if off+4 > len(b)-4 {
+		return nil, fmt.Errorf("manifest: truncated index count")
+	}
+	nIdx := int(binary.LittleEndian.Uint32(b[off:]))
+	off += 4
+	m.Indexes = make([]indexConfigEntry, 0, nIdx)
+	for i := 0; i < nIdx; i++ {
+		if off+2 > len(b)-4 {
+			return nil, fmt.Errorf("manifest: truncated index name len")
+		}
+		nl := int(binary.LittleEndian.Uint16(b[off:]))
+		off += 2
+		if off+nl+14 > len(b)-4 {
+			return nil, fmt.Errorf("manifest: truncated index config")
+		}
+		name := string(b[off : off+nl])
+		off += nl
+		typ := indexTypeFromByte(b[off])
+		off++
+		met := Metric(b[off])
+		off++
+		mM := int(binary.LittleEndian.Uint32(b[off:]))
+		off += 4
+		efC := int(binary.LittleEndian.Uint32(b[off:]))
+		off += 4
+		efS := int(binary.LittleEndian.Uint32(b[off:]))
+		off += 4
+		m.Indexes = append(m.Indexes, indexConfigEntry{Name: name, Type: typ, Metric: met, M: mM, EfConstruction: efC, EfSearch: efS})
+	}
+	// per-(index,segment) states (v4)
+	if off+4 > len(b)-4 {
+		return nil, fmt.Errorf("manifest: truncated index-seg count")
+	}
+	nIS := int(binary.LittleEndian.Uint32(b[off:]))
+	off += 4
+	m.IndexSegs = make([]indexSegEntry, 0, nIS)
+	for i := 0; i < nIS; i++ {
+		if off+2 > len(b)-4 {
+			return nil, fmt.Errorf("manifest: truncated index-seg name len")
+		}
+		nl := int(binary.LittleEndian.Uint16(b[off:]))
+		off += 2
+		if off+nl+13 > len(b)-4 {
+			return nil, fmt.Errorf("manifest: truncated index-seg entry")
+		}
+		idx := string(b[off : off+nl])
+		off += nl
+		sid := segID(binary.LittleEndian.Uint64(b[off:]))
+		off += 8
+		gen := binary.LittleEndian.Uint32(b[off:])
+		off += 4
+		st := segState(b[off])
+		off++
+		m.IndexSegs = append(m.IndexSegs, indexSegEntry{Index: idx, SegID: sid, Gen: gen, State: st})
 	}
 	return m, nil
 }

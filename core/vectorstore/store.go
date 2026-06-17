@@ -241,6 +241,15 @@ func (s *Store) recover() error {
 	for _, d := range m.AttrDecls {
 		s.attrDecls[d.Property] = d.Kind
 	}
+	// Build a lookup of the default index's per-segment build state from the v4
+	// IndexSegs block (Task 7 keeps recover behavior-neutral by deriving the single
+	// "default" view; Task 8 generalizes the reopen/resume over all m.Indexes).
+	defaultState := make(map[segID]segState)
+	for _, is := range m.IndexSegs {
+		if is.Index == defaultIndexName {
+			defaultState[is.SegID] = is.State
+		}
+	}
 	for _, e := range m.Segments {
 		segDir := filepath.Join(s.dir, segDirName(e.SegID, e.Gen))
 		ss, oerr := openSealedSegment(segDir, s.metric)
@@ -262,7 +271,7 @@ func (s *Store) recover() error {
 				s.docToSeg[ss.slotDoc(slot)] = e.SegID
 			}
 		}
-		if e.State == segIndexed {
+		if defaultState[e.SegID] == segIndexed {
 			g, gerr := openGraphFile(segDir, defaultIndexName, ss)
 			if gerr != nil {
 				return gerr
@@ -1399,17 +1408,35 @@ func (s *Store) writeManifestLocked() error {
 		m.AttrDecls = append(m.AttrDecls, attrDecl{Property: p, Kind: s.attrDecls[p]})
 	}
 	for i, ss := range s.sealed {
-		st := segPending
-		if s.indexes[defaultIndexName].graphs[s.sealedID[i]] != nil {
-			st = segIndexed
-		}
 		m.Segments = append(m.Segments, segmentEntry{
 			SegID:     s.sealedID[i],
 			Gen:       0,
 			VecCount:  uint64(ss.count()),
 			TombCount: uint64(ss.tombCount()),
-			State:     st,
 		})
+	}
+	// Index configs + per-(index,segment) states (v4), sorted by name for a
+	// deterministic manifest. Each index emits its config once and one IndexSegs
+	// entry per sealed segment: segIndexed when its graph is built, else segPending
+	// (the brute-served state recover() resumes from).
+	inames := make([]string, 0, len(s.indexes))
+	for n := range s.indexes {
+		inames = append(inames, n)
+	}
+	sort.Strings(inames)
+	for _, n := range inames {
+		vx := s.indexes[n]
+		m.Indexes = append(m.Indexes, indexConfigEntry{
+			Name: n, Type: "hnsw", Metric: vx.metric,
+			M: vx.cfg.M, EfConstruction: vx.cfg.EfConstruction, EfSearch: vx.cfg.EfSearch,
+		})
+		for _, sid := range s.sealedID {
+			st := segPending
+			if vx.graphs[sid] != nil {
+				st = segIndexed
+			}
+			m.IndexSegs = append(m.IndexSegs, indexSegEntry{Index: n, SegID: sid, Gen: 0, State: st})
+		}
 	}
 	return writeManifest(s.dir, m)
 }
