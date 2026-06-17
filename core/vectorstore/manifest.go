@@ -88,14 +88,11 @@ var magicManifest = [4]byte{'V', 'S', 'M', 'F'}
 // predates any production data, so an older byte is rejected as incompatible.
 const manifestVersionByte = 4
 
-// indexTypeByte encodes a vector index Type for the manifest. v1 supports only
-// "hnsw" (0); future types (e.g. ivfpq) add codes here.
-func indexTypeByte(t string) byte {
-	if t == "hnsw" {
-		return 0
-	}
-	return 0
-}
+// indexTypeByte encodes a vector index Type for the manifest. v1 only ever stores
+// "hnsw" (CreateVectorIndex rejects any other Type), so the on-disk code is always
+// 0; future types (e.g. ivfpq) add a switch here and bump no version (new codes are
+// backward-readable). Pairs with indexTypeFromByte, which decodes 0 -> "hnsw".
+func indexTypeByte(string) byte { return 0 }
 
 // indexTypeFromByte decodes the index Type byte. v1 only ever wrote 0 = hnsw.
 func indexTypeFromByte(b byte) string { return "hnsw" }
