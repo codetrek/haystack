@@ -9,6 +9,7 @@ require (
 	github.com/go-ego/gse v1.0.2
 	github.com/stretchr/testify v1.10.0
 	github.com/viterin/vek v0.4.3
+	golang.org/x/sys v0.33.0
 )
 
 require (
@@ -39,7 +40,6 @@ require (
 	github.com/vcaesar/cedar v0.30.0 // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
-	golang.org/x/sys v0.33.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
