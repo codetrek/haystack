@@ -225,7 +225,9 @@ func (s *Store) fullyIndexedLocked(id segID) bool {
 	}
 	return true
 }
-// to disk (fsync via writeSealedSegment) and reopen it. It then re-takes buildMu +
+
+// mergeAndPublish executes merge plan p. Off-lock it writes each output bucket
+// to disk (fsync via writeSealedSegment) and reopens it. It then re-takes buildMu +
 // s.mu for the atomic swap: reconcile any tombstones that arrived on the inputs
 // during the off-lock window, mutate the segment set (drop inputs, add outputs,
 // rehome moved docs), write the manifest ONCE (the commit point), then delete the
