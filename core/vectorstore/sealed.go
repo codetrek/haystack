@@ -2,7 +2,6 @@ package vectorstore
 
 import (
 	"encoding/binary"
-	"fmt"
 	"math"
 	"path/filepath"
 	"sync"
@@ -10,12 +9,14 @@ import (
 )
 
 // sealedSegment is an immutable, mmap-backed records segment. Vectors, slot→docId,
-// and payload are read-only; only the tombstone bitmap (tomb.dat) is mutable —
-// Delete/Update set bits and msync them. The per-segment HNSW uses a dense
-// live-only build nodeId (NOT the slot); the segment owns its vectors and resolves
-// a graph hit back to a row by docId (§3 "向量只存一份").
+// and payload are read-only; only the tombstone bitmap is mutable — Delete/Update
+// set bits and commit them to the bbolt tomb bucket (incr 3; the per-segment
+// tomb.dat msync is gone). The per-segment HNSW uses a dense live-only build nodeId
+// (NOT the slot); the segment owns its vectors and resolves a graph hit back to a
+// row by docId (§3 "向量只存一份").
 type sealedSegment struct {
 	dir    string
+	id     segID // this segment's id (the tomb-bucket key prefix; set at open)
 	metric Metric
 	dim    int
 	n      int // row count (incl. tombstoned)
@@ -27,24 +28,28 @@ type sealedSegment struct {
 
 	slotDocs []int64 // decoded from slotdoc.dat (small; copy out, not mmap-aliased)
 
-	// tombMu guards the mutable tombstone state (the tomb.dat words + the derived
+	// tombMu guards the mutable tombstone state (the tomb words + the derived
 	// docToSlot index). The background graph builder reads the tomb bitmap via
 	// eachLive OFF the store lock while a concurrent Delete writes it via
-	// tombstoneSlot under the store lock; without this guard that is a data race on
-	// the mmap word and the docToSlot map (appendix #16/#18 — the -race gate flags
-	// it). Read paths take RLock, tombstoneSlot takes Lock.
+	// markTombLocked under the store lock; without this guard that is a data race on
+	// the tomb word and the docToSlot map (appendix #16/#18 — the -race gate flags
+	// it). Read paths take RLock, markTombLocked takes Lock.
 	tombMu sync.RWMutex
 
 	// docToSlot is the derived, resident per-segment docId→slot index over LIVE
 	// slots (architecture §4.6: "段内 docId↔slot ... 派生、常驻内存、可重建"). It is
 	// built once at open from slotDocs (tombstoned slots excluded) and pruned by
-	// tombstoneSlot, so slotOfDoc/Get/Delete and the Search tombstone post-filter
+	// markTombLocked, so slotOfDoc/Get/Delete and the Search tombstone post-filter
 	// are O(1), not an O(n) scan (appendix #6/#17/#20/#24).
 	docToSlot map[int64]int
 
-	// tomb.dat mapping (RW): header at offset 0, words start at segPageSize.
-	tombMap   []byte
-	tombWords int
+	// tomb is the in-memory tombstone bitmap (one bit per slot, word w covers slots
+	// [w*64, w*64+64)). Since incr 3 it is a heap slice rebuilt at open from the
+	// bbolt tomb bucket (listTombSlots), NOT a tomb.dat mmap: the durable form lives
+	// in the control store (one bbolt txn per delete) so the data plane carries no
+	// mutable mmap'd file. It is sized to cover every slot at open and never grows
+	// (segments are immutable in row count). andLive reads these words directly.
+	tomb []uint64
 
 	// payload.dat mapping (read-only): lengths then bytes.
 	plMap     []byte
@@ -65,8 +70,8 @@ func (s *sealedSegment) count() int { return s.n }
 
 func (s *sealedSegment) slotDoc(slot int) int64 { return s.slotDocs[slot] }
 
-// tombGet reports whether slot is tombstoned, reading the mmap'd bitmap words
-// under the tomb read lock (a concurrent tombstoneSlot mutates the same word).
+// tombGet reports whether slot is tombstoned, reading the bitmap words under the
+// tomb read lock (a concurrent markTombLocked mutates the same word).
 func (s *sealedSegment) tombGet(slot int) bool {
 	s.tombMu.RLock()
 	defer s.tombMu.RUnlock()
@@ -76,38 +81,36 @@ func (s *sealedSegment) tombGet(slot int) bool {
 // tombGetLocked is the lock-free body of tombGet; callers must hold tombMu (R or W).
 func (s *sealedSegment) tombGetLocked(slot int) bool {
 	w := slot >> 6
-	if w >= s.tombWords {
+	if w < 0 || w >= len(s.tomb) {
 		return false
 	}
-	off := segPageSize + w*8
-	word := binary.LittleEndian.Uint64(s.tombMap[off : off+8])
-	return word&(1<<uint(slot&63)) != 0
+	return s.tomb[w]&(1<<uint(slot&63)) != 0
 }
 
-// tombstoneSlot sets slot's tombstone bit and msyncs tomb.dat so the delete is
-// durable. The bitmap is pre-sized at seal to cover every slot, so no growth is
-// needed (segments are immutable in row count). The derived docToSlot index is
-// pruned so the slot is no longer reported live. Held under the write lock so a
-// concurrent builder/search read sees a consistent word + map.
-func (s *sealedSegment) tombstoneSlot(slot int) error {
+// markTombLocked sets slot's in-memory tombstone bit and prunes the derived
+// docToSlot index so the slot is no longer reported live. It does NOT persist:
+// since incr 3 the durable tombstone is one bbolt tomb-bucket Put the Store commits
+// (it owns the control store and this segment's id) — typically in the SAME txn as
+// the docseg delete, so a sealed Delete is one atomic commit. Held under the write
+// lock so a concurrent builder/search read sees a consistent word + map. ok is true
+// when this call newly tombstoned a live slot (false on a re-tombstone / out-of-
+// range), letting the caller skip a redundant commit.
+func (s *sealedSegment) markTombLocked(slot int) (ok bool) {
 	if slot < 0 || slot >= s.n {
-		return fmt.Errorf("vectorstore: tombstone slot %d out of range [0,%d)", slot, s.n)
+		return false
 	}
 	s.tombMu.Lock()
 	defer s.tombMu.Unlock()
 	w := slot >> 6
-	off := segPageSize + w*8
-	word := binary.LittleEndian.Uint64(s.tombMap[off : off+8])
-	word |= 1 << uint(slot&63)
-	binary.LittleEndian.PutUint64(s.tombMap[off:off+8], word)
-	if err := mmapSync(s.tombMap); err != nil {
-		return err
+	if s.tomb[w]&(1<<uint(slot&63)) != 0 {
+		return false // already tombstoned
 	}
+	s.tomb[w] |= 1 << uint(slot&63)
 	doc := s.slotDocs[slot]
 	if cur, ok := s.docToSlot[doc]; ok && cur == slot {
 		delete(s.docToSlot, doc)
 	}
-	return nil
+	return true
 }
 
 // slotOfDoc returns the live slot for docID in O(1) via the derived index. A
@@ -192,10 +195,7 @@ func (s *sealedSegment) close() {
 		_ = mmapFree(s.vecMap)
 		s.vecMap = nil
 	}
-	if s.tombMap != nil {
-		_ = mmapFree(s.tombMap)
-		s.tombMap = nil
-	}
+	s.tomb = nil
 	if s.plMap != nil {
 		_ = mmapFree(s.plMap)
 		s.plMap = nil

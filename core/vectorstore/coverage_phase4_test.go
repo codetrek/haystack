@@ -136,6 +136,48 @@ func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
 	}
 }
 
+// TestCommitMergeLocked_ReconcileErrorRollsBack covers commitMergeLocked's in-txn
+// error branch (and mergeAndPublish's swap-commit error return): when
+// reconcileControlTx fails inside the merge swap write-txn, the whole bbolt commit
+// rolls back — neither the output's segment/docseg/tomb rows NOR the input retirement
+// is persisted (the merge's atomicity guarantee). The merge surfaces the error; the
+// inputs stay live and intact, and the freshly written outputs become a
+// crash-before-commit orphan a later recover sweeps. We drive a real merge to the
+// swap with testHookReconcileErr armed, then confirm every doc survives.
+func TestCommitMergeLocked_ReconcileErrorRollsBack(t *testing.T) {
+	kvStore := newTestKV(t)
+	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	rng := rand.New(rand.NewSource(808))
+	for i := 0; i < 12; i++ {
+		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex()) // no pending builds → the hook only hits the merge commit
+
+	// Arm the in-txn reconcile error so the merge swap commit (commitMergeLocked)
+	// fails and rolls back. mergeNow plans under the lock (fine) and the commit runs
+	// off-lock during WaitForMerge.
+	testHookReconcileErr = errInjected
+	requireNoError(t, s.mergeNow([]segID{1}))
+	requireNoError(t, s.WaitForMerge())
+	testHookReconcileErr = nil
+
+	// The merge rolled back: the input is still live (one sealed segment) and every
+	// doc is readable.
+	s.mu.RLock()
+	nSealed := len(s.sealed)
+	s.mu.RUnlock()
+	if nSealed != 1 {
+		t.Fatalf("sealed segments after a rolled-back merge = %d, want 1 (input must stay live)", nSealed)
+	}
+	for i := 0; i < 12; i++ {
+		if _, _, found, _ := s.Get("d-" + itoa(i)); !found {
+			t.Fatalf("doc d-%d lost after a rolled-back merge commit", i)
+		}
+	}
+}
+
 // TestSealLocked_NoBuildSpawnWhenClosing covers sealLocked's s.closing branch (the
 // late return that skips the background build spawn): the segment is durably sealed
 // + pending, but no builder goroutine is launched (recover would resume it). We

@@ -3,6 +3,8 @@ package vectorstore
 import (
 	"os"
 	"path/filepath"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // mergeConfig holds the space-reclamation tunables (architecture §4.9). All are
@@ -152,8 +154,8 @@ type mergePlan struct {
 // Why skip an input not yet indexed in EVERY index (appendix #8, gotcha 3): a
 // sealed segment still pending in some index has a background buildAndPublish
 // goroutine reading its mmap via eachLive OFF the store lock. The merge swap (step
-// 2b) close()s the input — mmapFree on vecMap/tombMap/plMap — which would unmap
-// memory the builder is mid-read, a SIGSEGV-on-free. A graph is installed in an
+// 2b) close()s the input — mmapFree on vecMap/plMap — which would unmap memory the
+// builder is mid-read, a SIGSEGV-on-free. A graph is installed in an
 // index (vx.graphs[id] != nil) only as that builder's LAST action under s.mu, so
 // requiring it installed in ALL N indexes proves no builder is in flight for that
 // input. This also satisfies the "do not merge a just-sealed pending segment before
@@ -254,7 +256,9 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 			s.abortMerge(p, outSS, i)
 			return err
 		}
-		ss, err := openSealedSegment(p.outDirs[i], s.metric)
+		// A freshly packed output carries no tombstones (packLiveDocs emits only live
+		// docs); any reconcile tombstone for the off-lock window is added at the swap.
+		ss, err := openSealedSegment(p.outDirs[i], s.metric, p.outIDs[i], nil)
 		if err != nil {
 			s.abortMerge(p, outSS, i)
 			return err
@@ -325,8 +329,9 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	// longer mapped to ITS INPUT segment in docToSeg, tombstone it in whatever
 	// output bucket carries it. docToSeg is the single source of truth for which
 	// segment owns a live doc (§4.6), so this is the exact liveness gate. The
-	// tombstoneSlot persists+msyncs the bit into the output's tomb.dat, so the
-	// reconciliation is durable independent of the manifest write below.
+	// in-memory mark is durably committed to the bbolt tomb bucket in the SAME swap
+	// txn (step 2d) — strictly MORE atomic than the old per-slot tomb.dat msync,
+	// which committed before the manifest write.
 	inputSet := make(map[segID]bool, len(p.inputs))
 	for _, id := range p.inputs {
 		inputSet[id] = true
@@ -337,7 +342,7 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 			owner, ok := s.docToSeg[doc]
 			if !ok || !inputSet[owner] {
 				// Deleted, or rehomed to head/another seg during the merge window.
-				_ = ss.tombstoneSlot(slot)
+				ss.markTombLocked(slot)
 			}
 		}
 	}
@@ -379,12 +384,16 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	}
 
 	// (2d) ONE atomic control-store commit — the commit point replacing N inputs
-	// with M outputs. A crash before this leaves the outputs unreferenced (swept on
-	// recover); a crash after leaves the inputs unreferenced (swept). No
-	// alloc.Commit and no head-bucket change: idtable mappings for moved docs are
-	// already durable and the head (in-memory + head bucket) is untouched because a
-	// merge only retires sealed segments, never the head (gotcha 4).
-	if err := s.writeManifestLocked(); err != nil {
+	// with M outputs. Besides the structural reconcile (segments/indexes), it rewrites
+	// the docseg routing + tomb buckets for the swap in the SAME txn: every retired
+	// input's docseg entries + tomb entries are deleted, and every output's live-slot
+	// docseg entries + reconcile-tombstone (step 2a) tomb entries are written. A crash
+	// before this leaves the outputs unreferenced (swept on recover); a crash after
+	// leaves the inputs unreferenced (swept). No alloc.Commit and no head-bucket
+	// change: idtable mappings for moved docs are already durable and the head
+	// (in-memory + head bucket) is untouched because a merge only retires sealed
+	// segments, never the head (gotcha 4).
+	if err := s.commitMergeLocked(p, outSS); err != nil {
 		s.mu.Unlock()
 		return err
 	}
@@ -410,13 +419,13 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 	}
 	s.mu.Unlock()
 
-	// Crash-after-swap seam (test-only, appendix #5/#7): the manifest swap committed
-	// (outputs referenced, inputs not) and any step-2a reconcile tombstone is already
-	// msync'd to the output's tomb.dat, but the old input dirs are not yet deleted.
-	// Returning here simulates a crash in that window: the old inputs are left on
-	// disk as orphans (recover() must sweep them) and the background builds never
-	// run (recover() must resume them). The installed output mmaps are owned by
-	// s.sealed now, so Close() releases them — we must NOT close them here.
+	// Crash-after-swap seam (test-only, appendix #5/#7): the control-store swap
+	// committed (outputs referenced + their docseg/tomb rows written, inputs not),
+	// but the old input dirs are not yet deleted. Returning here simulates a crash in
+	// that window: the old inputs are left on disk as orphans (recover() must sweep
+	// them) and the background builds never run (recover() must resume them). The
+	// installed output mmaps are owned by s.sealed now, so Close() releases them — we
+	// must NOT close them here.
 	if s.testHookAfterSwap != nil && s.testHookAfterSwap(p) {
 		return nil
 	}
@@ -426,6 +435,51 @@ func (s *Store) mergeAndPublish(p *mergePlan) error {
 		_ = os.RemoveAll(dir)
 	}
 	return nil
+}
+
+// commitMergeLocked is the merge swap commit: in ONE bbolt write-txn it reconciles
+// the structural buckets (reconcileControlTx — retired inputs' segment/index-seg
+// keys deleted, new outputs' keys added) AND reconciles the docseg routing + tomb
+// buckets for the swap. Every retired input's docseg entries (its slotDocs) and tomb
+// entries are deleted; every output's live-slot docseg entries are written, and its
+// step-2a reconcile tombstones are written to the tomb bucket. Folding all of this
+// into the single swap txn makes the merge ONE atomic commit — strictly more atomic
+// than the former design, which msync'd reconcile tombstones into tomb.dat BEFORE
+// the manifest rewrite (a separate durability step). Caller holds buildMu+s.mu.
+func (s *Store) commitMergeLocked(p *mergePlan, outSS []*sealedSegment) error {
+	return s.cs.update(func(tx *bolt.Tx) error {
+		if err := s.reconcileControlTx(tx); err != nil {
+			return err
+		}
+		// Retire every input's routing + tomb state. Deleting an absent docseg key is
+		// a no-op, so passing ALL input slotDocs (live or already-tombstoned) is safe.
+		for _, ss := range p.inputSS {
+			if err := deleteSegRouting(tx, ss.id, ss.slotDocs); err != nil {
+				return err
+			}
+		}
+		// Publish every output's routing: docseg for live slots, tomb for the
+		// reconcile-tombstoned (step 2a) slots.
+		for i, ss := range outSS {
+			if err := putSegRouting(tx, p.outIDs[i], ss.count(), func(slot int) bool { return !ss.tombGet(slot) }, ss.slotDoc, tombSlotsOf(ss)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// tombSlotsOf returns the slots a sealed segment currently has tombstoned (its
+// in-memory bitmap), in ascending order — the durable set its merge-publish commit
+// must write to the tomb bucket.
+func tombSlotsOf(ss *sealedSegment) []int {
+	var out []int
+	for slot := 0; slot < ss.count(); slot++ {
+		if ss.tombGet(slot) {
+			out = append(out, slot)
+		}
+	}
+	return out
 }
 
 // abortMerge cleans up partially-written output dirs when an off-lock write fails

@@ -22,11 +22,19 @@ func TestSealedSegment_TombstoneOutOfRange(t *testing.T) {
 	}{{1, []float32{1, 0}, nil}})
 	dir := t.TempDir() + "/seg-1-0"
 	requireNoError(t, writeSealedSegment(dir, head, nil))
-	ss, err := openSealedSegment(dir, DotProduct)
+	ss, err := openSealedSegment(dir, DotProduct, 1, nil)
 	requireNoError(t, err)
 	defer ss.close()
-	if err := ss.tombstoneSlot(99); err == nil {
-		t.Fatal("tombstoneSlot out of range should error")
+	// An out-of-range slot is rejected (ok=false), not applied — and must not panic
+	// on the in-memory tomb word index.
+	if ss.markTombLocked(99) {
+		t.Fatal("markTombLocked out of range should return false (no-op)")
+	}
+	// A tombGet for a slot beyond the mapped tomb words reports live (false), never
+	// panics — the defensive w >= len(tomb) guard (a 1-row segment has one word
+	// covering slots 0..63, so slot 64 is past it).
+	if ss.tombGet(64) {
+		t.Fatal("tombGet past the mapped tomb words should report live (false)")
 	}
 }
 

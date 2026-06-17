@@ -59,7 +59,7 @@ func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 		t.Fatalf("Delete(never-put) = %v, want nil no-op", err)
 	}
 
-	// Survives a second reopen: the sealed delete is durable in tomb.dat.
+	// Survives a second reopen: the sealed delete is durable in the bbolt tomb bucket.
 	s3 := reopenStore(t, s2, kvStore)
 	if _, _, found, _ := s3.Get("s-3"); found {
 		t.Fatal("sealed delete of s-3 did not survive a second reopen")

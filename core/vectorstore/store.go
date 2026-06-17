@@ -137,11 +137,12 @@ type Store struct {
 	// Phase-2 orphan sweep. Each is passed the live mergePlan and, returning true,
 	// makes the merge return as if the process died at that exact point:
 	//   - testHookAfterWrite: AFTER every output bucket is written+fsynced+reopened,
-	//     BEFORE the manifest swap → outputs on disk, unreferenced (crash-before-swap).
-	//   - testHookAfterSwap: AFTER writeManifestLocked committed, BEFORE os.RemoveAll
+	//     BEFORE the control-store swap → outputs on disk, unreferenced (crash-before-swap).
+	//   - testHookAfterSwap: AFTER commitMergeLocked committed, BEFORE os.RemoveAll
 	//     of the old input dirs → inputs leftover, unreferenced (crash-after-swap),
-	//     and any reconcile-tombstone from step 2a already msync'd to tomb.dat
-	//     (the highest-risk reconciliation durability window, appendix #7).
+	//     and any reconcile-tombstone from step 2a already committed to the bbolt tomb
+	//     bucket in the SAME swap txn (the highest-risk reconciliation durability
+	//     window, appendix #7).
 	testHookAfterWrite func(p *mergePlan) bool
 	testHookAfterSwap  func(p *mergePlan) bool
 	// testHookInMergeWindow (nil in production) is invoked in mergeAndPublish AFTER
@@ -266,18 +267,20 @@ func (s *Store) loadControlManifest() (*manifest, bool, error) {
 // recover rebuilds the full segmented state. An empty control store (no committed
 // meta record) means a fresh or Phase-1 store: just rebuild the head from the head
 // bucket. Otherwise load the control plane from bbolt (meta + segments + index
-// configs + per-(index, segment) state + attr decls), mmap every sealed segment,
-// rebuild the global docId→segId from each segment's slotDoc over LIVE slots (the
-// persisted tombstone bitmap is authoritative), reopen each indexed segment's
-// graph, then rebuild the head from the head bucket last so a head put that
-// supersedes a sealed old slot resolves against the now-populated docToSeg.
+// configs + per-(index, segment) state + attr decls), load the global docId→segId
+// map DIRECTLY from the docseg bucket (incr 3 — no per-segment slotdoc.dat rescan),
+// mmap every sealed segment seeding its in-memory tomb bitmap from the durable tomb
+// bucket, reopen each indexed segment's graph, then rebuild the head from the head
+// bucket last so a head put that supersedes a sealed old slot resolves against the
+// now-populated docToSeg.
 //
 // Crash-safety (appendix #8/#19): the control store is authoritative for every
 // segment it lists. Seal clears the head bucket in the SAME txn that adds the
-// segment, so a committed segment and its pre-seal head rows are never both present
-// — the head-bucket rebuild and the sealed segment can never double-store a doc.
-// (The head bucket needs no equivalent of the WAL's "skip a still-live sealed
-// docId" guard: the atomic seal commit already removed those rows.)
+// segment AND writes the new segment's docseg entries, so a committed segment and
+// its pre-seal head rows are never both present — the head-bucket rebuild and the
+// sealed segment can never double-store a doc. (The head bucket needs no equivalent
+// of the WAL's "skip a still-live sealed docId" guard: the atomic seal commit
+// already removed those rows.)
 func (s *Store) recover() error {
 	m, ok, err := s.loadControlManifest()
 	if err != nil {
@@ -331,9 +334,33 @@ func (s *Store) recover() error {
 	for _, is := range m.IndexSegs {
 		indexedState[is.Index+"\x00"+itoaSeg(int64(is.SegID))] = is.State
 	}
+	// Load the global docId→segId routing map and every segment's tombstone slots
+	// from the control store in one read-txn (incr 3). docToSeg is read DIRECTLY from
+	// the docseg bucket — the former full rescan of each segment's slotdoc.dat over
+	// live slots is gone. The per-segment tomb slots seed each sealed segment's
+	// in-memory tomb bitmap (the per-segment self-description load that replaced the
+	// tomb.dat mmap). rebuildHead later adds the head docs (headSegID).
+	tombBySeg := make(map[segID][]int, len(m.Segments))
+	if err := s.cs.view(func(tx *bolt.Tx) error {
+		ds, lerr := loadDocSeg(tx)
+		if lerr != nil {
+			return lerr
+		}
+		s.docToSeg = ds
+		for _, e := range m.Segments {
+			ts, terr := listTombSlots(tx, e.SegID)
+			if terr != nil {
+				return terr
+			}
+			tombBySeg[e.SegID] = ts
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
 	for _, e := range m.Segments {
 		segDir := filepath.Join(s.dir, segDirName(e.SegID, e.Gen))
-		ss, oerr := openSealedSegment(segDir, s.metric)
+		ss, oerr := openSealedSegment(segDir, s.metric, e.SegID, tombBySeg[e.SegID])
 		if oerr != nil {
 			return oerr
 		}
@@ -346,11 +373,6 @@ func (s *Store) recover() error {
 		s.sealedID = append(s.sealedID, e.SegID)
 		if e.SegID >= s.nextSeg {
 			s.nextSeg = e.SegID + 1
-		}
-		for slot := 0; slot < ss.count(); slot++ {
-			if !ss.tombGet(slot) {
-				s.docToSeg[ss.slotDoc(slot)] = e.SegID
-			}
 		}
 	}
 	// Sweep any seg-* directory (and a stranded manifest.tmp) the committed
@@ -890,13 +912,13 @@ func (s *Store) lookupDocID(id string) (int64, bool, error) {
 //
 // Cross-segment durability (appendix #7): a Put that overwrites a doc currently in
 // a SEALED segment commits the head row durably, THEN tombstones the sealed slot in
-// the mmap'd tomb.dat (an msync that is NOT as crash-atomic as the bbolt commit). If
-// a crash lands between the two, the sealed slot is still live on reopen while the
-// head bucket already owns the doc. The head bucket is authoritative — its row means
-// the doc belongs in the head — so the rebuild re-applies the stale sealed slot's
-// tombstone here before re-homing the doc. (Seal's own crash window is gone: seal
-// clears the head bucket atomically with the segment add, so a sealed doc never has
-// a leftover head row.)
+// a SEPARATE bbolt txn (tomb bucket + docseg removal). If a crash lands between the
+// two, the sealed slot is still live on reopen while the head bucket already owns
+// the doc. The head bucket is authoritative — its row means the doc belongs in the
+// head — so the rebuild re-applies the stale sealed slot's tombstone here (durably,
+// to the tomb bucket) and drops its docseg entry before re-homing the doc. (Seal's
+// own crash window is gone: seal clears the head bucket atomically with the segment
+// add, so a sealed doc never has a leftover head row.)
 func (s *Store) rebuildHead() error {
 	var recs []headRecord
 	if err := s.cs.view(func(tx *bolt.Tx) error {
@@ -915,12 +937,19 @@ func (s *Store) rebuildHead() error {
 		// If this docId is still live in a sealed segment (a Put-time cross-segment
 		// tombstone that did not reach disk before a crash), tombstone that stale slot
 		// now: the durable head row is authoritative, so the doc must live only here.
+		// Persist the repair (tomb + docseg removal) so it is not lost on the next crash.
 		if prev, ok := s.docToSeg[r.DocID]; ok && prev != headSegID {
 			if ss := s.sealedByID(prev); ss != nil {
 				if slot, found := ss.slotOfDoc(r.DocID); found {
-					if err := ss.tombstoneSlot(slot); err != nil {
+					if err := s.cs.update(func(tx *bolt.Tx) error {
+						if err := putTomb(tx, prev, slot); err != nil {
+							return err
+						}
+						return deleteDocSeg(tx, r.DocID)
+					}); err != nil {
 						return err
 					}
+					ss.markTombLocked(slot)
 				}
 			}
 		}
@@ -969,13 +998,22 @@ func (s *Store) Put(id string, v []float32, payload Payload) error {
 	// SEALED segment, tombstone that sealed slot so it does not stay live in both
 	// the sealed graph and the head. The new copy lands in the head below; on
 	// rebuild the head bucket row re-homes the doc to the head and the sealed slot
-	// stays tombstoned (durable in tomb.dat).
+	// stays tombstoned. The durable head row was committed FIRST (above); the sealed
+	// tombstone + docseg removal commit in a SEPARATE bbolt txn here. A crash between
+	// the two leaves the head row durable but the sealed slot still live — exactly the
+	// window rebuildHead's cross-segment branch repairs (the head row is authoritative).
 	if prev, ok := s.docToSeg[docID]; ok && prev != headSegID {
 		if ss := s.sealedByID(prev); ss != nil {
 			if slot, found := ss.slotOfDoc(docID); found {
-				if err := ss.tombstoneSlot(slot); err != nil {
+				if err := s.cs.update(func(tx *bolt.Tx) error {
+					if err := putTomb(tx, prev, slot); err != nil {
+						return err
+					}
+					return deleteDocSeg(tx, docID)
+				}); err != nil {
 					return err
 				}
+				ss.markTombLocked(slot)
 			}
 		}
 	}
@@ -1060,10 +1098,10 @@ func (s *Store) Get(id string) (v []float32, payload Payload, found bool, err er
 
 // Delete tombstones id's current slot in its owning segment (head or sealed).
 // Deleting an unknown or already-deleted id is a no-op. The id↔docId mapping is
-// left in place; a later Put reuses the same docId (in the head). For a sealed
-// segment the tombstone is persisted in that segment's mmap'd bitmap (durable on
-// return); for the head it is a single bbolt control-store commit that removes the
-// head row (durable on return).
+// left in place; a later Put reuses the same docId (in the head). Either branch is
+// a single bbolt control-store commit (durable on return): for the head it removes
+// the head row; for a sealed segment it writes the tomb-bucket bit AND removes the
+// docseg routing entry (incr 3 — the tomb.dat msync is gone).
 func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1094,7 +1132,9 @@ func (s *Store) Delete(id string) error {
 		delete(s.docToSeg, docID)
 		return nil
 	}
-	// Sealed segment: tombstone is persisted in the segment's mmap'd bitmap.
+	// Sealed segment: the tombstone + routing-entry removal are ONE bbolt txn (incr
+	// 3 — the durable form is the control store's tomb + docseg buckets, not a
+	// per-segment tomb.dat msync), so the delete is one atomic durable commit.
 	ss := s.sealedByID(segId)
 	if ss == nil {
 		return nil
@@ -1103,9 +1143,19 @@ func (s *Store) Delete(id string) error {
 	if !found {
 		return nil
 	}
-	if err := ss.tombstoneSlot(slot); err != nil {
+	// Commit the durable tomb bit + docseg removal FIRST (one write-txn == the fsync
+	// that makes the delete durable on return), then mutate the in-memory tomb. The
+	// docseg delete keeps recover() from re-routing this doc to a segment it is no
+	// longer live in.
+	if err := s.cs.update(func(tx *bolt.Tx) error {
+		if err := putTomb(tx, segId, slot); err != nil {
+			return err
+		}
+		return deleteDocSeg(tx, docID)
+	}); err != nil {
 		return err
 	}
+	ss.markTombLocked(slot)
 	delete(s.docToSeg, docID)
 	return nil
 }
@@ -1361,15 +1411,13 @@ func (s *Store) evalSegLocked(ss *sealedSegment, filter Predicate) *bitmap {
 
 // andLive clears the tombstoned slots from S_seg in place (member ∧ live, §6), so
 // a deleted-but-matching doc never enters the result heap. It snapshots the
-// segment's mmap'd tomb words under the segment's tomb RLock (mirroring eachLive's
-// lock discipline, appendix #16/#18) and applies them via bitmap.andNotWords.
+// segment's in-memory tomb words under the segment's tomb RLock (mirroring
+// eachLive's lock discipline, appendix #16/#18) and applies them via
+// bitmap.andNotWords.
 func (s *Store) andLive(ss *sealedSegment, sseg *bitmap) {
 	ss.tombMu.RLock()
-	tomb := make([]uint64, ss.tombWords)
-	for w := 0; w < ss.tombWords; w++ {
-		off := segPageSize + w*8
-		tomb[w] = binary.LittleEndian.Uint64(ss.tombMap[off : off+8])
-	}
+	tomb := make([]uint64, len(ss.tomb))
+	copy(tomb, ss.tomb)
 	ss.tombMu.RUnlock()
 	sseg.andNotWords(tomb)
 }
@@ -1400,10 +1448,12 @@ func (s *Store) sealedByID(id segID) *sealedSegment {
 // attachSealedForTest installs a sealed segment under segId and empties the head,
 // mirroring what the seal pipeline does, so tests can exercise multi-segment
 // routing before the full Seal path exists. Live sealed docs are (re)homed to the
-// new segment. Test-only (no manifest write).
+// new segment. It sets ss.id so a later store Delete commits to the right tomb-bucket
+// key. Test-only (no control-store commit).
 func (s *Store) attachSealedForTest(ss *sealedSegment, id segID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ss.id = id
 	for slot := 0; slot < ss.count(); slot++ {
 		if !ss.tombGet(slot) {
 			s.docToSeg[ss.slotDoc(slot)] = id
@@ -1440,11 +1490,15 @@ func (s *Store) sealLocked() error {
 	segDir := filepath.Join(s.dir, segDirName(id, 0))
 
 	// (1) Dump head → sealed records-segment files (fsync, fast, durable). The
-	// declared attr set is built into attr.dat in the same write.
+	// declared attr set is built into attr.dat in the same write. Tombstones the head
+	// already carries (an overwritten head slot) are NOT in a tomb.dat (incr 3 removed
+	// it) — capture them so the seal commit persists them into the bbolt tomb bucket
+	// and seeds the opened segment's in-memory tomb.
 	if err := writeSealedSegment(segDir, s.seg, s.attrDecls); err != nil {
 		return err
 	}
-	ss, err := openSealedSegment(segDir, s.metric)
+	tombSlots := headTombSlots(s.seg)
+	ss, err := openSealedSegment(segDir, s.metric, id, tombSlots)
 	if err != nil {
 		return err
 	}
@@ -1455,7 +1509,7 @@ func (s *Store) sealLocked() error {
 	}
 
 	// (2) Publish as PENDING + fresh head + atomic seal commit (segment add + head
-	// clear in one txn, below).
+	// clear + docseg/tomb rows in one txn, below).
 	s.sealed = append(s.sealed, ss)
 	s.sealedID = append(s.sealedID, id)
 	s.nextSeg++
@@ -1476,12 +1530,13 @@ func (s *Store) sealLocked() error {
 	if err := s.alloc.Commit(); err != nil {
 		return err
 	}
-	// (3) ONE control-store write-txn adds the new sealed segment AND clears the head
-	// bucket. The writes the head bucket carried are now in the durable sealed
-	// segment, and the segment add + head clear commit atomically — there is no
-	// separate WAL-truncate step (and no crash window between a manifest swap and a
-	// WAL reset, which the appendix #8/#19 guard formerly had to defend).
-	if err := s.commitSealLocked(); err != nil {
+	// (3) ONE control-store write-txn adds the new sealed segment, clears the head
+	// bucket, AND writes the new segment's docseg/tomb rows. The writes the head
+	// bucket carried are now in the durable sealed segment, and the segment add +
+	// head clear + routing/tomb rows commit atomically — there is no separate
+	// WAL-truncate step (and no crash window between a manifest swap and a WAL reset,
+	// which the appendix #8/#19 guard formerly had to defend).
+	if err := s.commitSealLocked(ss, id, tombSlots); err != nil {
 		return err
 	}
 
@@ -1655,13 +1710,21 @@ func (s *Store) writeManifestLocked() error {
 var testHookReconcileErr error
 
 // commitSealLocked is the seal commit: it reconciles the control plane (adding the
-// just-written sealed segment) AND clears the head bucket in ONE bbolt write-txn.
-// The atomicity is load-bearing — the head rows leave the head bucket exactly as
-// the segment that absorbed them becomes durable, so a crash leaves either the old
-// head (no new segment) or the new segment (empty head), never a doc in both.
-func (s *Store) commitSealLocked() error {
+// just-written sealed segment), clears the head bucket, AND writes the new
+// segment's docseg routing rows + tomb rows — all in ONE bbolt write-txn. The
+// atomicity is load-bearing — the head rows leave the head bucket exactly as the
+// segment that absorbed them becomes durable (and its routing entries appear), so a
+// crash leaves either the old head (no new segment, no docseg) or the new segment
+// (empty head, docseg present), never a doc in both. The new segment's live slots
+// get a docseg entry (docId→id) so recover() routes them without a slotdoc rescan;
+// its already-tombstoned slots (an overwritten head slot) get a tomb entry so the
+// delete stays durable.
+func (s *Store) commitSealLocked(ss *sealedSegment, id segID, tombSlots []int) error {
 	return s.cs.update(func(tx *bolt.Tx) error {
 		if err := s.reconcileControlTx(tx); err != nil {
+			return err
+		}
+		if err := putSegRouting(tx, id, ss.count(), func(slot int) bool { return !ss.tombGet(slot) }, ss.slotDoc, tombSlots); err != nil {
 			return err
 		}
 		return clearHead(tx)

@@ -149,7 +149,7 @@ func TestStore_Search_MergesPendingSealedBrute(t *testing.T) {
 	// Seal but DO NOT build a graph: attach as a pending sealed segment.
 	segDir := filepath.Join(s.dir, "seg-7-0")
 	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
-	ss, err := openSealedSegment(segDir, DotProduct)
+	ss, err := openSealedSegment(segDir, DotProduct, 7, nil)
 	requireNoError(t, err)
 	s.attachSealedForTest(ss, 7) // no graph for seg 7 in any index → pending → brute leg
 

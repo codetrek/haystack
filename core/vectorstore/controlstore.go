@@ -26,8 +26,8 @@ import (
 // This is the foundation increment: the type, the bucket schema, and the
 // serialization adapter for the control-plane records. The head bucket is wired
 // into Store as of increment 2 (head record durability replaces records.wal); the
-// docseg/tomb buckets are created on open but filled in by later increments
-// (recovery map, tombstones).
+// docseg/tomb buckets are wired in increment 3 (the docId→segId routing map
+// replaces the recovery rescan, and the tomb bucket replaces tomb.dat msync).
 type controlStore struct {
 	db   *bolt.DB
 	path string
@@ -57,12 +57,12 @@ var (
 	bktIndexes   = []byte("indexes")   // name → {type, metric, M, efC, efS}
 	bktIndexSegs = []byte("indexsegs") // (name,segId) → {gen, state}
 	bktHead      = []byte("head")      // docId(8) → {id, vector, norm, payload} (incr 2)
-	bktDocSeg    = []byte("docseg")    // docId(8) → segId(8)                (incr 4/3)
-	bktTomb      = []byte("tomb")      // (segId,slot) → present              (incr 3)
+	bktDocSeg    = []byte("docseg")    // docId(8) → segId(8) (sealed-doc routing, incr 3)
+	bktTomb      = []byte("tomb")      // (segId,slot) → present (sealed tombstones, incr 3)
 )
 
-// allBuckets is the full set created on open, in a stable order. docseg/tomb are
-// created empty now and populated by later increments; head is wired in incr 2.
+// allBuckets is the full set created on open, in a stable order. head is wired in
+// incr 2; docseg/tomb in incr 3.
 var allBuckets = [][]byte{
 	bktMeta, bktAttrDecls, bktSegments, bktIndexes, bktIndexSegs,
 	bktHead, bktDocSeg, bktTomb,
@@ -503,6 +503,145 @@ func listHeadRecords(tx *bolt.Tx) ([]headRecord, error) {
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// --- docseg bucket ---------------------------------------------------------
+//
+// The docseg bucket is the durable form of the global docId→segId routing map
+// for SEALED docs (incr 3). It persists only sealed-doc ownership (segId >= 1);
+// head docs are reconstructed from the head bucket at Open (rebuildHead re-homes
+// them to headSegID). It is updated in the SAME structural txns that change sealed
+// ownership — seal (head docs become a new segment's), merge (input docs retire,
+// output docs appear), and the sealed-doc Delete / cross-segment Put (a doc leaves
+// its segment) — so recover() loads docToSeg DIRECTLY from this bucket instead of
+// re-scanning every segment's slotdoc.dat over live slots. Key: docId(8, big-
+// endian); value: segId(8, big-endian).
+
+// putDocSeg records that docId currently lives (live) in sealed segment segId. It
+// is a package var (like the mmap/fs primitives) so a fault test can inject a Put
+// failure to exercise putSegRouting's error propagation.
+var putDocSeg = func(tx *bolt.Tx, docID int64, id segID) error {
+	return tx.Bucket(bktDocSeg).Put(segKey(segID(docID)), segKey(id))
+}
+
+// deleteDocSeg removes docId's sealed-ownership entry (the doc was deleted, moved
+// to the head by a cross-segment Put, or retired by a merge). A no-op if absent. A
+// package var for the same fault-injection reason as putDocSeg.
+var deleteDocSeg = func(tx *bolt.Tx, docID int64) error {
+	return tx.Bucket(bktDocSeg).Delete(segKey(segID(docID)))
+}
+
+// loadDocSeg reads the whole sealed-doc routing map. It is the recovery feed for
+// docToSeg (the global docId→segId map), replacing the per-segment slotdoc.dat
+// rescan over live slots. Head docs are added later by rebuildHead (headSegID).
+func loadDocSeg(tx *bolt.Tx) (map[int64]segID, error) {
+	out := make(map[int64]segID)
+	c := tx.Bucket(bktDocSeg).Cursor()
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		if len(k) != 8 || len(v) != 8 {
+			return nil, fmt.Errorf("controlstore: corrupt docseg entry (klen %d vlen %d)", len(k), len(v))
+		}
+		out[int64(binary.BigEndian.Uint64(k))] = segID(binary.BigEndian.Uint64(v))
+	}
+	return out, nil
+}
+
+// --- tomb bucket -----------------------------------------------------------
+//
+// The tomb bucket is the durable form of every sealed segment's tombstone bitmap
+// (incr 3), replacing the per-segment mmap'd + msync'd tomb.dat. A sealed Delete
+// (or a cross-segment Put, or a merge-window reconcile) commits one bbolt txn that
+// marks (segId, slot) present here; the sealed segment's in-memory tomb words are
+// rebuilt from this bucket at Open (a per-segment self-description load, NOT a
+// global rescan). Key: segId(8, big-endian) ‖ slot(8, big-endian); value: empty
+// (presence is the tombstone). The big-endian segId prefix lets a cursor seek scan
+// exactly one segment's tombs at open and lets deleteTombsForSeg drop a retired
+// input's tombs by prefix.
+
+// tombKey encodes (segId, slot) as segId(8, big-endian) ‖ slot(8, big-endian) so a
+// prefix scan over a fixed 8-byte segId yields that segment's slots in order.
+func tombKey(id segID, slot int) []byte {
+	var k [16]byte
+	binary.BigEndian.PutUint64(k[0:], uint64(id))
+	binary.BigEndian.PutUint64(k[8:], uint64(slot))
+	return k[:]
+}
+
+// putTomb marks (segId, slot) tombstoned (present). Idempotent. A package var for
+// the same fault-injection reason as putDocSeg (exercises putSegRouting's tomb-Put
+// error propagation).
+var putTomb = func(tx *bolt.Tx, id segID, slot int) error {
+	return tx.Bucket(bktTomb).Put(tombKey(id, slot), []byte{})
+}
+
+// putSegRouting writes a sealed segment's control-plane routing in tx: a docseg
+// entry (docId→id) for every LIVE slot and a tomb entry for every slot in
+// tombSlots (the already-tombstoned slots a newly published segment carries — an
+// overwritten head slot at seal, a reconcile tombstone at merge). It is shared by
+// the seal and merge commits so the per-Put error branches live in one covered
+// place. liveSlot reports whether a slot is live (not tombstoned); the caller
+// supplies it because seal/merge differ on how a published segment's tomb is sourced.
+func putSegRouting(tx *bolt.Tx, id segID, n int, liveSlot func(slot int) bool, slotDoc func(slot int) int64, tombSlots []int) error {
+	for slot := 0; slot < n; slot++ {
+		if !liveSlot(slot) {
+			continue
+		}
+		if err := putDocSeg(tx, slotDoc(slot), id); err != nil {
+			return err
+		}
+	}
+	for _, slot := range tombSlots {
+		if err := putTomb(tx, id, slot); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// listTombSlots returns the tombstoned slots of one sealed segment in ascending
+// order, by scanning the tomb bucket's segId-prefixed key range. This is the
+// per-segment recovery feed openSealedSegment rebuilds its in-memory tomb from
+// (replacing the tomb.dat mmap read).
+func listTombSlots(tx *bolt.Tx, id segID) ([]int, error) {
+	var out []int
+	c := tx.Bucket(bktTomb).Cursor()
+	prefix := segKey(id) // 8-byte big-endian segId
+	for k, _ := c.Seek(prefix); k != nil && len(k) == 16 && string(k[:8]) == string(prefix); k, _ = c.Next() {
+		out = append(out, int(binary.BigEndian.Uint64(k[8:])))
+	}
+	return out, nil
+}
+
+// deleteTombsForSeg removes every tomb entry of a retired segment (a merge input),
+// so the bucket never accumulates dead-segment tombs. Collect-then-delete keeps the
+// cursor valid across deletes.
+func deleteTombsForSeg(tx *bolt.Tx, id segID) error {
+	b := tx.Bucket(bktTomb)
+	prefix := segKey(id)
+	var doomed [][]byte
+	c := b.Cursor()
+	for k, _ := c.Seek(prefix); k != nil && len(k) == 16 && string(k[:8]) == string(prefix); k, _ = c.Next() {
+		doomed = append(doomed, append([]byte(nil), k...))
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteSegRouting retires a sealed segment's control-plane routing in tx: it drops
+// the docseg entry for each of segDocs (every slotDoc of a merge input — deleting an
+// absent key is a no-op) and drops every tomb entry of the segment. Shared by the
+// merge commit so the per-Delete error branches live in one covered place.
+func deleteSegRouting(tx *bolt.Tx, id segID, segDocs []int64) error {
+	for _, doc := range segDocs {
+		if err := deleteDocSeg(tx, doc); err != nil {
+			return err
+		}
+	}
+	return deleteTombsForSeg(tx, id)
 }
 
 // --- reconciliation deletes -----------------------------------------------

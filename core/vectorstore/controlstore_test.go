@@ -609,3 +609,45 @@ func corruptPayloadLen(v []byte) []byte {
 	out[plOff+3] = 0x7f
 	return out
 }
+
+// TestPutSegRouting_PropagatesPutErrors covers putSegRouting's two error-return
+// branches (the docseg Put and the tomb Put). putDocSeg / putTomb are package vars,
+// so a fault test swaps each to fail and confirms the helper surfaces it — the same
+// fault-injection idiom the mmap/fs primitives use.
+func TestPutSegRouting_PropagatesPutErrors(t *testing.T) {
+	cs, _ := openTestControlStore(t)
+	live := func(slot int) bool { return true }
+	doc := func(slot int) int64 { return int64(100 + slot) }
+
+	// (a) docseg Put fails → putSegRouting returns the error.
+	origDS := putDocSeg
+	putDocSeg = func(*bolt.Tx, int64, segID) error { return errInjected }
+	err := cs.update(func(tx *bolt.Tx) error { return putSegRouting(tx, 1, 2, live, doc, nil) })
+	putDocSeg = origDS
+	if err == nil {
+		t.Fatal("putSegRouting must surface a docseg Put error")
+	}
+
+	// (b) tomb Put fails (with all slots live so the docseg loop succeeds first) →
+	// putSegRouting returns the tomb error.
+	origT := putTomb
+	putTomb = func(*bolt.Tx, segID, int) error { return errInjected }
+	err = cs.update(func(tx *bolt.Tx) error { return putSegRouting(tx, 1, 2, live, doc, []int{0}) })
+	putTomb = origT
+	if err == nil {
+		t.Fatal("putSegRouting must surface a tomb Put error")
+	}
+}
+
+// TestDeleteSegRouting_PropagatesDeleteError covers deleteSegRouting's docseg
+// Delete error-return branch via the deleteDocSeg package-var fault seam.
+func TestDeleteSegRouting_PropagatesDeleteError(t *testing.T) {
+	cs, _ := openTestControlStore(t)
+	orig := deleteDocSeg
+	deleteDocSeg = func(*bolt.Tx, int64) error { return errInjected }
+	err := cs.update(func(tx *bolt.Tx) error { return deleteSegRouting(tx, 1, []int64{7, 8}) })
+	deleteDocSeg = orig
+	if err == nil {
+		t.Fatal("deleteSegRouting must surface a docseg Delete error")
+	}
+}

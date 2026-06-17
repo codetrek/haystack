@@ -37,7 +37,10 @@ func TestSeal_WriteOpenRoundTrip(t *testing.T) {
 	segDir := filepath.Join(dir, "seg-1-0")
 	requireNoError(t, writeSealedSegment(segDir, head, nil))
 
-	ss, err := openSealedSegment(segDir, DotProduct)
+	// Since incr 3 the tombstone is not in a tomb.dat — seed the opened segment's
+	// in-memory bitmap from the head's tombstoned slots (what seal commits to the
+	// bbolt tomb bucket and passes here).
+	ss, err := openSealedSegment(segDir, DotProduct, 1, headTombSlots(head))
 	requireNoError(t, err)
 	defer ss.close()
 
@@ -111,10 +114,6 @@ func TestSeal_TruncatedFileErrorsNotPanic(t *testing.T) {
 		{"slotdoc_header_only", "slotdoc.dat", segPageSize},
 		{"slotdoc_partial", "slotdoc.dat", segPageSize + 8},
 
-		// tomb.dat: header then words*8; 4 rows => 1 word => 8 bytes.
-		{"tomb_below_16", "tomb.dat", 4},
-		{"tomb_header_only", "tomb.dat", segPageSize},
-
 		// payload.dat: header, then 4*4 = 16 bytes of lens, then the bytes.
 		{"payload_below_16", "payload.dat", 4},
 		{"payload_lens_truncated", "payload.dat", segPageSize + 8},   // lens array short
@@ -135,7 +134,7 @@ func TestSeal_TruncatedFileErrorsNotPanic(t *testing.T) {
 						t.Fatalf("openSealedSegment panicked on truncated %s (%d bytes): %v", tc.file, tc.size, r)
 					}
 				}()
-				ss, err = openSealedSegment(segDir, DotProduct)
+				ss, err = openSealedSegment(segDir, DotProduct, 1, nil)
 			}()
 			if err == nil {
 				if ss != nil {
@@ -168,7 +167,7 @@ func TestSeal_CorruptCountHeaderErrors(t *testing.T) {
 				t.Fatalf("openSealedSegment panicked on corrupt huge Count: %v", r)
 			}
 		}()
-		ss, err = openSealedSegment(segDir, DotProduct)
+		ss, err = openSealedSegment(segDir, DotProduct, 1, nil)
 	}()
 	if err == nil {
 		if ss != nil {
@@ -211,7 +210,7 @@ func TestSeal_CountHeaderMismatchErrors(t *testing.T) {
 						t.Fatalf("openSealedSegment panicked on %s count mismatch: %v", tc.file, r)
 					}
 				}()
-				ss, err = openSealedSegment(segDir, DotProduct)
+				ss, err = openSealedSegment(segDir, DotProduct, 1, nil)
 			}()
 			if err == nil {
 				if ss != nil {

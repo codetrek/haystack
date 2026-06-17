@@ -46,7 +46,8 @@ func TestRecovery_SealedSegmentsAndHead(t *testing.T) {
 	for i := 0; i < 30; i++ {
 		put("h-"+itoa(i), randVec())
 	}
-	// Delete one sealed doc (persisted in tomb.dat) and one head doc (head bucket).
+	// Delete one sealed doc (persisted in the bbolt tomb bucket) and one head doc
+	// (head bucket).
 	requireNoError(t, s.Delete("s-0"))
 	delete(vecs, s.idToDoc["s-0"])
 	requireNoError(t, s.Delete("h-0"))
