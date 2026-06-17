@@ -347,7 +347,7 @@ func (s *Store) recover() error {
 					if testHookRecoverBeforeReopenWrite != nil {
 						testHookRecoverBeforeReopenWrite()
 					}
-					vx.graphs[sid] = newBuiltIndex(g, vx.cfg)
+					vx.graphs[sid] = newBuiltIndexFor(g, s.sealed[i], s.metric, vx.metric, vx.cfg)
 					continue
 				}
 				// A torn/missing graph file falls through to a rebuild from records.
@@ -1075,6 +1075,23 @@ func (s *Store) searchLocked(vx *vindex, q []float32, k int, filter Predicate) (
 	pq, _ := vx.metric.prepare(q)
 	tk := newTopK(k)
 
+	// Per-index-metric reconstruction for the BRUTE legs (head + pending/brute-S
+	// sealed). The records store vectors in the PRIMARY metric's form; an index whose
+	// metric differs must compute distance over the raw vector re-prepared under ITS
+	// metric (§3.4 reconstruct-raw). dvec does that reconstruction once per row when
+	// reindex is set; for the default/same-metric index it returns stored VERBATIM, so
+	// the default path is byte-identical to Phases 1-5 (appendix #8/#9/#13/#15/#17 —
+	// ALL four brute distance sites must route through this, not just the eachLive
+	// legs). The indexed GRAPH legs reconstruct via the reindexNodeStore wrapper on
+	// bi.idx (newBuiltIndexFor), so they need no change here.
+	reindex := vx.metric != s.metric
+	dvec := func(stored []float32, norm float32) []float32 {
+		if !reindex {
+			return stored
+		}
+		return reindexVector(stored, norm, s.metric, vx.metric)
+	}
+
 	// Head leg — ALWAYS brute-S (no graph). When a filter is present AND the head
 	// has a declared attr index, use it to compute the matching member set S_head
 	// and brute ONLY that subset (architecture §6 head "brute-S = brute over the
@@ -1090,17 +1107,17 @@ func (s *Store) searchLocked(vx *vindex, q []float32, k int, filter Predicate) (
 				if s.seg.tomb.get(slot) { // member ∧ live (§6): deleted docs never leak
 					return
 				}
-				tk.offer(SearchResult{DocID: s.seg.slotDoc[slot], Distance: vx.metric.distance(s.seg.vectors[slot], pq)})
+				tk.offer(SearchResult{DocID: s.seg.slotDoc[slot], Distance: vx.metric.distance(dvec(s.seg.vectors[slot], s.seg.norms[slot]), pq)})
 			})
 		} else {
 			// Predicate unanswerable by the index view (never happens for the closed
 			// Eq/In/Range/And set, which validatePredicate already gated) → fall back
 			// to the full brute eval for safety, sharing the no-index path's scan.
-			s.headBruteEvalLocked(filter, pq, tk)
+			s.headBruteEvalLocked(vx, filter, pq, tk, dvec)
 		}
 	} else {
 		// Unfiltered, or no declared head index: brute every live slot.
-		s.headBruteEvalLocked(filter, pq, tk)
+		s.headBruteEvalLocked(vx, filter, pq, tk, dvec)
 	}
 
 	// Sealed legs.
@@ -1115,7 +1132,7 @@ func (s *Store) searchLocked(vx *vindex, q []float32, k int, filter Predicate) (
 						return
 					}
 				}
-				tk.offer(SearchResult{DocID: docID, Distance: vx.metric.distance(stored, pq)})
+				tk.offer(SearchResult{DocID: docID, Distance: vx.metric.distance(dvec(stored, norm), pq)})
 			})
 			continue
 		}
@@ -1144,7 +1161,7 @@ func (s *Store) searchLocked(vx *vindex, q []float32, k int, filter Predicate) (
 		if card <= s.attrSearchT {
 			// Brute-S over ONLY the S_seg slots (exact).
 			sseg.iterate(func(slot int) {
-				tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: vx.metric.distance(ss.getVectorRef(slot), pq)})
+				tk.offer(SearchResult{DocID: ss.slotDoc(slot), Distance: vx.metric.distance(dvec(ss.getVectorRef(slot), ss.norm(slot)), pq)})
 			})
 			continue
 		}
@@ -1200,13 +1217,15 @@ func (s *Store) searchLocked(vx *vindex, q []float32, k int, filter Predicate) (
 // slot and admit those matching filter via evalPayload. It is the correctness
 // floor used when no head attr index is available, and the safety net if the
 // index view ever reports a predicate it cannot answer (never, for the closed
-// Eq/In/Range/And set). Caller holds s.mu (R).
-func (s *Store) headBruteEvalLocked(filter Predicate, pq []float32, tk *topK) {
+// Eq/In/Range/And set). Distance is under the INDEX metric (vx), reconstructing raw
+// via dvec for a non-primary index (appendix #8/#13) — for the default index dvec is
+// the identity and this is byte-identical to Phases 1-5. Caller holds s.mu (R).
+func (s *Store) headBruteEvalLocked(vx *vindex, filter Predicate, pq []float32, tk *topK, dvec func([]float32, float32) []float32) {
 	s.seg.eachLive(func(slot int, docID int64, stored []float32, norm float32) {
 		if filter != nil && !filter.evalPayload(s.seg.payloads[slot]) {
 			return
 		}
-		tk.offer(SearchResult{DocID: docID, Distance: s.metric.distance(stored, pq)})
+		tk.offer(SearchResult{DocID: docID, Distance: vx.metric.distance(dvec(stored, norm), pq)})
 	})
 }
 
@@ -1428,18 +1447,33 @@ func (s *Store) buildAndPublish(name string, id segID, segDir string, ss *sealed
 	s.mu.RLock()
 	vx, ok := s.indexes[name]
 	var cfg graphConfig
+	var idxMetric Metric
 	if ok {
 		cfg = vx.cfg
+		idxMetric = vx.metric
 	}
 	s.mu.RUnlock()
 	if !ok {
 		return
 	}
-	gs, err := buildSegmentGraph(segDir, name, ss, cfg)
+	// Build under the INDEX metric. When it equals the primary (records) metric — the
+	// "default" index and any same-metric index — this is the plain build, byte-
+	// identical to Phases 1-5. When it differs, buildSegmentGraphReindex reconstructs
+	// raw per node (primary.restore → index.prepare) so the graph topology is built in
+	// the index's space (§3.4). s.metric is immutable, so it needs no lock snapshot.
+	var gs *segGraphStore
+	var err error
+	if idxMetric == s.metric {
+		gs, err = buildSegmentGraph(segDir, name, ss, cfg)
+	} else {
+		gs, err = buildSegmentGraphReindex(segDir, name, ss, s.metric, idxMetric, cfg)
+	}
 	if err != nil {
 		return // stays pending; brute leg keeps results correct
 	}
-	bi := newBuiltIndex(gs, cfg)
+	// newBuiltIndexFor re-wraps the reopened graph so search-time distances also
+	// reconstruct raw for a non-primary index (symmetric with the build).
+	bi := newBuiltIndexFor(gs, ss, s.metric, idxMetric, cfg)
 	s.buildMu.Lock()
 	defer s.buildMu.Unlock()
 	s.mu.Lock()
