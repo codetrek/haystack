@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -259,7 +259,7 @@ func (h *hnswIndex) insertOneLocked(docId int64, vector []float32) error {
 		if layer == 0 {
 			mMax = h.Mmax0
 		}
-		selected := h.selectNeighborsHeuristic(vector, candidates, mMax, nil)
+		selected := h.selectNeighborsHeuristic(vector, candidates, mMax)
 
 		// Create bidirectional edges.
 		neighborIds := make([]uint64, len(selected))
@@ -283,22 +283,21 @@ func (h *hnswIndex) insertOneLocked(docId int64, vector []float32) error {
 				if err != nil {
 					continue // neighbor may have been deleted
 				}
-				// Pre-load vectors for all candidates so selectNeighborsHeuristic
-				// can read from the cache without repeating these lookups.
+				// Build the shrink candidate set. getVectorRef is zero-copy now, so
+				// reading each vector directly (nil cache below) is cheaper than the
+				// per-shrink map this used to allocate.
 				nbCandidates := make([]distItem, 0, len(nbNeighbors))
-				shrinkVecCache := make(map[uint64][]float32, len(nbNeighbors))
 				for _, cid := range nbNeighbors {
 					cVec, err := h.store.GetVectorRef(cid)
 					if err != nil {
 						continue // node may have been deleted
 					}
-					shrinkVecCache[cid] = cVec
 					nbCandidates = append(nbCandidates, distItem{
 						id:   cid,
 						dist: h.metric.distance(nbVec, cVec),
 					})
 				}
-				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax, shrinkVecCache)
+				shrunk := h.selectNeighborsHeuristic(nbVec, nbCandidates, mMax)
 				newNb := make([]uint64, len(shrunk))
 				for i, s := range shrunk {
 					newNb[i] = s.id
@@ -516,7 +515,7 @@ func (h *hnswIndex) deleteNodeLocked(nodeId uint64) error {
 			if layer == 0 {
 				mMax = h.Mmax0
 			}
-			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax, nil)
+			selected := h.selectNeighborsHeuristic(nbVec, candidates, mMax)
 			newNb := make([]uint64, len(selected))
 			for i, s := range selected {
 				newNb[i] = s.id
@@ -760,7 +759,7 @@ func (h *hnswIndex) searchLayerFiltered(query []float32, entryId uint64, ef int,
 // from the paper. It ensures diversity by only adding a candidate if it
 // is closer to the query than to any already-selected neighbor.
 // If vecCache is non-nil, vectors are read from it instead of the store.
-func (h *hnswIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int, vecCache map[uint64][]float32) []distItem {
+func (h *hnswIndex) selectNeighborsHeuristic(query []float32, candidates []distItem, m int) []distItem {
 	if len(candidates) <= m {
 		return candidates
 	}
@@ -769,17 +768,14 @@ func (h *hnswIndex) selectNeighborsHeuristic(query []float32, candidates []distI
 	sortDistItems(candidates)
 
 	// Resolve each candidate's stored vector once into a position-indexed slice.
-	// Reading from this slice instead of an id-keyed map removes the map hashing
-	// that dominated the insert CPU profile. vecs[i] corresponds to the
-	// just-sorted candidates[i]; a nil vecs[i] means the vector was unavailable.
-	// Vectors are in stored form, so metric.distance compares them directly with
-	// no norm lookup.
+	// getVectorRef is zero-copy, so reading directly here (no id-keyed cache) costs
+	// only a slice header. vecs[i] corresponds to the just-sorted candidates[i]; a
+	// nil vecs[i] means the vector was unavailable. Vectors are in stored form, so
+	// metric.distance compares them directly with no norm lookup.
 	n := len(candidates)
 	vecs := make([][]float32, n)
 	for i, c := range candidates {
-		if vecCache != nil {
-			vecs[i] = vecCache[c.id]
-		} else if v, err := h.store.GetVectorRef(c.id); err == nil {
+		if v, err := h.store.GetVectorRef(c.id); err == nil {
 			vecs[i] = v
 		}
 	}
@@ -1017,9 +1013,17 @@ func (h maxDistHeap) down(i0, n int) {
 	}
 }
 
-// sortDistItems sorts distItems by distance ascending.
+// sortDistItems sorts distItems by distance ascending. Uses the generic
+// slices.SortFunc (not sort.Slice) to avoid the reflect-based swapper allocation
+// that dominated insert-path allocs in the build profile.
 func sortDistItems(items []distItem) {
-	sort.Slice(items, func(i, j int) bool {
-		return items[i].dist < items[j].dist
+	slices.SortFunc(items, func(a, b distItem) int {
+		if a.dist < b.dist {
+			return -1
+		}
+		if a.dist > b.dist {
+			return 1
+		}
+		return 0
 	})
 }
