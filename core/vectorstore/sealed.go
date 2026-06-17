@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"sync"
+	"unsafe"
 )
 
 // sealedSegment is an immutable, mmap-backed records segment. Vectors, slot→docId,
@@ -127,14 +128,16 @@ func (s *sealedSegment) tombCount() int {
 }
 
 // getVectorRef returns the stored-form vector for slot without copying (aliases
-// the mmap). Callers must not retain or mutate it. Used by the HNSW graph leg.
+// the mmap directly). Valid only while the segment is open: the merge swap that
+// close()s the mmap takes s.mu exclusively, and every reader (Search) holds
+// s.mu.RLock() across its whole traversal, so no caller aliases a freed mmap.
+// Callers must not retain past that window or mutate it. The dim floats begin at
+// vecBase+slot*rowF32*4, which is 4-aligned (vecBase is page-aligned, rowF32*4 is a
+// multiple of 4), so the little-endian on-disk layout maps directly to []float32 on
+// little-endian targets (amd64/arm64) — mirrors vectorindex MmapStore (#66).
 func (s *sealedSegment) getVectorRef(slot int) []float32 {
 	start := s.vecBase + slot*s.rowF32*4
-	out := make([]float32, s.dim)
-	for i := 0; i < s.dim; i++ {
-		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(s.vecMap[start+i*4:]))
-	}
-	return out
+	return unsafe.Slice((*float32)(unsafe.Pointer(&s.vecMap[start])), s.dim)
 }
 
 func (s *sealedSegment) norm(slot int) float32 {
