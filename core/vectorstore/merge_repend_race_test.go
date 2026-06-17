@@ -26,7 +26,13 @@ import (
 // with repetition: every doc must survive, the index must reconverge, and there
 // must be no fault/data-race.
 func TestMerge_RebuildRePendsInputDuringMergeWindow(t *testing.T) {
-	for iter := 0; iter < 30; iter++ {
+	// Deterministic in-window seam → every iteration exercises the re-pend race, so
+	// a few seeds suffice under -short (macOS/Windows CI); full count on Linux.
+	iters := 30
+	if testing.Short() {
+		iters = 5
+	}
+	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
 		s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: DotProduct})
 		requireNoError(t, err)
@@ -86,7 +92,13 @@ func TestMerge_RebuildRePendsInputDuringMergeWindow(t *testing.T) {
 // must re-validate fullyIndexedLocked (which now requires the NEW index too) and
 // abort rather than close() an input a new-index builder is mid-read of.
 func TestMerge_CreateRePendsInputDuringMergeWindow(t *testing.T) {
-	for iter := 0; iter < 30; iter++ {
+	// Deterministic in-window seam → every iteration exercises the re-pend race, so
+	// a few seeds suffice under -short (macOS/Windows CI); full count on Linux.
+	iters := 30
+	if testing.Short() {
+		iters = 5
+	}
+	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
 		s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: DotProduct})
 		requireNoError(t, err)

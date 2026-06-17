@@ -155,7 +155,15 @@ func TestAutoMerge_GrowthTriggersOnSeal(t *testing.T) {
 // WaitGroup discipline (no idtable/control-store teardown racing a Put). -race +
 // repetition is the real gate.
 func TestAutoMerge_CloseRaceNoPanic(t *testing.T) {
-	for iter := 0; iter < 80; iter++ {
+	// This is a probabilistic race (no deterministic seam) — it needs many rounds
+	// to surface a Close-vs-Compact Add-after-Wait. Full count runs on Linux; under
+	// -short (macOS/Windows CI, where each store lifecycle pays a heavy FS/AV tax) a
+	// reduced count keeps decent coverage without dominating the run.
+	iters := 80
+	if testing.Short() {
+		iters = 20
+	}
+	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
 		s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 		requireNoError(t, err)
