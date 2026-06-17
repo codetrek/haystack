@@ -338,6 +338,97 @@ func listIndexSegs(tx *bolt.Tx) ([]indexSegEntry, error) {
 	return out, nil
 }
 
+// --- reconciliation deletes -----------------------------------------------
+//
+// writeManifestLocked is a full reconciliation: it (re)writes every live record
+// and then deletes any bucket key no longer backed by live in-memory state. A
+// merge replacing N inputs with M outputs commits both the new keys and the
+// retired-key deletes in ONE txn, so the segment/index-seg set is never
+// transiently inconsistent on disk. Deleting during a cursor scan is safe in
+// bbolt as long as we re-seek by collecting the doomed keys first.
+
+// deleteAttrDeclsNotIn removes every attrdecl whose property is not a key of
+// keep (the live attr-index set).
+func deleteAttrDeclsNotIn(tx *bolt.Tx, keep map[string]AttrKind) error {
+	b := tx.Bucket(bktAttrDecls)
+	var doomed [][]byte
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if _, ok := keep[string(k)]; !ok {
+			doomed = append(doomed, append([]byte(nil), k...))
+		}
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteSegmentsNotIn removes every segment entry whose segId is not in keep
+// (the live sealed-segment set) — i.e. inputs a merge just retired.
+func deleteSegmentsNotIn(tx *bolt.Tx, keep map[segID]bool) error {
+	b := tx.Bucket(bktSegments)
+	var doomed [][]byte
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if len(k) != 8 || !keep[segID(binary.BigEndian.Uint64(k))] {
+			doomed = append(doomed, append([]byte(nil), k...))
+		}
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteIndexConfigsNotIn removes every index config whose name is not in keep
+// (the live index set) — a Drop just removed it.
+func deleteIndexConfigsNotIn(tx *bolt.Tx, keep map[string]bool) error {
+	b := tx.Bucket(bktIndexes)
+	var doomed [][]byte
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if !keep[string(k)] {
+			doomed = append(doomed, append([]byte(nil), k...))
+		}
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// deleteIndexSegsNotIn removes every (index, segment) entry for which keep
+// returns false — a merge retired the segment or a Drop removed the index.
+func deleteIndexSegsNotIn(tx *bolt.Tx, keep func(index string, id segID) bool) error {
+	b := tx.Bucket(bktIndexSegs)
+	var doomed [][]byte
+	c := b.Cursor()
+	for k, _ := c.First(); k != nil; k, _ = c.Next() {
+		if len(k) < 8 {
+			doomed = append(doomed, append([]byte(nil), k...))
+			continue
+		}
+		name := string(k[:len(k)-8])
+		id := segID(binary.BigEndian.Uint64(k[len(k)-8:]))
+		if !keep(name, id) {
+			doomed = append(doomed, append([]byte(nil), k...))
+		}
+	}
+	for _, k := range doomed {
+		if err := b.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // --- key encoders ----------------------------------------------------------
 
 // segKey encodes a segId as 8 big-endian bytes so bbolt's byte-ordered cursor

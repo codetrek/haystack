@@ -252,9 +252,10 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 	docA := s1.idToDoc["a"]
 
 	// CRASH: do NOT call s1.Close(). idtable's id→docId batch and nextId were
-	// never committed to KV. Close ONLY the WAL fd so the OS releases the file;
-	// the allocator is deliberately left uncommitted to mimic a kill.
-	requireNoError(t, s1.wal.Close())
+	// never committed to KV. Drop only the OS-held file handles a real kill would
+	// release (the WAL fd and the bbolt control-DB lock); the allocator is
+	// deliberately left uncommitted to mimic a kill.
+	crashRelease(t, s1)
 
 	// Reopen over the SAME dir + SAME KV. Recovery must come entirely from the
 	// WAL: the segment, the id→docId map, and a consistent allocator nextId.
@@ -368,7 +369,7 @@ func TestStore_OpenReplayError(t *testing.T) {
 	s1, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s1.Put("a", []float32{1, 0}, nil))
-	requireNoError(t, s1.wal.Close()) // leave the record on disk; do not commit alloc
+	crashRelease(t, s1) // leave the record on disk; do not commit alloc, drop OS locks
 
 	// Reopen: idtable.New's startup Get and OpenWAL/scanLSN succeed, but replay
 	// drives docIDForAlloc -> GetId, which fails because the KV reports closed.

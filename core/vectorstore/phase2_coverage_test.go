@@ -8,28 +8,9 @@ import (
 
 func TestSeal_EmptyHeadIsNoOp(t *testing.T) {
 	s := openTestStore(t, Cosine)
-	requireNoError(t, s.Seal()) // empty head → no segment, no manifest
+	requireNoError(t, s.Seal()) // empty head → no segment, no control commit
 	if len(s.sealed) != 0 {
 		t.Fatalf("empty-head Seal created %d segments, want 0", len(s.sealed))
-	}
-}
-
-func TestManifest_WriteFaultRemovesTmp(t *testing.T) {
-	dir := t.TempDir()
-	orig := fsCreate
-	t.Cleanup(func() { fsCreate = orig })
-	fsCreate = func(name string) (osFile, error) {
-		f, err := orig(name)
-		if err != nil {
-			return nil, err
-		}
-		return &faultFile{osFile: f, failSync: true}, nil
-	}
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when fsync is injected to fail")
-	}
-	if _, statErr := os.Stat(dir + "/manifest.tmp"); !os.IsNotExist(statErr) {
-		t.Fatal("manifest.tmp must be removed on write fault")
 	}
 }
 
@@ -49,24 +30,30 @@ func TestSealedSegment_TombstoneOutOfRange(t *testing.T) {
 	}
 }
 
-// TestRecovery_StrandedManifestTmpIgnored covers appendix #3: a manifest.tmp left
-// by a crashed write must be ignored (readManifest reads the committed "manifest")
-// and swept by recovery, never mistaken for a committed manifest.
+// TestRecovery_StrandedManifestTmpIgnored covers appendix #3 in the bbolt world: a
+// legacy manifest / manifest.tmp file (left by the pre-bbolt control plane or a
+// crashed legacy write) must NOT break recovery — the control store is loaded from
+// control.db — and must be swept, never mistaken for live control state.
 func TestRecovery_StrandedManifestTmpIgnored(t *testing.T) {
 	kvStore := newTestKV(t)
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s.Put("d-0", []float32{1, 0, 0, 0}, nil))
-	requireNoError(t, s.Seal()) // writes a committed manifest
+	requireNoError(t, s.Seal()) // commits the control store (control.db)
 	requireNoError(t, s.WaitForIndex())
 
 	tmp := filepath.Join(s.dir, "manifest.tmp")
+	legacy := filepath.Join(s.dir, "manifest")
 	requireNoError(t, os.WriteFile(tmp, []byte("garbage-not-a-manifest"), 0644))
+	requireNoError(t, os.WriteFile(legacy, []byte("legacy-manifest-bytes"), 0644))
 
 	s2 := reopenStore(t, s, kvStore)
-	// The committed manifest loaded (the doc is searchable) and the tmp is swept.
+	// The control store loaded (the doc is searchable) and both legacy files are swept.
 	if _, statErr := os.Stat(tmp); !os.IsNotExist(statErr) {
 		t.Fatal("stranded manifest.tmp not swept on recovery")
+	}
+	if _, statErr := os.Stat(legacy); !os.IsNotExist(statErr) {
+		t.Fatal("legacy manifest file not swept on recovery")
 	}
 	res, err := s2.Search("default", []float32{1, 0, 0, 0}, 1, nil)
 	requireNoError(t, err)

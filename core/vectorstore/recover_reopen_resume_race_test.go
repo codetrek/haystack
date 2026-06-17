@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // TestRecover_ReopenWriteDoesNotRaceResumedBuild pins the recover() ordering
@@ -76,20 +78,31 @@ func TestRecover_ReopenWriteDoesNotRaceResumedBuild(t *testing.T) {
 	pendingSeg := segID(2) // segIds are 1..nIndexed; segs 3..nIndexed reopen AFTER its spawn
 	pendingDir := filepath.Join(dir, segDirName(pendingSeg, 0))
 	requireNoError(t, os.Remove(filepath.Join(pendingDir, "graph-default.dat")))
-	m, err := readManifest(dir)
+	cs, err := openControlStore(dir)
 	requireNoError(t, err)
 	flipped := false
-	for i := range m.IndexSegs {
-		if m.IndexSegs[i].Index == defaultIndexName && m.IndexSegs[i].SegID == pendingSeg {
-			m.IndexSegs[i].State = segPending
+	requireNoError(t, cs.update(func(tx *bolt.Tx) error {
+		is, ok, gerr := getIndexSeg(tx, defaultIndexName, pendingSeg)
+		if gerr != nil {
+			return gerr
+		}
+		if ok {
+			is.State = segPending
+			if perr := putIndexSeg(tx, is); perr != nil {
+				return perr
+			}
 			flipped = true
 		}
-	}
+		ver, head, met, _, merr := getMeta(tx)
+		if merr != nil {
+			return merr
+		}
+		return putMeta(tx, ver+1, head, met)
+	}))
+	requireNoError(t, cs.Close())
 	if !flipped {
 		t.Fatalf("did not find IndexSegs entry for (default, seg %d) to demote", pendingSeg)
 	}
-	m.Version++
-	requireNoError(t, writeManifest(dir, m))
 
 	// Widen every Phase-A reopen-write. Under the buggy single-loop recover this
 	// delay holds the unlocked map write open long enough for the same-index

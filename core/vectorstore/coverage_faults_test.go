@@ -13,7 +13,7 @@ import (
 //
 // These tests drive the per-function floor for the IO-fault error branches and
 // the migrated graph-delete machinery the insert-only seal pipeline never
-// exercises, via the fsCreate/fsOpen/fsOpenFile/fsRename overrides and direct
+// exercises, via the fsCreate/fsOpen/fsOpenFile overrides and direct
 // graph-store manipulation.
 
 // withCreateFault overrides fsCreate so the returned file injects faults per cfg.
@@ -129,58 +129,29 @@ func TestOpenSealedSegment_ReadWholeFileFault(t *testing.T) {
 	}
 }
 
-// TestWriteManifest_RenameFault drives writeManifest's rename-error branch
-// (tmp cleaned up afterwards).
-func TestWriteManifest_RenameFault(t *testing.T) {
-	dir := t.TempDir()
-	orig := fsRename
-	t.Cleanup(func() { fsRename = orig })
-	fsRename = func(oldp, newp string) error { return errInjected }
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when rename is injected to fail")
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "manifest.tmp")); !os.IsNotExist(statErr) {
-		t.Fatal("manifest.tmp must be removed after a rename fault")
-	}
-}
-
-// TestWriteManifest_DirFsyncFault drives writeManifest's fsyncDir-error branch:
-// the manifest write + rename succeed, then the directory fsync fails. fsyncDir
-// fails by failing Sync on the directory handle (opened via fsOpen).
-func TestWriteManifest_DirFsyncFault(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fsyncDir is a documented no-op on Windows (no directory-fsync syscall; osfile.go), so the injected Sync fault is swallowed and cannot propagate")
-	}
-	dir := t.TempDir()
-	// fsOpen is used by fsyncDir to open the directory; fail its Sync.
-	withOpenFault(t, func(f *faultFile) { f.failSync = true })
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when fsyncDir's Sync fails")
-	}
-}
-
-// TestWriteManifest_WriteFault drives the body-Write error branch.
-func TestWriteManifest_WriteFault(t *testing.T) {
-	dir := t.TempDir()
-	withCreateFault(t, func(f *faultFile) { f.failWrite = true })
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when the body Write fails")
-	}
-}
-
-// TestWriteManifest_CloseFault drives the f.Close() error branch.
-func TestWriteManifest_CloseFault(t *testing.T) {
-	dir := t.TempDir()
-	withCreateFault(t, func(f *faultFile) { f.failClose = true })
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when Close fails")
-	}
-}
-
 // TestFsyncDir_OpenFault drives fsyncDir's open-error branch (a non-existent dir).
 func TestFsyncDir_OpenFault(t *testing.T) {
 	if err := fsyncDir(filepath.Join(t.TempDir(), "does-not-exist")); err == nil {
 		t.Fatal("fsyncDir on a missing directory should error")
+	}
+}
+
+// TestFsyncDir_SyncFault drives fsyncDir's directory-Sync error branch: the open
+// succeeds, then Sync fails. On a non-Windows OS the error must propagate (POSIX
+// directory fsync is real); on Windows fsyncDir documents Sync as a no-op and
+// swallows the fault, so it returns nil there. (Both branches were formerly
+// covered by the now-removed manifest-rewrite dir-fsync test.)
+func TestFsyncDir_SyncFault(t *testing.T) {
+	withOpenFault(t, func(f *faultFile) { f.failSync = true })
+	err := fsyncDir(t.TempDir())
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatalf("fsyncDir Sync fault must be swallowed on Windows (no-op), got %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("fsyncDir must surface a directory Sync fault on POSIX")
 	}
 }
 

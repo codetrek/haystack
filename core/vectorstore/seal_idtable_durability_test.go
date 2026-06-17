@@ -9,17 +9,33 @@ import (
 )
 
 // reopenUnclean simulates a crash: it opens a NEW Store over the SAME dir + KV
-// WITHOUT closing s first. The original WAL handle stays open (the OS would have
-// closed it on a real crash) but the new Store opens its own handle on the same
-// (already-Reset) file and reads idtable state straight from the durable KV. This
-// is the unclean-crash pattern: nothing in s's process memory or its lazy idtable
-// batch is flushed — only what was fsync'd to disk/KV survives.
+// WITHOUT closing s first. A real process kill releases every OS-held file lock,
+// so before reopening we drop only s's open file handles the OS would have
+// dropped — the WAL fd and the bbolt control-DB lock — WITHOUT running the
+// orderly Close() (which would commit the idtable batch + quiesce builds, masking
+// the crash). The new Store opens its own handle on the same (already-Reset) WAL
+// file and reads idtable state straight from the durable KV. This is the unclean-
+// crash pattern: nothing in s's process memory or its lazy idtable batch is
+// flushed — only what was fsync'd to disk/KV (and committed to the control DB)
+// survives.
 func reopenUnclean(t *testing.T, s *Store, kvStore kv.Store) *Store {
 	t.Helper()
+	crashRelease(t, s)
 	s2, err := Open(Options{Dir: s.dir, KV: kvStore, Metric: s.metric})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 	return s2
+}
+
+// crashRelease drops the OS-held file handles a process kill would release — the
+// WAL fd and the bbolt control-DB flock — so a same-process reopen can take them.
+// It does NOT commit the idtable or quiesce in-flight builds: that is the whole
+// point of a crash sim (lazy/in-memory state must be lost). Safe to call when the
+// WAL is already closed (a test that closed it by hand).
+func crashRelease(t *testing.T, s *Store) {
+	t.Helper()
+	_ = s.wal.Close()
+	_ = s.cs.Close()
 }
 
 // TestSeal_IdtableDurableBeforeWALReset is the red-proof for the committed-data

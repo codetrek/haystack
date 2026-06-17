@@ -12,6 +12,7 @@ import (
 
 	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/kv"
+	bolt "go.etcd.io/bbolt"
 )
 
 // Distinct idtable key-prefix bytes for the vectorstore allocator, so it never
@@ -58,13 +59,20 @@ const defaultAttrSearchT = 512
 // routed to the owning segment via the global docId→segId map. A manifest +
 // head WAL provide crash recovery. All public methods are serialized by mu.
 type Store struct {
-	mu      sync.RWMutex
-	metric  Metric
-	dir     string
-	kv      kv.Store
-	alloc   *idtable.Allocator
-	seg     *segment // the head
-	wal     *WAL
+	mu     sync.RWMutex
+	metric Metric
+	dir    string
+	kv     kv.Store
+	alloc  *idtable.Allocator
+	seg    *segment // the head
+	wal    *WAL
+	// cs is the bbolt-backed CONTROL plane: the small, transactional store
+	// metadata (meta/segments/indexes/indexsegs/attrdecls) that replaced the
+	// hand-rolled manifest's serialize+CRC+tmp+fsync+rename+dir-fsync rewrite. One
+	// cs write-txn == one atomic structural change (seal/merge/create/drop/rebuild).
+	// The DATA plane (sealed vectors.dat + graph-<name>.dat + zero-copy mmap) stays
+	// flat-mmap and is never moved into bbolt (durability.md plane boundary).
+	cs      *controlStore
 	idToDoc map[string]int64 // derived from WAL replay; lets reads avoid allocating
 
 	sealed   []*sealedSegment // live sealed segments, by attach order
@@ -171,8 +179,20 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The directory must exist before OpenWAL (records.wal) and openControlStore
+	// (control.db) create their files in it; create it here so a fresh Dir works.
+	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
+		alloc.Close()
+		return nil, err
+	}
 	w, err := OpenWAL(opts.Dir)
 	if err != nil {
+		alloc.Close()
+		return nil, err
+	}
+	cs, err := openControlStore(opts.Dir)
+	if err != nil {
+		w.Close()
 		alloc.Close()
 		return nil, err
 	}
@@ -183,6 +203,7 @@ func Open(opts Options) (*Store, error) {
 		alloc:    alloc,
 		seg:      newSegment(opts.Metric),
 		wal:      w,
+		cs:       cs,
 		idToDoc:  make(map[string]int64),
 		docToSeg: make(map[int64]segID),
 		indexes: map[string]*vindex{
@@ -199,6 +220,7 @@ func Open(opts Options) (*Store, error) {
 	}
 	s.quiesced = sync.NewCond(&s.mu)
 	if err := s.recover(); err != nil {
+		cs.Close()
 		w.Close()
 		alloc.Close()
 		return nil, err
@@ -206,37 +228,79 @@ func Open(opts Options) (*Store, error) {
 	return s, nil
 }
 
-// recover rebuilds the full segmented state. A missing manifest means a fresh or
-// Phase-1 store: just replay the head WAL. Otherwise: load the manifest, mmap
-// every sealed segment, rebuild the global docId→segId from each segment's
-// slotDoc over LIVE slots (the persisted tombstone bitmap is authoritative),
-// reopen each indexed segment's graph, then replay the head WAL last so a head
-// put that supersedes a sealed old slot resolves against the now-populated
-// docToSeg.
+// loadControlManifest reads the whole control plane from the bbolt control store
+// into an in-memory *manifest (the same carrier recover() already consumes). ok
+// is false when the meta record has never been written — a fresh / Phase-1 store
+// (exactly what a missing manifest file used to signal), so recover() falls back
+// to a head-only WAL replay. The single read-txn gives a consistent snapshot of
+// meta + segments + index configs + per-(index,segment) state + attr decls.
+func (s *Store) loadControlManifest() (*manifest, bool, error) {
+	m := &manifest{}
+	var ok bool
+	err := s.cs.view(func(tx *bolt.Tx) error {
+		version, head, metric, present, err := getMeta(tx)
+		if err != nil {
+			return err
+		}
+		if !present {
+			return nil // fresh store; ok stays false
+		}
+		ok = true
+		m.Version = version
+		m.Head = head
+		m.Metric = metric
+		if m.AttrDecls, err = listAttrDecls(tx); err != nil {
+			return err
+		}
+		if m.Segments, err = listSegments(tx); err != nil {
+			return err
+		}
+		if m.Indexes, err = listIndexConfigs(tx); err != nil {
+			return err
+		}
+		if m.IndexSegs, err = listIndexSegs(tx); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return m, ok, nil
+}
+
+// recover rebuilds the full segmented state. An empty control store (no committed
+// meta record) means a fresh or Phase-1 store: just replay the head WAL. Otherwise
+// load the control plane from bbolt (meta + segments + index configs + per-(index,
+// segment) state + attr decls), mmap every sealed segment, rebuild the global
+// docId→segId from each segment's slotDoc over LIVE slots (the persisted tombstone
+// bitmap is authoritative), reopen each indexed segment's graph, then replay the
+// head WAL last so a head put that supersedes a sealed old slot resolves against
+// the now-populated docToSeg.
 //
-// Crash-safety (appendix #8/#19): the manifest is authoritative for every
-// segment it lists. If a crash happened after the manifest swap but BEFORE the
+// Crash-safety (appendix #8/#19): the control store is authoritative for every
+// segment it lists. If a crash happened after the bbolt commit but BEFORE the
 // head WAL was truncated, the old WAL still carries the just-sealed pre-seal
 // records. Re-homing those into the head would tombstone the (immutable) sealed
 // slot and double-store the doc. So replay SKIPS any record whose docId is still
-// live in a sealed segment loaded from the manifest — it is already durable
-// there. A genuine post-seal Update already tombstoned the sealed slot at Put
-// time, so that doc is NOT live in the segment and is correctly re-homed.
+// live in a sealed segment loaded from bbolt — it is already durable there. A
+// genuine post-seal Update already tombstoned the sealed slot at Put time, so that
+// doc is NOT live in the segment and is correctly re-homed.
 func (s *Store) recover() error {
-	m, err := readManifest(s.dir)
+	m, ok, err := s.loadControlManifest()
 	if err != nil {
-		if os.IsNotExist(err) {
-			// Fresh / Phase-1 store, OR a crash during the very FIRST seal (segment
-			// dir written, manifest not yet committed). Sweep orphans before the
-			// head-only WAL replay: with no committed manifest, every seg-* dir is
-			// unreferenced and must be reclaimed, else a first-seal crash leaks a
-			// half-written segment dir forever (appendix #3).
-			if serr := s.sweepOrphansLocked(&manifest{}); serr != nil {
-				return serr
-			}
-			return s.replay()
-		}
 		return err
+	}
+	if !ok {
+		// Fresh / Phase-1 store, OR a crash during the very FIRST seal (segment
+		// dir written, control-store commit not yet durable). Sweep orphans before
+		// the head-only WAL replay: with no committed control state, every seg-* dir
+		// is unreferenced and must be reclaimed, else a first-seal crash leaks a
+		// half-written segment dir forever (appendix #3).
+		if serr := s.sweepOrphansLocked(&manifest{}); serr != nil {
+			return serr
+		}
+		return s.replay()
 	}
 	s.manifestVersion = m.Version
 	// The on-disk vector form is metric-dependent (cosine stores unit+|v|;
@@ -367,14 +431,15 @@ func (s *Store) recover() error {
 }
 
 // sweepOrphansLocked removes any seg-* directory on disk not referenced by the
-// loaded manifest, plus a stranded manifest.tmp. A crash mid-seal leaves a
-// half-written segment the manifest never committed to; the manifest swap is the
-// commit point, so anything not in it is an orphan (§4.8, appendix #3). The
-// stranded manifest.tmp from a crashed write is harmless to readManifest (which
-// reads "manifest", not the tmp) but is cleaned here so it cannot accumulate or
-// be mistaken for a committed manifest later. It also removes any stray
-// graph-<name>.dat in a LIVE seg dir for an index NOT in the manifest: a crash
-// after a Drop's manifest commit but before its unlink reached disk leaves such an
+// loaded control state, plus any legacy manifest / manifest.tmp file. A crash
+// mid-seal leaves a half-written segment the control store never committed to; the
+// bbolt commit is the commit point, so any seg-* dir not in the segments bucket is
+// an orphan (§4.8, appendix #3). The legacy "manifest"/"manifest.tmp" files are
+// vestiges of the pre-bbolt control plane: a store opened from that format (or a
+// crashed legacy write) leaves them behind, and they are swept here so they cannot
+// accumulate or be mistaken for live control state. It also removes any stray
+// graph-<name>.dat in a LIVE seg dir for an index NOT in the loaded set: a crash
+// after a Drop's bbolt commit but before its unlink reached disk leaves such an
 // orphan, and a later re-Create of that name must not open the stale graph
 // (appendix #21). Caller holds s.mu.
 func (s *Store) sweepOrphansLocked(m *manifest) error {
@@ -382,7 +447,7 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 	for _, e := range m.Segments {
 		referenced[segDirName(e.SegID, e.Gen)] = true
 	}
-	// The set of index graph files the manifest still references, by file name.
+	// The set of index graph files the loaded control state still references, by name.
 	liveGraphFiles := make(map[string]bool, len(m.Indexes))
 	for _, ic := range m.Indexes {
 		liveGraphFiles[graphFileName(ic.Name)] = true
@@ -393,7 +458,7 @@ func (s *Store) sweepOrphansLocked(m *manifest) error {
 	}
 	for _, ent := range entries {
 		name := ent.Name()
-		if name == "manifest.tmp" && !ent.IsDir() {
+		if (name == "manifest" || name == "manifest.tmp") && !ent.IsDir() {
 			if err := fsRemove(filepath.Join(s.dir, name)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
@@ -784,6 +849,9 @@ func (s *Store) Close() error {
 	}
 	werr := s.wal.Close()
 	s.alloc.Close()
+	if cerr := s.cs.Close(); cerr != nil && werr == nil {
+		werr = cerr
+	}
 	return werr
 }
 
@@ -1575,53 +1643,107 @@ func (s *Store) isIndexedForTest(id segID) bool {
 	return s.indexes[defaultIndexName].graphs[id] != nil
 }
 
-// writeManifestLocked rewrites the manifest from the current segment set. Caller
-// holds s.mu. The manifest Version is bumped exactly once per rewrite
-// (appendix #19 — the draft double-incremented with a dead assignment).
+// writeManifestLocked commits the current control-plane state — the store
+// scalars (version/head/metric), the declared attr-index set, the sealed-segment
+// set, and every named index's config + per-(index,segment) build state — as ONE
+// bbolt write-txn (controlStore). This single atomic commit is the structural-
+// change boundary that replaced the hand-rolled manifest's serialize+CRC32+
+// tmp+fsync+rename+dir-fsync rewrite: a seal/merge/create/drop/rebuild calls it
+// once and either the whole new control state is durable or none of it is. Caller
+// holds s.mu. The version is bumped exactly once per commit (appendix #19 — the
+// draft double-incremented with a dead assignment).
+//
+// It is a full reconciliation, not an append: every live segment/index/index-seg
+// is (re)written and any bucket key no longer backed by live in-memory state is
+// deleted in the same txn. That is what makes a merge — which replaces N input
+// segments with M outputs — a single commit: the retired inputs' segment +
+// index-seg keys are removed alongside the new outputs' keys.
 func (s *Store) writeManifestLocked() error {
 	s.manifestVersion++
-	m := &manifest{Version: s.manifestVersion, Head: headSegID, Metric: s.metric}
-	// Persist the declared attr-index set (sorted for a deterministic manifest).
+	// Snapshot the live attr-index set (sorted only for determinism in tests).
 	props := make([]string, 0, len(s.attrDecls))
 	for p := range s.attrDecls {
 		props = append(props, p)
 	}
 	sort.Strings(props)
-	for _, p := range props {
-		m.AttrDecls = append(m.AttrDecls, attrDecl{Property: p, Kind: s.attrDecls[p]})
-	}
-	for i, ss := range s.sealed {
-		m.Segments = append(m.Segments, segmentEntry{
-			SegID:     s.sealedID[i],
-			Gen:       0,
-			VecCount:  uint64(ss.count()),
-			TombCount: uint64(ss.tombCount()),
-		})
-	}
-	// Index configs + per-(index,segment) states (v4), sorted by name for a
-	// deterministic manifest. Each index emits its config once and one IndexSegs
-	// entry per sealed segment: segIndexed when its graph is built, else segPending
-	// (the brute-served state recover() resumes from).
+	// Snapshot the live index names (sorted for determinism).
 	inames := make([]string, 0, len(s.indexes))
 	for n := range s.indexes {
 		inames = append(inames, n)
 	}
 	sort.Strings(inames)
+	// The live key sets, used to delete retired keys (merge retires inputs).
+	liveSeg := make(map[segID]bool, len(s.sealedID))
+	for _, id := range s.sealedID {
+		liveSeg[id] = true
+	}
+	type isKey struct {
+		index string
+		seg   segID
+	}
+	liveIdxSeg := make(map[isKey]bool, len(inames)*len(s.sealedID))
+	liveIdx := make(map[string]bool, len(inames))
 	for _, n := range inames {
-		vx := s.indexes[n]
-		m.Indexes = append(m.Indexes, indexConfigEntry{
-			Name: n, Type: "hnsw", Metric: vx.metric,
-			M: vx.cfg.M, EfConstruction: vx.cfg.EfConstruction, EfSearch: vx.cfg.EfSearch,
-		})
+		liveIdx[n] = true
 		for _, sid := range s.sealedID {
-			st := segPending
-			if vx.graphs[sid] != nil {
-				st = segIndexed
-			}
-			m.IndexSegs = append(m.IndexSegs, indexSegEntry{Index: n, SegID: sid, Gen: 0, State: st})
+			liveIdxSeg[isKey{n, sid}] = true
 		}
 	}
-	return writeManifest(s.dir, m)
+	return s.cs.update(func(tx *bolt.Tx) error {
+		if err := putMeta(tx, s.manifestVersion, headSegID, s.metric); err != nil {
+			return err
+		}
+		// attrdecls: (re)write the live set, then drop any declaration no longer held.
+		for _, p := range props {
+			if err := putAttrDecl(tx, attrDecl{Property: p, Kind: s.attrDecls[p]}); err != nil {
+				return err
+			}
+		}
+		if err := deleteAttrDeclsNotIn(tx, s.attrDecls); err != nil {
+			return err
+		}
+		// segments: (re)write every live sealed segment, then drop retired ones.
+		for i, ss := range s.sealed {
+			if err := putSegment(tx, segmentEntry{
+				SegID:     s.sealedID[i],
+				Gen:       0,
+				VecCount:  uint64(ss.count()),
+				TombCount: uint64(ss.tombCount()),
+			}); err != nil {
+				return err
+			}
+		}
+		if err := deleteSegmentsNotIn(tx, liveSeg); err != nil {
+			return err
+		}
+		// indexes + indexsegs: (re)write every live index config and one index-seg
+		// entry per (index, sealed segment) — segIndexed once its graph is built,
+		// else segPending (the brute-served state recover() resumes from).
+		for _, n := range inames {
+			vx := s.indexes[n]
+			if err := putIndexConfig(tx, indexConfigEntry{
+				Name: n, Type: "hnsw", Metric: vx.metric,
+				M: vx.cfg.M, EfConstruction: vx.cfg.EfConstruction, EfSearch: vx.cfg.EfSearch,
+			}); err != nil {
+				return err
+			}
+			for _, sid := range s.sealedID {
+				st := segPending
+				if vx.graphs[sid] != nil {
+					st = segIndexed
+				}
+				if err := putIndexSeg(tx, indexSegEntry{Index: n, SegID: sid, Gen: 0, State: st}); err != nil {
+					return err
+				}
+			}
+		}
+		if err := deleteIndexConfigsNotIn(tx, liveIdx); err != nil {
+			return err
+		}
+		return deleteIndexSegsNotIn(tx, func(index string, id segID) bool {
+			return liveIdxSeg[isKey{index, id}]
+		})
+	})
 }
 
 // segDirName derives the on-disk directory name for a sealed segment (§4.8: paths

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	bolt "go.etcd.io/bbolt"
 )
 
 // makeRecoveredStore seals one indexed segment + leaves a few head docs, then
@@ -89,20 +91,34 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.Close())
 
-	// Simulate a crash mid-build: drop graph-default.dat and rewrite the manifest
-	// marking the default index's (default, seg) state pending (the state recover()
-	// must resume from — v4 keeps build state per-(index,segment) in IndexSegs).
+	// Simulate a crash mid-build: drop graph-default.dat and rewrite the control
+	// store marking the default index's (default, seg) state pending (the state
+	// recover() must resume from — build state lives per-(index,segment) in the
+	// indexsegs bucket). s is closed, so we open the control DB directly.
 	segDir := filepath.Join(dir, segDirName(segID(1), 0))
 	requireNoError(t, os.Remove(filepath.Join(segDir, "graph-default.dat")))
-	m, err := readManifest(dir)
+	cs, err := openControlStore(dir)
 	requireNoError(t, err)
-	for i := range m.IndexSegs {
-		if m.IndexSegs[i].Index == defaultIndexName {
-			m.IndexSegs[i].State = segPending
+	requireNoError(t, cs.update(func(tx *bolt.Tx) error {
+		entries, lerr := listIndexSegs(tx)
+		if lerr != nil {
+			return lerr
 		}
-	}
-	m.Version++
-	requireNoError(t, writeManifest(dir, m))
+		for _, is := range entries {
+			if is.Index == defaultIndexName {
+				is.State = segPending
+				if perr := putIndexSeg(tx, is); perr != nil {
+					return perr
+				}
+			}
+		}
+		ver, head, met, _, gerr := getMeta(tx)
+		if gerr != nil {
+			return gerr
+		}
+		return putMeta(tx, ver+1, head, met)
+	}))
+	requireNoError(t, cs.Close())
 
 	// Reopen: recover() loads the pending segment and resumes its build.
 	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
@@ -154,30 +170,33 @@ func TestRecovery_CrashAfterManifestSwapBeforeWALReset(t *testing.T) {
 		requireNoError(t, s.Put("c-"+itoa(i), randVec(), nil))
 	}
 
-	// Hand-build the post-manifest-swap, pre-WAL-reset crash state on disk: dump
-	// the head to a sealed segment and write a manifest listing it as pending —
-	// WITHOUT calling Seal (so the WAL is NOT reset and still holds all 40 Puts).
+	// Hand-build the post-commit, pre-WAL-reset crash state on disk: dump the head
+	// to a sealed segment and commit a control-store snapshot listing it as pending
+	// — WITHOUT calling Seal (so the WAL is NOT reset and still holds all 40 Puts).
+	// Commit through s's already-open control DB (a second opener would block on the
+	// flock).
 	segDir := filepath.Join(dir, segDirName(segID(1), 0))
 	s.mu.Lock()
 	requireNoError(t, writeSealedSegment(segDir, s.seg, nil))
-	m := &manifest{
-		Version: 1,
-		Head:    headSegID,
-		Segments: []segmentEntry{
-			{SegID: 1, Gen: 0, VecCount: uint64(s.seg.dim), TombCount: 0},
-		},
-		Indexes: []indexConfigEntry{
-			{Name: defaultIndexName, Type: "hnsw", Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: 64},
-		},
-		IndexSegs: []indexSegEntry{
-			{Index: defaultIndexName, SegID: 1, Gen: 0, State: segPending},
-		},
-	}
-	requireNoError(t, writeManifest(dir, m))
+	requireNoError(t, s.cs.update(func(tx *bolt.Tx) error {
+		if err := putMeta(tx, 1, headSegID, Cosine); err != nil {
+			return err
+		}
+		if err := putSegment(tx, segmentEntry{SegID: 1, Gen: 0, VecCount: uint64(s.seg.dim), TombCount: 0}); err != nil {
+			return err
+		}
+		if err := putIndexConfig(tx, indexConfigEntry{
+			Name: defaultIndexName, Type: "hnsw", Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: 64,
+		}); err != nil {
+			return err
+		}
+		return putIndexSeg(tx, indexSegEntry{Index: defaultIndexName, SegID: 1, Gen: 0, State: segPending})
+	}))
 	s.mu.Unlock()
-	// Abandon s WITHOUT Close (Close would flush/reset); leak its WAL fd — the OS
-	// reclaims it. Reopen over the same dir+KV: the durable manifest + the
-	// un-truncated WAL are exactly the crash state.
+	// Abandon s WITHOUT Close (Close would flush/reset). Release the OS handles a
+	// kill would drop (WAL fd + control-DB lock). Reopen over the same dir+KV: the
+	// durable control store + the un-truncated WAL are exactly the crash state.
+	crashRelease(t, s)
 	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
