@@ -148,6 +148,7 @@ func TestCommitMergeLocked_ReconcileErrorRollsBack(t *testing.T) {
 	kvStore := newTestKV(t)
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
+	defer s.Close() // release output mmaps so t.TempDir cleanup works on Windows
 	rng := rand.New(rand.NewSource(808))
 	for i := 0; i < 12; i++ {
 		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
