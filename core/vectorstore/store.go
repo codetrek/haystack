@@ -145,6 +145,16 @@ type Store struct {
 	testHookInMergeWindow func(p *mergePlan)
 }
 
+// testHookRecoverBeforeReopenWrite (nil in production) fires inside recover()'s
+// Phase-A loop, immediately BEFORE each unlocked `vx.graphs[sid] = newBuiltIndex`
+// reopen-write. It is a package-level var (not a Store field) because recover()
+// runs inside Open(), before any caller holds the *Store — a regression test sets
+// it to a delay so the slow reopen-write would, under the buggy single-loop
+// recover, overlap a same-index Phase-B builder's locked vx.graphs write and trip
+// the race detector / concurrent-map-write panic. With the two-phase recover, no
+// builder goroutine exists yet, so even a widened reopen-write cannot race.
+var testHookRecoverBeforeReopenWrite func()
+
 // Open creates or recovers a Store at opts.Dir, replaying the WAL to rebuild the
 // head segment, the id↔docId map, and the allocator state.
 func Open(opts Options) (*Store, error) {
@@ -306,22 +316,52 @@ func (s *Store) recover() error {
 	if err := s.replay(); err != nil {
 		return err
 	}
+	// Two phases, and the ORDER is load-bearing for data-race freedom. Phase A
+	// reopens every indexed graph into vx.graphs; these writes run only here in the
+	// single recover goroutine with no lock held, so they must not overlap any other
+	// writer of that same Go map. Phase B then spawns buildAndPublish for the
+	// still-pending (index, segment) pairs, and each builder ALSO writes vx.graphs —
+	// but under s.mu (store.go's buildAndPublish install). Were the spawn interleaved
+	// with the reopen (a single loop), an indexed segment's unlocked Phase-A write to
+	// vx.graphs could race a same-index pending segment's builder write under s.mu:
+	// no happens-before edge joins an unlocked write to a locked one, so -race fires
+	// and concurrent map writes are a fatal runtime panic. Completing ALL Phase-A
+	// reopen-writes before creating ANY builder goroutine removes the overlap: once a
+	// builder exists, recover() performs no further unlocked vx.graphs write.
+	type pendingBuild struct {
+		name   string
+		sid    segID
+		segDir string
+		ss     *sealedSegment
+	}
+	var pending []pendingBuild
 	for name, vx := range s.indexes {
 		for i, sid := range s.sealedID {
 			segDir := filepath.Join(s.dir, segDirName(sid, 0))
 			if indexedState[name+"\x00"+itoaSeg(int64(sid))] == segIndexed {
 				g, gerr := openGraphFile(segDir, name, s.sealed[i])
 				if gerr == nil {
+					// Test-only seam (nil in production): widen the Phase-A reopen-write
+					// window so a regression test can prove this unlocked write never
+					// overlaps a Phase-B builder's locked vx.graphs write (the Task-8 race).
+					if testHookRecoverBeforeReopenWrite != nil {
+						testHookRecoverBeforeReopenWrite()
+					}
 					vx.graphs[sid] = newBuiltIndex(g, vx.cfg)
 					continue
 				}
 				// A torn/missing graph file falls through to a rebuild from records.
 			}
 			if vx.graphs[sid] == nil {
-				s.buildBeginLocked()
-				go s.buildAndPublish(name, sid, segDir, s.sealed[i])
+				pending = append(pending, pendingBuild{name, sid, segDir, s.sealed[i]})
 			}
 		}
+	}
+	// Phase B: every Phase-A reopen-write is now complete, so spawning builders here
+	// cannot race them. Each buildAndPublish writes vx.graphs under s.mu.
+	for _, pb := range pending {
+		s.buildBeginLocked()
+		go s.buildAndPublish(pb.name, pb.sid, pb.segDir, pb.ss)
 	}
 	return nil
 }
