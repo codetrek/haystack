@@ -215,6 +215,14 @@ func Open(opts Options) (*Store, error) {
 	}
 	s.quiesced = sync.NewCond(&s.mu)
 	if err := s.recover(); err != nil {
+		// recover() may have mmap'd some sealed segments before it failed (it only
+		// returns an error before any background builder is spawned, so no goroutine is
+		// reading them). Release those maps, else a failed Open leaks fds/mmaps — and on
+		// Windows a still-mapped payload.dat/vectors.dat blocks the caller from deleting
+		// the dir (the t.TempDir RemoveAll "Access is denied" failures).
+		for _, ss := range s.sealed {
+			ss.close()
+		}
 		cs.Close()
 		alloc.Close()
 		return nil, err
