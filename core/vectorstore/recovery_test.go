@@ -18,7 +18,7 @@ func reopenStore(t *testing.T, s *Store, kvStore kv.Store) *Store {
 	return s2
 }
 
-func TestRecovery_SealedSegmentsAndHeadWAL(t *testing.T) {
+func TestRecovery_SealedSegmentsAndHead(t *testing.T) {
 	kvStore := newTestKV(t)
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
@@ -42,11 +42,12 @@ func TestRecovery_SealedSegmentsAndHeadWAL(t *testing.T) {
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
-	// Head batch (only in WAL).
+	// Head batch (only in the head bucket).
 	for i := 0; i < 30; i++ {
 		put("h-"+itoa(i), randVec())
 	}
-	// Delete one sealed doc (persisted in tomb.dat) and one head doc (WAL).
+	// Delete one sealed doc (persisted in the bbolt tomb bucket) and one head doc
+	// (head bucket).
 	requireNoError(t, s.Delete("s-0"))
 	delete(vecs, s.idToDoc["s-0"])
 	requireNoError(t, s.Delete("h-0"))
@@ -67,7 +68,7 @@ func TestRecovery_SealedSegmentsAndHeadWAL(t *testing.T) {
 	if _, _, found, _ := s2.Get("s-0"); found {
 		t.Fatal("deleted sealed doc s-0 resurrected after recovery")
 	}
-	// Head delete survived (WAL replay).
+	// Head delete survived (head-bucket rebuild).
 	if _, _, found, _ := s2.Get("h-0"); found {
 		t.Fatal("deleted head doc h-0 resurrected after recovery")
 	}

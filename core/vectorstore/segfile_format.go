@@ -4,14 +4,15 @@ import "unsafe"
 
 // segPageSize is the page-aligned header reservation for sealed-segment data
 // files: each file's fixed header lives in the first segPageSize bytes, data
-// follows. Mirrors vectorindex's pageSize convention.
+// follows. A fixed page-size header prefix.
 const segPageSize = 4096
 
-// File magic constants for sealed-segment data files (4 bytes each).
+// File magic constants for sealed-segment data files (4 bytes each). There is no
+// tomb.dat magic since incr 3: the durable tombstone form is the bbolt tomb bucket,
+// not a per-segment mmap'd file.
 var (
 	magicVectors = [4]byte{'V', 'S', 'V', 'C'} // vectors.dat
 	magicSlotDoc = [4]byte{'V', 'S', 'S', 'D'} // slotdoc.dat
-	magicTomb    = [4]byte{'V', 'S', 'T', 'B'} // tomb.dat
 	magicPayload = [4]byte{'V', 'S', 'P', 'L'} // payload.dat
 	magicAttr    = [4]byte{'V', 'S', 'A', 'T'} // attr.dat
 )
@@ -37,16 +38,6 @@ type slotDocHeader struct {
 }
 
 var _ [16]byte = [unsafe.Sizeof(slotDocHeader{})]byte{}
-
-// tombHeader is the on-disk header for tomb.dat (16 bytes). Data is Words uint64
-// words of the tombstone bitmap (the ONLY mutable file in a sealed segment).
-type tombHeader struct {
-	Magic [4]byte
-	_     [4]byte
-	Words uint64
-}
-
-var _ [16]byte = [unsafe.Sizeof(tombHeader{})]byte{}
 
 // payloadHeader is the on-disk header for payload.dat (16 bytes). Data is Count
 // uint32 lengths (slot→payload length) followed by the concatenated payload

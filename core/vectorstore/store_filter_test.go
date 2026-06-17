@@ -377,9 +377,9 @@ func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())
 	// NOTE (plan deviation): the plan read q := vecs[s2.idToDoc["k2"]], but after
-	// reopen the head WAL was truncated at Seal, so a sealed doc's string id is
-	// absent from the in-memory idToDoc cache (store.go:493). Resolve the docId via
-	// the durable idtable lookup (lookupDocID), which reconstructs the same docId.
+	// reopen the head bucket was cleared at Seal, so a sealed doc's string id is
+	// absent from the in-memory idToDoc cache. Resolve the docId via the durable
+	// idtable lookup (lookupDocID), which reconstructs the same docId.
 	k2Doc, ok, err := s2.lookupDocID("k2")
 	requireNoError(t, err)
 	if !ok {

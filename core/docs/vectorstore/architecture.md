@@ -22,9 +22,9 @@ cover only a subset of segments (every index covers every segment); OR/NOT/neste
 boolean filters; per-index `WaitForIndex(name)`; pruning/sharding beyond ~tens of
 millions of vectors; network, distribution, GPU.
 
-The HNSW graph algorithm and its node-store seam are **copied** from
-`core/vectorindex` (slimmed so the graph holds only topology and resolves vectors
-from the owning segment); `core/vectorindex` is independent and unmodified.
+The HNSW graph algorithm and its node-store seam are vectorstore's own (per
+arXiv:1603.09320): the graph holds only topology and resolves vectors from the
+owning segment.
 
 ## Shape: one mutable head + immutable sealed segments (LSM)
 

@@ -169,10 +169,11 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 }
 
 // TestMerge_SurvivesRecovery_EndToEnd: a full churn → seal → merge → restart cycle.
-// docToSeg is derived from on-disk slotDoc over live slots, so the merged set must
+// docToSeg is loaded from the durable docseg bucket (incr 3 — written by the seal/
+// merge structural txns, not rescanned from slotdoc.dat), so the merged set must
 // reconstruct exactly on reopen (architecture §4.6/§4.8). This is the Task 11
-// integration test — no new product code; it locks in that the manifest round-trips
-// the merge OUTPUTS (not the pre-merge inputs) across recovery.
+// integration test — no new product code; it locks in that the control store
+// round-trips the merge OUTPUTS (not the pre-merge inputs) across recovery.
 func TestMerge_SurvivesRecovery_EndToEnd(t *testing.T) {
 	kvStore := newTestKV(t)
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})

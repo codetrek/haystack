@@ -48,7 +48,7 @@ func TestPackLiveDocs_BinPacksAndCarriesPayload(t *testing.T) {
 		}
 		dir := t.TempDir()
 		requireNoError(t, writeSealedSegment(dir, seg, nil))
-		ss, err := openSealedSegment(dir, DotProduct)
+		ss, err := openSealedSegment(dir, DotProduct, 1, nil)
 		requireNoError(t, err)
 		return ss
 	}
@@ -101,9 +101,9 @@ func TestPackLiveDocs_ExcludesTombstoned(t *testing.T) {
 	}
 	dir := t.TempDir()
 	requireNoError(t, writeSealedSegment(dir, seg, nil))
-	ss, err := openSealedSegment(dir, DotProduct)
+	ss, err := openSealedSegment(dir, DotProduct, 1, nil)
 	requireNoError(t, err)
-	requireNoError(t, ss.tombstoneSlot(1)) // tombstone "y"
+	ss.markTombLocked(1) // tombstone "y" (in-memory; packLiveDocs reads eachLive)
 
 	buckets, moved, err := packLiveDocs([]*sealedSegment{ss}, DotProduct, 50)
 	requireNoError(t, err)

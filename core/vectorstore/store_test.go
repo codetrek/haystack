@@ -218,7 +218,7 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, Payload{"p": StringValue("pb")}))
 	requireNoError(t, s1.Put("a", []float32{0, 0, 1}, Payload{"p": StringValue("pa2")})) // upsert
 	requireNoError(t, s1.Delete("b"))
-	requireNoError(t, s1.Close()) // graceful: commits idtable + flushes WAL
+	requireNoError(t, s1.Close()) // graceful: commits idtable + closes control store
 
 	s2, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
@@ -239,7 +239,7 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 	}
 }
 
-func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
+func TestStore_CrashRecovery_NoClose_HeadBucketIsSourceOfTruth(t *testing.T) {
 	dir := t.TempDir()
 	store := newTestKV(t) // shared; NOT closed between opens
 
@@ -252,20 +252,22 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 	docA := s1.idToDoc["a"]
 
 	// CRASH: do NOT call s1.Close(). idtable's id→docId batch and nextId were
-	// never committed to KV. Close ONLY the WAL fd so the OS releases the file;
-	// the allocator is deliberately left uncommitted to mimic a kill.
-	requireNoError(t, s1.wal.Close())
+	// never committed to KV. Drop only the OS-held file handle a real kill would
+	// release (the bbolt control-DB lock); the allocator is deliberately left
+	// uncommitted to mimic a kill.
+	crashRelease(t, s1)
 
 	// Reopen over the SAME dir + SAME KV. Recovery must come entirely from the
-	// WAL: the segment, the id→docId map, and a consistent allocator nextId.
+	// durable head bucket: the segment, the id→docId map, and a consistent
+	// allocator nextId.
 	s2, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 
 	// The string id "a" must still resolve to the SAME docId and the upserted
-	// vector/payload — proving the WAL, not idtable, carried the mapping.
+	// vector/payload — proving the head bucket, not idtable, carried the mapping.
 	if got := s2.idToDoc["a"]; got != docA {
-		t.Fatalf("recovered docId for a = %d, want %d (WAL must carry the mapping)", got, docA)
+		t.Fatalf("recovered docId for a = %d, want %d (head bucket must carry the mapping)", got, docA)
 	}
 	v, pl, found, err := s2.Get("a")
 	requireNoError(t, err)
@@ -282,57 +284,80 @@ func TestStore_CrashRecovery_NoClose_WALIsSourceOfTruth(t *testing.T) {
 	}
 
 	// A fresh Put after recovery must get a NEW, non-colliding docId (nextId was
-	// resynced by replay re-driving the allocator).
+	// resynced by the head rebuild re-driving the allocator).
 	requireNoError(t, s2.Put("c", []float32{1, 0, 0}, nil))
 	if s2.idToDoc["c"] == docA {
 		t.Fatalf("new id c collided with recovered docId %d — nextId not resynced", docA)
 	}
 }
 
-func TestStore_CloseSurfacesWALError(t *testing.T) {
+func TestStore_CloseSurfacesControlStoreError(t *testing.T) {
 	dir := t.TempDir()
 	store := newTestKV(t)
-	withOpenFileFault(t, func(f *faultFile) { f.failClose = true })
 	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
+	// Force cs.Close to surface an error so Store.Close propagates it (the
+	// control store is now the only Close that returns an error).
+	s.cs.failClose = errInjected
 	if err := s.Close(); err == nil {
-		t.Fatal("Close should surface the injected WAL close error")
+		t.Fatal("Close should surface the control-store close error")
 	}
 }
 
-func TestStore_OpenWALScanError(t *testing.T) {
-	dir := t.TempDir()
-	store := newTestKV(t)
-	withOpenFileFault(t, func(f *faultFile) { f.failTruncate = true }) // scanLSN truncates
-	if _, err := Open(Options{Dir: dir, KV: store, Metric: Cosine}); err == nil {
-		t.Fatal("Open should fail when WAL scan truncate fails")
-	}
-}
-
-func TestStore_PutSyncError(t *testing.T) {
+func TestStore_PutControlStoreCommitError(t *testing.T) {
 	dir := t.TempDir()
 	store := newTestKV(t)
 	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
 	defer s.Close()
-	// Replace the WAL's file with a Sync-faulting wrapper after open so the
-	// Put's fsync fails.
-	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
+	// Force the next control-store commit (the Put's durable head-row write) to fail.
+	s.cs.failNextUpdate = errInjected
 	if err := s.Put("a", []float32{1, 0}, nil); err == nil {
-		t.Fatal("Put should surface a WAL Sync failure")
+		t.Fatal("Put should surface a control-store commit failure")
 	}
 }
 
-func TestStore_DeleteSyncError(t *testing.T) {
+func TestStore_DeleteControlStoreCommitError(t *testing.T) {
 	dir := t.TempDir()
 	store := newTestKV(t)
 	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
 	requireNoError(t, err)
 	defer s.Close()
 	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
-	s.wal.file = &faultFile{osFile: s.wal.file, failSync: true}
+	s.cs.failNextUpdate = errInjected
 	if err := s.Delete("a"); err == nil {
-		t.Fatal("Delete should surface a WAL Sync failure")
+		t.Fatal("Delete should surface a control-store commit failure")
+	}
+}
+
+// TestErroredPutNotResurrectedOnReopen is the crash-atomicity durability property
+// (formerly proved against the WAL): a Put whose durable head-row commit FAILS
+// returns an error and must NOT be applied — its record must not exist on a clean
+// reopen. With the head in bbolt the commit is one db.Update, so a failed commit
+// rolls back fully (copy-on-write page swap is never applied) and nothing is
+// resurrected. A second, surviving Put proves the failed Put caused no cascade loss.
+func TestErroredPutNotResurrectedOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	kvs := newTestKV(t)
+	s, err := Open(Options{Dir: dir, KV: kvs, Metric: DotProduct})
+	requireNoError(t, err)
+	// Force the durable commit for "x" to fail.
+	s.cs.failNextUpdate = errInjected
+	if err := s.Put("x", []float32{1, 2, 3, 4}, nil); err == nil {
+		t.Fatal("expected Put to fail when the control-store commit fails")
+	}
+	// A later Put must still succeed (no cascade) and be durable.
+	requireNoError(t, s.Put("y", []float32{5, 6, 7, 8}, nil))
+	requireNoError(t, s.Close())
+
+	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: DotProduct})
+	requireNoError(t, err)
+	defer s2.Close()
+	if _, _, found, _ := s2.Get("x"); found {
+		t.Fatal("errored Put was resurrected on reopen (crash-atomicity violation)")
+	}
+	if _, _, found, _ := s2.Get("y"); !found {
+		t.Fatal("record 'y' (written after the errored Put) was lost")
 	}
 }
 
@@ -340,7 +365,7 @@ func TestStore_OpenIdtableError(t *testing.T) {
 	dir := t.TempDir()
 	kvStore := &faultKV{Store: newTestKV(t), getErr: errors.New("kv get boom")}
 	// idtable.New issues a startup Get for nextId; faulting it fails Open before
-	// the WAL is even opened.
+	// the control store is even opened.
 	if _, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine}); err == nil {
 		t.Fatal("Open should fail when the idtable startup read fails")
 	}
@@ -359,21 +384,21 @@ func TestStore_PutAllocError(t *testing.T) {
 	}
 }
 
-func TestStore_OpenReplayError(t *testing.T) {
+func TestStore_OpenHeadRebuildError(t *testing.T) {
 	dir := t.TempDir()
 	base := newTestKV(t)
 	kvStore := &faultKV{Store: base}
 
-	// Seed the WAL with one record so replay has work to do.
+	// Seed the head bucket with one durable row so the rebuild has work to do.
 	s1, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s1.Put("a", []float32{1, 0}, nil))
-	requireNoError(t, s1.wal.Close()) // leave the record on disk; do not commit alloc
+	crashRelease(t, s1) // leave the row on disk; do not commit alloc, drop OS locks
 
-	// Reopen: idtable.New's startup Get and OpenWAL/scanLSN succeed, but replay
-	// drives docIDForAlloc -> GetId, which fails because the KV reports closed.
+	// Reopen: idtable.New's startup Get succeeds, but the head rebuild drives
+	// docIDForAlloc -> GetId, which fails because the KV reports closed.
 	kvStore.isClosed = true
 	if _, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine}); err == nil {
-		t.Fatal("Open should fail when replay's docId re-allocation fails")
+		t.Fatal("Open should fail when the head rebuild's docId re-allocation fails")
 	}
 }

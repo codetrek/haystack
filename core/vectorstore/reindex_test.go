@@ -90,7 +90,7 @@ func TestReindexNodeStore_BuiltGraphRanksUnderIndexMetric(t *testing.T) {
 		seg.append(doc, stored, norm, nil)
 	}
 	requireNoError(t, writeSealedSegment(dir, seg, nil))
-	ss, err := openSealedSegment(dir, Cosine)
+	ss, err := openSealedSegment(dir, Cosine, 1, nil)
 	requireNoError(t, err)
 	t.Cleanup(ss.close)
 

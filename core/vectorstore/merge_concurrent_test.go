@@ -133,11 +133,12 @@ func TestMerge_PutRehomeDuringWindow_NotDuplicated(t *testing.T) {
 // TestMerge_DeleteDuringWindow_DurableAcrossRestart proves the reconcile tombstone
 // is DURABLE, not merely in-memory (appendix #7 — the highest-risk durability path
 // the in-process tests do not cover). We open the merge window, Delete an input
-// doc, then drive mergeAndPublish to JUST PAST the manifest swap and crash there
+// doc, then drive mergeAndPublish to JUST PAST the control-store swap and crash there
 // (testHookAfterSwap), so the output is committed but its background build never
-// ran. step 2a tombstoned the deleted doc in the output and tombstoneSlot msync'd
-// it to tomb.dat BEFORE the manifest write — so on reopen the doc must stay dead
-// (its liveness is reconstructed from the on-disk tombstone bitmap, not docToSeg).
+// ran. step 2a tombstoned the deleted doc in the output, and commitMergeLocked wrote
+// that reconcile tombstone into the bbolt tomb bucket IN THE SAME swap txn (incr 3 —
+// no separate tomb.dat msync) — so on reopen the doc must stay dead (its liveness is
+// reconstructed from the durable docseg + tomb buckets, not an on-disk bitmap rescan).
 func TestMerge_DeleteDuringWindow_DurableAcrossRestart(t *testing.T) {
 	kvStore := newTestKV(t)
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
@@ -172,13 +173,14 @@ func TestMerge_DeleteDuringWindow_DurableAcrossRestart(t *testing.T) {
 
 	requireNoError(t, s.mergeAndPublish(p)) // commits the swap, then aborts at the seam
 
-	// Reopen: docToSeg is rebuilt purely from the on-disk slotDoc over LIVE slots,
-	// so the reconcile tombstone MUST be in the durable tomb.dat or d-9 resurrects.
+	// Reopen: docToSeg is rebuilt from the durable docseg bucket and each segment's
+	// tomb bucket, so the reconcile tombstone (+ the deleted input's docseg removal)
+	// MUST be durable in the control store or d-9 resurrects.
 	s2 := reopenStore(t, s, kvStore)
 	requireNoError(t, s2.WaitForIndex())
 
 	if _, _, found, _ := s2.Get("d-9"); found {
-		t.Fatal("crash-after-reconcile: d-9 deleted in the merge window resurrected after restart (tombstone not durable in tomb.dat)")
+		t.Fatal("crash-after-reconcile: d-9 deleted in the merge window resurrected after restart (tombstone not durable in the bbolt tomb bucket)")
 	}
 	// Every survivor present.
 	for i := 0; i < 30; i++ {

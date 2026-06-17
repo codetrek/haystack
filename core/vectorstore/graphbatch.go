@@ -2,7 +2,7 @@ package vectorstore
 
 import "fmt"
 
-// --- graph batch (copied & slimmed from vectorindex/batch.go) ---
+// --- graph batch (buffers a segment's HNSW build ops) ---
 
 // graphBatchOpKind distinguishes buffered Put from Delete.
 type graphBatchOpKind int

@@ -47,7 +47,7 @@ func benchVecs(n, dim int, seed int64) [][]float32 {
 }
 
 // BenchmarkPut_128 measures per-vector insert cost into the brute head (idtable
-// alloc + WAL append). vec/s = sustained insert throughput.
+// alloc + head-bucket commit). vec/s = sustained insert throughput.
 func BenchmarkPut_128(b *testing.B) {
 	s := benchOpenStore(b, Cosine)
 	pool := benchVecs(benchN, benchDim, 1)
@@ -150,4 +150,26 @@ func BenchmarkSearchBrute_128_10k(b *testing.B) {
 	}
 	b.StopTimer()
 	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "qps")
+}
+
+// BenchmarkBatchPut100_128 measures per-record insert cost at batch size 100 (one
+// control.db commit / fsync per 100 records) — the write-throughput lever vs the
+// single-Put-per-commit BenchmarkPut_128.
+func BenchmarkBatchPut100_128(b *testing.B) {
+	s := benchOpenStore(b, Cosine)
+	pool := benchVecs(benchN, benchDim, 1)
+	const batchSize = 100
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i += batchSize {
+		bt := s.NewBatch()
+		for j := 0; j < batchSize && i+j < b.N; j++ {
+			bt.Put("d-"+strconv.Itoa(i+j), pool[(i+j)%len(pool)], nil)
+		}
+		if err := bt.Commit(); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "vec/s")
 }

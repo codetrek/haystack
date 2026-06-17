@@ -6,7 +6,7 @@ import (
 )
 
 // memGraphStore is an in-memory graphNodeStore for testing/parity, copied and
-// slimmed from vectorindex MemNodeStore: it holds the vectors itself (unlike
+// an in-memory graph node store: it holds the vectors itself (unlike
 // segGraphStore, which delegates to a sealed segment), so it serves as the
 // reference implementation the migrated graph is validated against. The dropped
 // GetVector/GetNorm/SetNorm/Close are not on the graphNodeStore interface.

@@ -97,6 +97,88 @@ func TestSealLocked_WriteFaultPropagates(t *testing.T) {
 	}
 }
 
+// TestCommitSealLocked_ReconcileErrorRollsBack covers commitSealLocked's in-txn
+// error branch: when reconcileControlTx fails inside the seal write-txn, the whole
+// bbolt commit rolls back — neither the new segment row NOR the head-bucket clear
+// is persisted (the seal's atomicity guarantee). Seal surfaces the error; the
+// sealed flat files written before the commit become a crash-before-commit orphan.
+// A crash-reopen must recover all docs from the still-intact head bucket, proving
+// the head clear did NOT commit, and must sweep the orphaned segment dir.
+func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
+	kvStore := newTestKV(t)
+	dir := t.TempDir()
+	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	rng := rand.New(rand.NewSource(909))
+	for i := 0; i < 6; i++ {
+		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+	}
+	testHookReconcileErr = errInjected
+	if err := s.Seal(); err == nil {
+		testHookReconcileErr = nil
+		t.Fatal("Seal should surface a reconcile error from the seal commit")
+	}
+	testHookReconcileErr = nil
+
+	// Crash-reopen over the same dir + KV: the seal commit rolled back, so the head
+	// bucket still holds all 6 docs and the uncommitted seg dir is swept as an orphan.
+	s2 := reopenUnclean(t, s, kvStore)
+	for i := 0; i < 6; i++ {
+		if _, _, found, _ := s2.Get("d-" + itoa(i)); !found {
+			t.Fatalf("doc d-%d lost after a rolled-back seal commit (head bucket clear must not have committed)", i)
+		}
+	}
+	s2.mu.RLock()
+	nSealed := len(s2.sealed)
+	s2.mu.RUnlock()
+	if nSealed != 0 {
+		t.Fatalf("sealed segments after rolled-back seal = %d, want 0 (orphan dir must be swept)", nSealed)
+	}
+}
+
+// TestCommitMergeLocked_ReconcileErrorRollsBack covers commitMergeLocked's in-txn
+// error branch (and mergeAndPublish's swap-commit error return): when
+// reconcileControlTx fails inside the merge swap write-txn, the whole bbolt commit
+// rolls back — neither the output's segment/docseg/tomb rows NOR the input retirement
+// is persisted (the merge's atomicity guarantee). The merge surfaces the error; the
+// inputs stay live and intact, and the freshly written outputs become a
+// crash-before-commit orphan a later recover sweeps. We drive a real merge to the
+// swap with testHookReconcileErr armed, then confirm every doc survives.
+func TestCommitMergeLocked_ReconcileErrorRollsBack(t *testing.T) {
+	kvStore := newTestKV(t)
+	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	requireNoError(t, err)
+	defer s.Close() // release output mmaps so t.TempDir cleanup works on Windows
+	rng := rand.New(rand.NewSource(808))
+	for i := 0; i < 12; i++ {
+		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+	}
+	requireNoError(t, s.Seal())
+	requireNoError(t, s.WaitForIndex()) // no pending builds → the hook only hits the merge commit
+
+	// Arm the in-txn reconcile error so the merge swap commit (commitMergeLocked)
+	// fails and rolls back. mergeNow plans under the lock (fine) and the commit runs
+	// off-lock during WaitForMerge.
+	testHookReconcileErr = errInjected
+	requireNoError(t, s.mergeNow([]segID{1}))
+	requireNoError(t, s.WaitForMerge())
+	testHookReconcileErr = nil
+
+	// The merge rolled back: the input is still live (one sealed segment) and every
+	// doc is readable.
+	s.mu.RLock()
+	nSealed := len(s.sealed)
+	s.mu.RUnlock()
+	if nSealed != 1 {
+		t.Fatalf("sealed segments after a rolled-back merge = %d, want 1 (input must stay live)", nSealed)
+	}
+	for i := 0; i < 12; i++ {
+		if _, _, found, _ := s.Get("d-" + itoa(i)); !found {
+			t.Fatalf("doc d-%d lost after a rolled-back merge commit", i)
+		}
+	}
+}
+
 // TestSealLocked_NoBuildSpawnWhenClosing covers sealLocked's s.closing branch (the
 // late return that skips the background build spawn): the segment is durably sealed
 // + pending, but no builder goroutine is launched (recover would resume it). We

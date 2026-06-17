@@ -152,8 +152,8 @@ func TestAutoMerge_GrowthTriggersOnSeal(t *testing.T) {
 // interleave. We set up a store with real merge candidates, then fire many
 // concurrent Compact() launches against a single Close(). The Compact callers stop
 // issuing once Close begins via the same s.closing gate, so this isolates the
-// WaitGroup discipline (no idtable/WAL teardown racing a Put). -race + repetition
-// is the real gate.
+// WaitGroup discipline (no idtable/control-store teardown racing a Put). -race +
+// repetition is the real gate.
 func TestAutoMerge_CloseRaceNoPanic(t *testing.T) {
 	for iter := 0; iter < 80; iter++ {
 		kvStore := newTestKV(t)

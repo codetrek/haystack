@@ -9,6 +9,7 @@ require (
 	github.com/go-ego/gse v1.0.2
 	github.com/stretchr/testify v1.10.0
 	github.com/viterin/vek v0.4.3
+	go.etcd.io/bbolt v1.4.3
 	golang.org/x/sys v0.33.0
 )
 

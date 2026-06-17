@@ -30,7 +30,7 @@ func TestGraphFile_PersistReopen_SameResults(t *testing.T) {
 	head := buildHeadSeg(Cosine, rows)
 	segDir := filepath.Join(t.TempDir(), "seg-1-0")
 	requireNoError(t, writeSealedSegment(segDir, head, nil))
-	ss, err := openSealedSegment(segDir, Cosine)
+	ss, err := openSealedSegment(segDir, Cosine, 1, nil)
 	requireNoError(t, err)
 	defer ss.close()
 
@@ -96,7 +96,7 @@ func TestGraphFile_TruncatedRejected(t *testing.T) {
 	head := buildHeadSeg(Cosine, rows)
 	segDir := filepath.Join(t.TempDir(), "seg-1-0")
 	requireNoError(t, writeSealedSegment(segDir, head, nil))
-	ss, err := openSealedSegment(segDir, Cosine)
+	ss, err := openSealedSegment(segDir, Cosine, 1, nil)
 	requireNoError(t, err)
 	defer ss.close()
 
@@ -171,7 +171,7 @@ func buildTinySealedForGraphTest(t *testing.T, dir string) *sealedSegment {
 	seg.append(2, []float32{0, 1, 0}, 0, nil)
 	seg.append(3, []float32{0, 0, 1}, 0, nil)
 	requireNoError(t, writeSealedSegment(dir, seg, nil))
-	ss, err := openSealedSegment(dir, DotProduct)
+	ss, err := openSealedSegment(dir, DotProduct, 1, nil)
 	requireNoError(t, err)
 	t.Cleanup(ss.close)
 	return ss

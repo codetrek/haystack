@@ -15,14 +15,20 @@ import (
 const maxSealRows = 1 << 30
 
 // writeSealedSegment dumps a (frozen) head segment into segDir as fsynced data
-// files: vectors.dat, slotdoc.dat, tomb.dat, payload.dat, and — when decls is
-// non-empty — the derived attr.dat (the per-segment attr index built by scanning
-// the head's payloads for the declared properties). Files are written and fsynced
+// files: vectors.dat, slotdoc.dat, payload.dat, and — when decls is non-empty —
+// the derived attr.dat (the per-segment attr index built by scanning the head's
+// payloads for the declared properties). Files are written and fsynced
 // individually, then the directory is fsynced so the entries are durable before
-// any sentinel (manifest) references the segment (audit #76: data durable
-// LAST-relative-to-itself, sentinel later). attr.dat is derived/rebuildable, so a
-// nil/empty decls (no declarations yet) simply omits it; openAttrFile rebuilds
+// any sentinel (the control-store commit) references the segment (audit #76: data
+// durable LAST-relative-to-itself, sentinel later). attr.dat is derived/rebuildable,
+// so a nil/empty decls (no declarations yet) simply omits it; openAttrFile rebuilds
 // from payload on open if it is missing. The dir is created here.
+//
+// Tombstones are NOT written here: since incr 3 the durable tombstone form is the
+// bbolt tomb bucket, not a per-segment tomb.dat. Any tombstone the frozen head
+// already carries (an overwritten head slot) is committed to the tomb bucket by the
+// seal commit (commitSealLocked, via headTombSlots) in the same atomic txn that adds
+// the segment — so the data plane carries no mutable mmap'd file.
 func writeSealedSegment(segDir string, head *segment, decls map[string]AttrKind) error {
 	if err := os.MkdirAll(segDir, 0755); err != nil {
 		return fmt.Errorf("seal: mkdir %s: %w", segDir, err)
@@ -34,9 +40,6 @@ func writeSealedSegment(segDir string, head *segment, decls map[string]AttrKind)
 		return err
 	}
 	if err := writeSlotDocFile(segFilePath(segDir, "slotdoc.dat"), head, n); err != nil {
-		return err
-	}
-	if err := writeTombFile(segFilePath(segDir, "tomb.dat"), head, n); err != nil {
 		return err
 	}
 	if err := writePayloadFile(segFilePath(segDir, "payload.dat"), head, n); err != nil {
@@ -54,6 +57,20 @@ func writeSealedSegment(segDir string, head *segment, decls map[string]AttrKind)
 	}
 	// Make the directory entries durable.
 	return fsyncDir(segDir)
+}
+
+// headTombSlots returns the slots a frozen head has already tombstoned (an
+// overwritten head slot deleted before seal). The seal commit persists these into
+// the bbolt tomb bucket for the new segment, and the same set seeds the opened
+// segment's in-memory tomb — so a doc tombstoned in the head before seal stays dead.
+func headTombSlots(head *segment) []int {
+	var out []int
+	for slot := 0; slot < len(head.slotDoc); slot++ {
+		if head.tomb.get(slot) {
+			out = append(out, slot)
+		}
+	}
+	return out
 }
 
 func writeVectorsFile(path string, head *segment, dim, n int) error {
@@ -105,37 +122,6 @@ func writeSlotDocFile(path string, head *segment, n int) error {
 	return f.Sync()
 }
 
-func writeTombFile(path string, head *segment, n int) error {
-	f, err := fsCreate(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	words := (n + 63) / 64
-	if words == 0 {
-		words = 1 // always at least one word so the data region is non-empty
-	}
-	hdr := make([]byte, segPageSize)
-	copy(hdr[0:4], magicTomb[:])
-	binary.LittleEndian.PutUint64(hdr[8:16], uint64(words))
-	if _, err := f.Write(hdr); err != nil {
-		return err
-	}
-	out := make([]byte, words*8)
-	for slot := 0; slot < n; slot++ {
-		if head.tomb.get(slot) {
-			w := slot >> 6
-			cur := binary.LittleEndian.Uint64(out[w*8:])
-			cur |= 1 << uint(slot&63)
-			binary.LittleEndian.PutUint64(out[w*8:], cur)
-		}
-	}
-	if _, err := f.Write(out); err != nil {
-		return err
-	}
-	return f.Sync()
-}
-
 func writePayloadFile(path string, head *segment, n int) error {
 	f, err := fsCreate(path)
 	if err != nil {
@@ -174,11 +160,14 @@ func writePayloadFile(path string, head *segment, n int) error {
 	return f.Sync()
 }
 
-// openSealedSegment mmaps a sealed segment's files. vectors/slotdoc/payload are
-// read-only; tomb.dat is mapped read-write (the only mutable file). The metric
-// must match the store's (vectors are in its natural stored form).
-func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
-	s := &sealedSegment{dir: segDir, metric: metric}
+// openSealedSegment mmaps a sealed segment's data files (vectors/slotdoc/payload,
+// all read-only) and seeds its in-memory tombstone bitmap from tombSlots — the
+// durable tombstoned slots the caller read from the bbolt tomb bucket (incr 3:
+// there is no tomb.dat). id is the segment's control-plane id (the tomb-bucket key
+// prefix the Store uses when it persists a later delete). The metric must match the
+// store's (vectors are in its natural stored form).
+func openSealedSegment(segDir string, metric Metric, id segID, tombSlots []int) (*sealedSegment, error) {
+	s := &sealedSegment{dir: segDir, id: id, metric: metric}
 
 	// vectors.dat
 	vf, err := fsOpenFile(segFilePath(segDir, "vectors.dat"), os.O_RDONLY, 0)
@@ -250,49 +239,22 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 		s.slotDocs[i] = int64(binary.LittleEndian.Uint64(sd[segPageSize+i*8:]))
 	}
 
-	// tomb.dat (RW mmap)
-	tf, err := fsOpenFile(segFilePath(segDir, "tomb.dat"), os.O_RDWR, 0)
-	if err != nil {
-		s.close()
-		return nil, err
+	// Tombstone bitmap: an in-memory word array seeded from the durable tomb bucket
+	// (tombSlots), pre-sized to cover every slot so tombGet never indexes past it
+	// (segments are immutable in row count). A slot value outside [0,n) is rejected —
+	// a corrupt control-store tomb entry must not silently set an out-of-range bit.
+	words := (s.n + 63) / 64
+	if words == 0 {
+		words = 1
 	}
-	tSize, err := fileSize(tf)
-	if err != nil {
-		tf.Close()
-		s.close()
-		return nil, err
+	s.tomb = make([]uint64, words)
+	for _, slot := range tombSlots {
+		if slot < 0 || slot >= s.n {
+			s.close()
+			return nil, fmt.Errorf("seal: tomb slot %d out of range [0,%d) for segment %d in %s", slot, s.n, id, segDir)
+		}
+		s.tomb[slot>>6] |= 1 << uint(slot&63)
 	}
-	tmap, err := mmapAlloc(tf.Fd(), 0, int(tSize), mmapRead|mmapWrite)
-	tf.Close()
-	if err != nil {
-		s.close()
-		return nil, err
-	}
-	if len(tmap) < 16 {
-		_ = mmapFree(tmap)
-		s.close()
-		return nil, fmt.Errorf("seal: tomb.dat too short (%d bytes, need >=16) in %s", len(tmap), segDir)
-	}
-	if string(tmap[0:4]) != string(magicTomb[:]) {
-		_ = mmapFree(tmap)
-		s.close()
-		return nil, fmt.Errorf("seal: bad tomb magic in %s", segDir)
-	}
-	tWords := binary.LittleEndian.Uint64(tmap[8:16])
-	// The bitmap must cover every slot AND the mapped file must actually hold the
-	// declared words, else tombGet would index past the map and panic.
-	needWords := (nRows + 63) / 64
-	if needWords == 0 {
-		needWords = 1
-	}
-	tNeed := uint64(segPageSize) + tWords*8
-	if tWords < needWords || tNeed < uint64(segPageSize) || uint64(len(tmap)) < tNeed {
-		_ = mmapFree(tmap)
-		s.close()
-		return nil, fmt.Errorf("seal: tomb.dat truncated/corrupt in %s (words=%d needWords=%d size=%d need=%d)", segDir, tWords, needWords, len(tmap), tNeed)
-	}
-	s.tombMap = tmap
-	s.tombWords = int(tWords)
 
 	// payload.dat (read-only mmap)
 	pf, err := fsOpenFile(segFilePath(segDir, "payload.dat"), os.O_RDONLY, 0)
@@ -358,7 +320,7 @@ func openSealedSegment(segDir string, metric Metric) (*sealedSegment, error) {
 	// Build the derived docId→slot index over LIVE slots (architecture §4.6;
 	// appendix #6/#17/#20/#24 — keeps slotOfDoc/Get/Delete and the Search
 	// tombstone post-filter O(1) instead of an O(n) scan). Done last so tombGet
-	// (which reads the now-mapped tomb bitmap) is valid.
+	// (which reads the now-seeded tomb bitmap) is valid.
 	s.docToSlot = make(map[int64]int, s.n)
 	for slot := 0; slot < s.n; slot++ {
 		if !s.tombGet(slot) {

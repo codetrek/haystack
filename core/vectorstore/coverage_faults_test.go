@@ -13,7 +13,7 @@ import (
 //
 // These tests drive the per-function floor for the IO-fault error branches and
 // the migrated graph-delete machinery the insert-only seal pipeline never
-// exercises, via the fsCreate/fsOpen/fsOpenFile/fsRename overrides and direct
+// exercises, via the fsCreate/fsOpen/fsOpenFile overrides and direct
 // graph-store manipulation.
 
 // withCreateFault overrides fsCreate so the returned file injects faults per cfg.
@@ -110,7 +110,7 @@ func TestOpenSealedSegment_StatFault(t *testing.T) {
 		}
 		return &statFaultFile{osFile: f}, nil
 	}
-	if _, err := openSealedSegment(dir, Cosine); err == nil {
+	if _, err := openSealedSegment(dir, Cosine, 1, nil); err == nil {
 		t.Fatal("openSealedSegment should fail when Stat (fileSize) is injected to fail")
 	}
 }
@@ -124,56 +124,8 @@ func TestOpenSealedSegment_ReadWholeFileFault(t *testing.T) {
 	requireNoError(t, writeSealedSegment(dir, head, nil))
 
 	withOpenFault(t, func(f *faultFile) { f.failReadAt = true })
-	if _, err := openSealedSegment(dir, Cosine); err == nil {
+	if _, err := openSealedSegment(dir, Cosine, 1, nil); err == nil {
 		t.Fatal("openSealedSegment should fail when readWholeFile's ReadAt fails")
-	}
-}
-
-// TestWriteManifest_RenameFault drives writeManifest's rename-error branch
-// (tmp cleaned up afterwards).
-func TestWriteManifest_RenameFault(t *testing.T) {
-	dir := t.TempDir()
-	orig := fsRename
-	t.Cleanup(func() { fsRename = orig })
-	fsRename = func(oldp, newp string) error { return errInjected }
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when rename is injected to fail")
-	}
-	if _, statErr := os.Stat(filepath.Join(dir, "manifest.tmp")); !os.IsNotExist(statErr) {
-		t.Fatal("manifest.tmp must be removed after a rename fault")
-	}
-}
-
-// TestWriteManifest_DirFsyncFault drives writeManifest's fsyncDir-error branch:
-// the manifest write + rename succeed, then the directory fsync fails. fsyncDir
-// fails by failing Sync on the directory handle (opened via fsOpen).
-func TestWriteManifest_DirFsyncFault(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("fsyncDir is a documented no-op on Windows (no directory-fsync syscall; osfile.go), so the injected Sync fault is swallowed and cannot propagate")
-	}
-	dir := t.TempDir()
-	// fsOpen is used by fsyncDir to open the directory; fail its Sync.
-	withOpenFault(t, func(f *faultFile) { f.failSync = true })
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when fsyncDir's Sync fails")
-	}
-}
-
-// TestWriteManifest_WriteFault drives the body-Write error branch.
-func TestWriteManifest_WriteFault(t *testing.T) {
-	dir := t.TempDir()
-	withCreateFault(t, func(f *faultFile) { f.failWrite = true })
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when the body Write fails")
-	}
-}
-
-// TestWriteManifest_CloseFault drives the f.Close() error branch.
-func TestWriteManifest_CloseFault(t *testing.T) {
-	dir := t.TempDir()
-	withCreateFault(t, func(f *faultFile) { f.failClose = true })
-	if err := writeManifest(dir, sampleManifest()); err == nil {
-		t.Fatal("writeManifest should fail when Close fails")
 	}
 }
 
@@ -181,6 +133,25 @@ func TestWriteManifest_CloseFault(t *testing.T) {
 func TestFsyncDir_OpenFault(t *testing.T) {
 	if err := fsyncDir(filepath.Join(t.TempDir(), "does-not-exist")); err == nil {
 		t.Fatal("fsyncDir on a missing directory should error")
+	}
+}
+
+// TestFsyncDir_SyncFault drives fsyncDir's directory-Sync error branch: the open
+// succeeds, then Sync fails. On a non-Windows OS the error must propagate (POSIX
+// directory fsync is real); on Windows fsyncDir documents Sync as a no-op and
+// swallows the fault, so it returns nil there. (Both branches were formerly
+// covered by the now-removed manifest-rewrite dir-fsync test.)
+func TestFsyncDir_SyncFault(t *testing.T) {
+	withOpenFault(t, func(f *faultFile) { f.failSync = true })
+	err := fsyncDir(t.TempDir())
+	if runtime.GOOS == "windows" {
+		if err != nil {
+			t.Fatalf("fsyncDir Sync fault must be swallowed on Windows (no-op), got %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatal("fsyncDir must surface a directory Sync fault on POSIX")
 	}
 }
 
@@ -232,7 +203,7 @@ func sealedFromRandom(t *testing.T, n, dim int) *sealedSegment {
 	head := buildHeadSeg(Cosine, rows)
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
 	requireNoError(t, writeSealedSegment(dir, head, nil))
-	ss, err := openSealedSegment(dir, Cosine)
+	ss, err := openSealedSegment(dir, Cosine, 1, nil)
 	requireNoError(t, err)
 	t.Cleanup(func() { ss.close() })
 	return ss
@@ -447,10 +418,12 @@ func TestWriteSealedSegment_LaterFileWriteFault(t *testing.T) {
 	}
 }
 
-// TestOpenSealedSegment_TombStatFault fails Stat on the THIRD fsOpenFile call
-// (tomb.dat), covering openSealedSegment's tomb fileSize-error branch (vectors
-// opens via fsOpenFile #1, slotdoc via fsOpen, tomb via fsOpenFile #2).
-func TestOpenSealedSegment_TombOpenFault(t *testing.T) {
+// TestOpenSealedSegment_PayloadOpenFault fails the SECOND fsOpenFile call
+// (payload.dat), covering openSealedSegment's payload open-error branch. Since
+// incr 3 a sealed segment has no tomb.dat: vectors.dat opens via fsOpenFile #1,
+// slotdoc.dat via fsOpen, payload.dat via fsOpenFile #2 (the tombstone bitmap is
+// seeded from the bbolt tomb bucket, not a mmap'd file).
+func TestOpenSealedSegment_PayloadOpenFault(t *testing.T) {
 	head := sampleHead(t)
 	dir := filepath.Join(t.TempDir(), "seg-1-0")
 	requireNoError(t, writeSealedSegment(dir, head, nil))
@@ -460,25 +433,23 @@ func TestOpenSealedSegment_TombOpenFault(t *testing.T) {
 	calls := 0
 	fsOpenFile = func(name string, flag int, perm os.FileMode) (osFile, error) {
 		calls++
-		if calls == 2 { // tomb.dat is the 2nd fsOpenFile (vectors is the 1st)
+		if calls == 2 { // payload.dat is the 2nd fsOpenFile (vectors is the 1st)
 			return nil, errInjected
 		}
 		return orig(name, flag, perm)
 	}
-	if _, err := openSealedSegment(dir, Cosine); err == nil {
-		t.Fatal("openSealedSegment should fail when tomb.dat open fails")
+	if _, err := openSealedSegment(dir, Cosine, 1, nil); err == nil {
+		t.Fatal("openSealedSegment should fail when payload.dat open fails")
 	}
 }
 
-// TestMmapSyncPlatform_EmptyNoop covers mmapSyncPlatform's len==0 early return
-// and the happy path over a real read-write mmap (a sealed tomb.dat).
+// TestMmapSyncPlatform_EmptyNoop covers mmapSyncPlatform's len==0 early return.
+// (The non-empty happy path is covered by TestMmap_RoundTrip's mmapSync over a
+// real read-write mmap; since incr 3 a sealed segment carries no RW mmap.)
 func TestMmapSyncPlatform_EmptyNoop(t *testing.T) {
 	if err := mmapSyncPlatform(nil); err != nil {
 		t.Fatalf("mmapSyncPlatform(nil) = %v, want nil", err)
 	}
-	// Happy path through a real RW mmap: tombstoneSlot msyncs the tomb mapping.
-	ss := sealedFromRandom(t, 4, 4)
-	requireNoError(t, ss.tombstoneSlot(0))
 }
 
 // TestWriteSealedSegment_MkdirFault drives writeSealedSegment's os.MkdirAll
@@ -492,32 +463,31 @@ func TestWriteSealedSegment_MkdirFault(t *testing.T) {
 	}
 }
 
-// TestWriteSealedSegment_TombAndPayloadFault fails the Write on the THIRD
-// (tomb.dat) then a separate run on the FOURTH (payload.dat) fsCreate'd file, so
-// writeSealedSegment's tomb/payload writer error propagation is covered.
-func TestWriteSealedSegment_TombAndPayloadFault(t *testing.T) {
-	for _, failOn := range []int{3, 4} {
-		head := sampleHead(t)
-		orig := fsCreate
-		calls := 0
-		fsCreate = func(name string) (osFile, error) {
-			f, err := orig(name)
-			if err != nil {
-				return nil, err
-			}
-			calls++
-			ff := &faultFile{osFile: f}
-			if calls == failOn {
-				ff.failWrite = true
-			}
-			return ff, nil
+// TestWriteSealedSegment_PayloadWriteFault fails the Write on the THIRD fsCreate'd
+// file (payload.dat), covering writeSealedSegment's payload writer error
+// propagation. Since incr 3 there is no tomb.dat: the files are vectors.dat (#1),
+// slotdoc.dat (#2), payload.dat (#3). (The slotdoc writer branch is covered by
+// TestWriteSealedSegment_LaterFileWriteFault.)
+func TestWriteSealedSegment_PayloadWriteFault(t *testing.T) {
+	head := sampleHead(t)
+	orig := fsCreate
+	t.Cleanup(func() { fsCreate = orig })
+	calls := 0
+	fsCreate = func(name string) (osFile, error) {
+		f, err := orig(name)
+		if err != nil {
+			return nil, err
 		}
-		dir := filepath.Join(t.TempDir(), "seg-1-0")
-		err := writeSealedSegment(dir, head, nil)
-		fsCreate = orig
-		if err == nil {
-			t.Fatalf("writeSealedSegment should fail when per-file Write #%d fails", failOn)
+		calls++
+		ff := &faultFile{osFile: f}
+		if calls == 3 { // payload.dat
+			ff.failWrite = true
 		}
+		return ff, nil
+	}
+	dir := filepath.Join(t.TempDir(), "seg-1-0")
+	if err := writeSealedSegment(dir, head, nil); err == nil {
+		t.Fatal("writeSealedSegment should fail when the payload.dat Write fails")
 	}
 }
 

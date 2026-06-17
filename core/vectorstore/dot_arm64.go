@@ -12,7 +12,7 @@ func dotNEONPartial(a, b *float32, n int, out *float32)
 // loop handles len rounded down to a multiple of 4; the remainder is scalar.
 func dot(a, b []float32) float32 {
 	if len(a) != len(b) {
-		panic("vectorindex: dot length mismatch")
+		panic("vectorstore: dot length mismatch")
 	}
 	n := len(a)
 	nn := n &^ 3 // round down to a multiple of 4

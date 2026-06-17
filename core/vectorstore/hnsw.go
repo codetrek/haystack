@@ -9,9 +9,8 @@ import (
 	"sync"
 )
 
-// defaultMaxLayers caps the random level a node can be assigned. vectorindex
-// keeps this in mmap_format.go (not copied here), so the migrated graph defines
-// it locally; graphfile.go (Task 6) reuses it. randomLevel clamps to it.
+// defaultMaxLayers caps the random level a node can be assigned; the graph
+// defines it locally and graphfile.go reuses it. randomLevel clamps to it.
 const defaultMaxLayers = 6
 
 // Default HNSW parameters per arXiv:1603.09320.
@@ -23,9 +22,9 @@ const (
 )
 
 // hnswIndex is a Hierarchical Navigable Small World graph for approximate
-// nearest-neighbor search. It implements Algorithm 1-5 from the paper. Migrated
-// (copied) from vectorindex; vectors live in the graphNodeStore (for a sealed
-// segment, in the segment itself), the graph holds only topology.
+// nearest-neighbor search. It implements Algorithm 1-5 from the paper. Vectors
+// live in the graphNodeStore (for a sealed segment, in the segment itself); the
+// graph holds only topology.
 type hnswIndex struct {
 	mu             sync.RWMutex
 	store          graphNodeStore

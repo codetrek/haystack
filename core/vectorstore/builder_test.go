@@ -32,7 +32,7 @@ func TestBuildSegmentGraph_ProducesSearchableGraphFile(t *testing.T) {
 	head := buildHeadSeg(Cosine, rows)
 	segDir := filepath.Join(t.TempDir(), "seg-3-0")
 	requireNoError(t, writeSealedSegment(segDir, head, nil))
-	ss, err := openSealedSegment(segDir, Cosine)
+	ss, err := openSealedSegment(segDir, Cosine, 1, nil)
 	requireNoError(t, err)
 	defer ss.close()
 
