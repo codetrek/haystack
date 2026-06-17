@@ -137,7 +137,7 @@ func (s *sealedSegment) tombCount() int {
 // Callers must not retain past that window or mutate it. The dim floats begin at
 // vecBase+slot*rowF32*4, which is 4-aligned (vecBase is page-aligned, rowF32*4 is a
 // multiple of 4), so the little-endian on-disk layout maps directly to []float32 on
-// little-endian targets (amd64/arm64) — mirrors vectorindex MmapStore (#66).
+// little-endian targets (amd64/arm64).
 func (s *sealedSegment) getVectorRef(slot int) []float32 {
 	start := s.vecBase + slot*s.rowF32*4
 	return unsafe.Slice((*float32)(unsafe.Pointer(&s.vecMap[start])), s.dim)

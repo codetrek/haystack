@@ -60,10 +60,9 @@
 // docId↔slot. Search returns docId-space results; mapping docId back to the
 // caller's string id is the caller's responsibility (idtable has no reverse map).
 //
-// The HNSW graph algorithm + NodeStore seam are migrated (copied and slimmed so
-// the graph stores only topology and resolves vectors from the owning sealed
-// segment by slot) from core/vectorindex, which remains independent and
-// unmodified.
+// The HNSW graph algorithm + NodeStore seam are vectorstore's own (per
+// arXiv:1603.09320): the graph stores only topology and resolves vectors from
+// the owning sealed segment by slot.
 //
 // Out of scope (留口, reserved but not built): IVF-PQ (the Type field is reserved
 // only), partial-coverage indexes (every index covers every segment),

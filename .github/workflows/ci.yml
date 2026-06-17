@@ -8,7 +8,7 @@ on:
 
 jobs:
   # The cross-platform matrix exists for core's platform-sensitive code
-  # (its mmap'd vectorindex). core is its own module, so build and test it
+  # (its mmap'd vectorstore). core is its own module, so build and test it
   # from there on every OS. On Linux, go-cov runs the suite and enforces the
   # coverage bar; macOS/Windows run the suite as a portability check.
   core:

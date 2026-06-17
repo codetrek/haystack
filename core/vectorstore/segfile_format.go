@@ -4,7 +4,7 @@ import "unsafe"
 
 // segPageSize is the page-aligned header reservation for sealed-segment data
 // files: each file's fixed header lives in the first segPageSize bytes, data
-// follows. Mirrors vectorindex's pageSize convention.
+// follows. A fixed page-size header prefix.
 const segPageSize = 4096
 
 // File magic constants for sealed-segment data files (4 bytes each). There is no

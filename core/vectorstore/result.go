@@ -70,7 +70,7 @@ func (t *topK) sorted() []SearchResult {
 // (distance, docId) order, the reverse of sorted()'s output. It provides typed
 // push/pop/up/down helpers instead of going through container/heap, whose
 // Push(any)/Pop() any signatures box every SearchResult onto the heap and leave
-// an uncoverable Pop interface method; see vectorindex/hnsw.go minDistHeap.
+// an uncoverable Pop interface method; see the minDistHeap in hnsw.go.
 type maxHeap []SearchResult
 
 func (h maxHeap) Len() int { return len(h) }

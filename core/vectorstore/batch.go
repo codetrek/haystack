@@ -22,7 +22,7 @@ type batchOp struct {
 // Batch buffers Put/Delete operations and applies them in ONE control-store
 // write-txn on Commit — a single fsync amortized over every record, the
 // write-throughput lever (a single Put is one commit/fsync each, the worst case).
-// It mirrors vectorindex.Batch. Created via Store.NewBatch and owned by a single
+// Created via Store.NewBatch and owned by a single
 // goroutine: Put, Delete, Commit, and Discard are NOT safe to call concurrently.
 // Operations coalesce per id (last-op-wins): a Put then Delete of the same id in
 // one batch commits only the Delete.

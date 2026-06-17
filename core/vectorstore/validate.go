@@ -10,9 +10,7 @@ import (
 // (first Put), so any non-empty length is accepted and becomes the fixed dim.
 // For cosine it additionally rejects vectors whose norm is non-finite or too
 // small to normalize without 1/norm overflowing to +Inf. A zero vector (norm 0)
-// is allowed: prepare stores it as-is with norm 0. Modeled on the cosine checks
-// in vectorindex HNSWIndex.validateVector (hnsw.go:131), reimplemented here as a
-// free function (no such function exists to lift).
+// is allowed: prepare stores it as-is with norm 0.
 func validateVector(v []float32, dim int, m Metric) error {
 	if len(v) == 0 {
 		return fmt.Errorf("vectorstore: empty vector")
