@@ -5,6 +5,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -147,6 +148,9 @@ func TestWriteManifest_RenameFault(t *testing.T) {
 // the manifest write + rename succeed, then the directory fsync fails. fsyncDir
 // fails by failing Sync on the directory handle (opened via fsOpen).
 func TestWriteManifest_DirFsyncFault(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fsyncDir is a documented no-op on Windows (no directory-fsync syscall; osfile.go), so the injected Sync fault is swallowed and cannot propagate")
+	}
 	dir := t.TempDir()
 	// fsOpen is used by fsyncDir to open the directory; fail its Sync.
 	withOpenFault(t, func(f *faultFile) { f.failSync = true })
