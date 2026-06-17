@@ -3,6 +3,15 @@
 > Subsystem page under [architecture.md](architecture.md). Owns the head WAL, the
 > atomic manifest, the seal commit order, crash windows, recovery, and the
 > concurrency/locking model. The manifest is the **structural source of truth**.
+>
+> **Migration in progress** — the **control plane** (manifest metadata, head record
+> durability, the `docId→segId` map, tombstones) is moving onto a single embedded
+> bbolt DB (`control.db`); see [Control plane on bbolt](#control-plane-on-bbolt).
+> The **data plane** (sealed-segment `vectors.dat` + `graph-<name>.dat` and the
+> zero-copy `getVectorRef` mmap aliasing) **stays flat mmap** and is never moved
+> into bbolt. As of this increment the bbolt store exists as a self-contained
+> module (`controlstore.go`) but is **not yet wired into `Store`**: the head WAL
+> and the atomic manifest described below are still the live mechanism.
 
 ## Two persistent faces
 
@@ -45,7 +54,45 @@ crc32(4)
 A segment's records are index-agnostic, so its geometry lives once in the `nSeg`
 block; each index's per-segment `{gen, state}` lives in `nIdxSeg`.
 
-## Seal commit order
+## Control plane on bbolt
+
+The control plane is migrating off the hand-rolled `manifest` + `records.wal` +
+`tomb.dat` + recovery-rescan onto a single embedded [bbolt](https://pkg.go.dev/go.etcd.io/bbolt)
+database, `control.db`, opened beside the flat `seg-*` data dirs. bbolt gives an
+ACID, single-file, B+tree KV with copy-on-write page commits, so **one bbolt
+write-txn commit = one atomic structural change**, replacing the manifest's
+`tmp + fsync + rename + dir-fsync + CRC` rewrite with a plain `db.Update`. A failed
+or panicking txn rolls back fully — there is no half-written control state.
+
+Buckets (each is one logical control-plane table):
+
+| bucket | key | value | replaces |
+|---|---|---|---|
+| `meta` | `version` / `headSegId` / `primaryMetric` | scalar | manifest header |
+| `attrdecls` | property | kind(1) | manifest `nDecls` block |
+| `segments` | segId(8, big-endian) | gen(4) · vecCount(8) · tombCount(8) | manifest `nSeg` block |
+| `indexes` | name | type(1) · metric(1) · M(4) · efC(4) · efS(4) | manifest `nIdx` block |
+| `indexsegs` | name ‖ segId(8, big-endian) | gen(4) · state(1) | manifest `nIdxSeg` block |
+| `head` | docId(8) | vector · norm · payload | `records.wal` *(incr 2)* |
+| `docseg` | docId(8) | segId(8) | recovery rescan of `slotdoc.dat` *(incr 4/3)* |
+| `tomb` | segId(8) ‖ slot(8) | present | `tomb.dat` msync *(incr 3)* |
+
+Keys that must iterate in numeric order (`segments`, `indexsegs`) are stored
+big-endian so bbolt's byte-ordered cursor yields ascending segId. The `head`,
+`docseg`, and `tomb` buckets are **created on open but filled in by later
+increments** — this increment lands only the store, the schema, and the typed
+record adapters (`controlstore.go`).
+
+**Seal / merge transaction boundary.** Write the flat data-plane files
+(`vectors.dat`, `graph-<name>.dat`) and `fsync` them **first**; then **one** bbolt
+write-txn commits the metadata change (new `segments`/`indexsegs` rows, bumped
+`meta.version`); then delete the retired dirs. A crash *before* the commit leaves
+the new flat dirs orphaned; a crash *after* leaves the old dirs orphaned. Either
+way the orphan sweep simplifies to **"delete `seg-*` dirs not in the `segments`
+bucket"** — bbolt's atomic commit is the single swap point that the manifest
+rewrite used to be.
+
+
 
 Seal commits the fast part synchronously and defers the slow part:
 
