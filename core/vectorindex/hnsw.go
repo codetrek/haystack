@@ -64,6 +64,8 @@ func WithRand(r *rand.Rand) Option {
 
 // NewHNSWIndex creates a new HNSW index over store. The distance metric is taken
 // from store.Metric().
+//
+// Deprecated: use core/vectorstore (see the package doc).
 func NewHNSWIndex(store NodeStore, opts ...Option) *HNSWIndex {
 	h := &HNSWIndex{
 		store:          store,

@@ -91,6 +91,8 @@ func (s *MmapStore) Metric() Metric { return s.metric }
 func (s *MmapStore) Dim() int { return s.dim }
 
 // OpenMmapStore opens or creates an mmap-backed store in dir.
+//
+// Deprecated: use core/vectorstore (see the package doc).
 func OpenMmapStore(dir string, opts MmapStoreOptions) (*MmapStore, error) {
 	if opts.Dim <= 0 {
 		return nil, fmt.Errorf("MmapStore: dim must be > 0")

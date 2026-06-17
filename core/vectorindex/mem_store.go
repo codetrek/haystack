@@ -24,6 +24,8 @@ type MemNodeStore struct {
 
 // NewMemNodeStore creates a new in-memory NodeStore. The distance metric
 // defaults to Cosine when not specified.
+//
+// Deprecated: use core/vectorstore (see the package doc).
 func NewMemNodeStore(metric ...Metric) *MemNodeStore {
 	m := Cosine
 	if len(metric) > 0 {
