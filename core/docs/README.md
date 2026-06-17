@@ -18,4 +18,4 @@ core/docs/
 
 | 模块 | 文档 | 状态 |
 |---|---|---|
-| `vectorstore` | [architecture](vectorstore/architecture.md) · [Phase 1 plan](vectorstore/plans/0001-phase-1-records-segments.md) | 架构完成；Phase 1 计划完成（待执行） |
+| `vectorstore` | [architecture](vectorstore/architecture.md) · plans: [P1](vectorstore/plans/0001-phase-1-records-segments.md) · [P2](vectorstore/plans/0002-phase-2-seal-index-merge.md) · [P4](vectorstore/plans/0003-phase-4-reclamation-merge.md) · [P5](vectorstore/plans/0004-phase-5-payload-filter.md) · [P6](vectorstore/plans/0005-phase-6-multi-index.md) | 架构完成；全部 phase 实现完成（P1 records/段 · P2 封存+异步建图+N路合并+manifest/恢复 · P4 回收/合并 · P5 结构化 payload+过滤 · P6 多命名索引；P3 payload 并入 P1/P5）。在 `feat/vectorstore-phase1` 分支，未合并 |
