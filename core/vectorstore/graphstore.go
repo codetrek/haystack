@@ -20,11 +20,25 @@ type segGraphStore struct {
 
 	nextID      uint64
 	levels      []int              // nodeId → level
-	neighbors   []map[int][]uint64 // nodeId → layer → neighbor ids
+	neighbors   []map[int][]uint64 // nodeId → layer → neighbor ids (BUILD path only)
 	nodeSlot    []int              // nodeId → segment slot (for GetVectorRef)
 	nodeDoc     []int64            // nodeId → docId
 	docToNode   map[int64]uint64   // docId → nodeId
 	pendingSlot map[int64]int      // docId → slot, set by bindSlot, consumed by PutNode
+
+	// Flat CSR neighbor topology, populated ONLY by openGraphFile (the read path).
+	// When csrNodeBase != nil the store is a loaded, immutable, search-only graph and
+	// the neighbor accessors read from these compact arrays instead of the per-node
+	// maps above (which stay nil); this drops the per-node hmap/bucket/slice-header
+	// overhead and the O(N) decode allocs. csrNodeBase[id]..[id+1] is node id's
+	// half-open range of layer slots; csrLayerStart[ls]..[ls+1] is that slot's
+	// half-open range of edges in csrPool. csrPool may be a non-nil empty slice (an
+	// edge-less loaded graph), so csrNodeBase — always make([]uint32, N+1) — is the
+	// loaded/build discriminator. The build path never sets these, so its mutating
+	// methods are unaffected.
+	csrNodeBase   []uint32 // nodeId → first layer slot (len N+1)
+	csrLayerStart []uint32 // layer slot → first edge in csrPool (len LayerSlots+1)
+	csrPool       []uint64 // all neighbor ids, node ascending then layer ascending
 
 	entryID  uint64
 	maxLayer int
@@ -86,26 +100,42 @@ func (g *segGraphStore) DeleteNode(id uint64) error {
 }
 
 func (g *segGraphStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
-	if id >= uint64(len(g.neighbors)) || g.neighbors[id] == nil {
-		return nil, nil
-	}
-	nb := g.neighbors[id][layer]
+	nb := g.getNeighborsRef(id, layer)
 	cp := make([]uint64, len(nb))
 	copy(cp, nb)
 	return cp, nil
 }
 
-// getNeighborsRef returns the layer slice without copying (read-only; see interface).
-// A sealed segment's graph is immutable once searched, so no lock is needed.
+// getNeighborsRef returns the layer's neighbor ids without copying (read-only; see
+// interface). A sealed segment's graph is immutable once searched, so no lock is
+// needed.
 //
-// The returned slice is owned Go heap, NOT mmap. Only the segment's VECTORS
-// (vectors.dat) are mmap'd — those are resolved separately via GetVectorRef. The
-// neighbor TOPOLOGY lives in graph-<name>.dat, which openGraphFile reads into a heap
-// buffer (readWholeFile uses ReadAt, not mmap) and decodes into fresh make([]uint64)
-// slices; segGraphStore.neighbors is []map[int][]uint64 (a Go map can't alias mmap).
-// The graph is built-once / read-only thereafter and the search holds this store for
-// its whole duration, so the ref cannot be reallocated, mutated, or unmapped.
+// Two representations back this slice, never both at once:
+//   - LOADED (search) stores set csrPool (openGraphFile): the slice is a sub-range
+//     of the flat csrPool, addressed via the csrNodeBase/csrLayerStart prefix sums.
+//     Those arrays are validated monotonic and in-bounds at open, so the slice
+//     expression cannot panic.
+//   - BUILD stores leave csrPool nil and use the per-node neighbors maps.
+//
+// Either way the slice is owned Go heap, NOT mmap — only the segment's VECTORS
+// (vectors.dat) are mmap'd, resolved separately via GetVectorRef. The neighbor
+// TOPOLOGY in graph-<name>.dat is read into a heap buffer (readWholeFile uses
+// ReadAt) and decoded into fresh heap slices, so the ref cannot be unmapped. The
+// graph is built-once / read-only thereafter and the search holds this store for its
+// whole duration, so the ref is never reallocated or mutated under the caller.
 func (g *segGraphStore) getNeighborsRef(id uint64, layer int) []uint64 {
+	if g.csrNodeBase != nil {
+		if id >= uint64(len(g.csrNodeBase)-1) {
+			return nil
+		}
+		base := g.csrNodeBase[id]
+		nLayers := g.csrNodeBase[id+1] - base
+		if layer < 0 || uint32(layer) >= nLayers {
+			return nil
+		}
+		ls := base + uint32(layer)
+		return g.csrPool[g.csrLayerStart[ls]:g.csrLayerStart[ls+1]]
+	}
 	if id >= uint64(len(g.neighbors)) || g.neighbors[id] == nil {
 		return nil
 	}
