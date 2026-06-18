@@ -47,7 +47,7 @@ func TestLoadBytes(t *testing.T) {
 	if s.TotalFreq() != 1000 {
 		t.Fatalf("totalFreq = %v, want 1000", s.TotalFreq())
 	}
-	if f, ok := s.findFreq([]rune("中国")); !ok || f != 100 {
+	if f, ok := s.findFreq([]rune("中国"), nil); !ok || f != 100 {
 		t.Fatalf("findFreq(中国) = %v,%v want 100,true", f, ok)
 	}
 
@@ -122,7 +122,7 @@ func TestOpenMmap(t *testing.T) {
 	if !s.owned {
 		t.Fatal("mmap segmenter must be owned so Close releases the mmap")
 	}
-	if f, ok := s.findFreq([]rune("中国")); !ok || f != 100 {
+	if f, ok := s.findFreq([]rune("中国"), nil); !ok || f != 100 {
 		t.Fatalf("findFreq(中国) = %v,%v want 100,true", f, ok)
 	}
 	if err := s.Close(); err != nil {
@@ -179,10 +179,10 @@ func TestHmmBranches(t *testing.T) {
 
 	// Branch 1: known multi-rune word with freq>0 is emitted rune-by-rune.
 	word := "中国"
-	if f, ok := s.findFreq([]rune(word)); !ok || f <= 0 {
+	if f, ok := s.findFreq([]rune(word), nil); !ok || f <= 0 {
 		t.Fatalf("precondition: %q must be a freq>0 word (got %v,%v)", word, f, ok)
 	}
-	got := s.hmm(word, []rune(word), nil)
+	got := s.hmm(word, []rune(word), nil, nil)
 	wantChars := []string{"中", "国"}
 	if !eqSlices(got, wantChars) {
 		t.Fatalf("hmm(known word) = %q, want rune-by-rune %q", got, wantChars)
@@ -191,13 +191,13 @@ func TestHmmBranches(t *testing.T) {
 	// Branch 2: an OOV run (not a dictionary word) falls through to hmm.Cut,
 	// which must return a non-empty segmentation covering the input runes.
 	oov := "鿜鿝鿞" // CJK ext / rare block, not a dictionary word
-	if _, ok := s.findFreq([]rune(oov)); ok {
+	if _, ok := s.findFreq([]rune(oov), nil); ok {
 		// If by chance it IS a word in some dict version, skip rather than fail
 		// the fidelity contract; the branch is still covered by the assert below
 		// only when it's genuinely OOV.
 		t.Skipf("%q unexpectedly in dict; pick another OOV sample", oov)
 	}
-	out := s.hmm(oov, []rune(oov), nil)
+	out := s.hmm(oov, []rune(oov), nil, nil)
 	if len(out) == 0 {
 		t.Fatalf("hmm(OOV) returned no tokens for %q", oov)
 	}

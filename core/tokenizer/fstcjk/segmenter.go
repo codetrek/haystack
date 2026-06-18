@@ -83,6 +83,7 @@ type scratchBuf struct {
 	rs     map[int]route
 	result []string
 	buf    []rune
+	vstate *vellum.ReusableState // reusable FST decode buffer (no per-transition alloc)
 }
 
 // Open returns the process-wide segmenter backed by the embedded FST. It builds
@@ -145,6 +146,7 @@ func newSeg(f *vellum.FST, totalFreq float64, owned bool) *Segmenter {
 			rs:     make(map[int]route, 64),
 			result: make([]string, 0, 64),
 			buf:    make([]rune, 0, 16),
+			vstate: vellum.NewReusableState(),
 		}
 	}
 	// Load gse's HMM emission/transition tables once (same model gse uses).
@@ -181,11 +183,11 @@ func readTotalFreq(path string) (float64, error) {
 // Given state `addr` reached after consuming a prefix (with running output
 // `sum`), it appends the UTF-8 bytes of `r` and returns the new state, the new
 // running output, and whether the path still exists (== gse Find ok).
-func (s *Segmenter) acceptRune(addr int, sum uint64, r rune) (int, uint64, bool) {
+func (s *Segmenter) acceptRune(addr int, sum uint64, r rune, vs *vellum.ReusableState) (int, uint64, bool) {
 	var buf [4]byte
 	n := encodeRune(buf[:], r)
 	for i := 0; i < n; i++ {
-		naddr, out := s.fst.AcceptWithVal(addr, buf[i])
+		naddr, out := s.fst.AcceptWithValState(addr, buf[i], vs)
 		if naddr == noneAddrVellum {
 			return naddr, sum, false
 		}
@@ -203,7 +205,7 @@ func (s *Segmenter) acceptRune(addr int, sum uint64, r rune) (int, uint64, bool)
 // freq/ok come from Find(runes[idx:i+1]); for the fallback [k] edge that is
 // Find of the single rune (which may be a non-word node: freq=0, ok=true, or
 // absent: ok=false). We capture all of that here in a single walk.
-func (s *Segmenter) getDag(runes []rune, dag map[int][]dagEdge) {
+func (s *Segmenter) getDag(runes []rune, dag map[int][]dagEdge, vs *vellum.ReusableState) {
 	n := len(runes)
 	// Do NOT delete the map keys: that discards the pooled per-position edge slices
 	// and forces a fresh make([]dagEdge) for every rune on every call. Instead reuse
@@ -226,7 +228,7 @@ func (s *Segmenter) getDag(runes []rune, dag map[int][]dagEdge) {
 		var firstOK bool
 
 		for {
-			naddr, nsum, ok := s.acceptRune(addr, sum, runes[i])
+			naddr, nsum, ok := s.acceptRune(addr, sum, runes[i], vs)
 			if !ok {
 				if i == k {
 					firstFreq, firstOK = 0, false
@@ -235,7 +237,7 @@ func (s *Segmenter) getDag(runes []rune, dag map[int][]dagEdge) {
 			}
 			addr = naddr
 			sum = nsum
-			final, fout := s.fst.IsMatchWithVal(addr)
+			final, fout := s.fst.IsMatchWithValState(addr, vs)
 			freq := float64(sum + fout)
 			if i == k {
 				// Single rune: gse Find ok=true (path exists); freq is the
@@ -264,18 +266,21 @@ func (s *Segmenter) getDag(runes []rune, dag map[int][]dagEdge) {
 
 // findFreq returns (freq, ok) for an exact word — gse Find semantics: ok=true if
 // the byte path exists (even intermediate); freq is the final value or 0.
-func (s *Segmenter) findFreq(runes []rune) (float64, bool) {
+func (s *Segmenter) findFreq(runes []rune, vs *vellum.ReusableState) (float64, bool) {
+	if vs == nil {
+		vs = vellum.NewReusableState()
+	}
 	addr := s.fst.Start()
 	var sum uint64
 	for _, r := range runes {
-		naddr, nsum, ok := s.acceptRune(addr, sum, r)
+		naddr, nsum, ok := s.acceptRune(addr, sum, r, vs)
 		if !ok {
 			return 0, false
 		}
 		addr = naddr
 		sum = nsum
 	}
-	final, fout := s.fst.IsMatchWithVal(addr)
+	final, fout := s.fst.IsMatchWithValState(addr, vs)
 	if final {
 		return float64(sum + fout), true
 	}
@@ -318,11 +323,11 @@ func (s *Segmenter) calc(runes []rune, dag map[int][]dagEdge, rs map[int]route) 
 // hmm replicates gse dag.go hmm: if the buffer string is a known word with
 // freq>0 keep it whole-but-split-to-chars... actually gse splits to runes only
 // when found; otherwise HMMCut. We mirror exactly.
-func (s *Segmenter) hmm(bufString string, buf []rune, result []string) []string {
+func (s *Segmenter) hmm(bufString string, buf []rune, result []string, vs *vellum.ReusableState) []string {
 	// buf is exactly []rune(bufString) (bufString was built as string(buf) by the
 	// caller), so reuse it directly instead of re-decoding the string into a fresh
 	// []rune.
-	v, ok := s.findFreq(buf)
+	v, ok := s.findFreq(buf, vs)
 	if !ok || v == 0 {
 		return append(result, hmm.Cut(bufString)...)
 	}
@@ -341,7 +346,7 @@ func (s *Segmenter) CutDAG(str string) []string {
 	str = strings.ToLower(str)
 	runes := []rune(str)
 
-	s.getDag(runes, sb.dag)
+	s.getDag(runes, sb.dag, sb.vstate)
 	s.calc(runes, sb.dag, sb.rs)
 	routes := sb.rs
 
@@ -361,7 +366,7 @@ func (s *Segmenter) CutDAG(str string) []string {
 				if len(buf) == 1 {
 					result = append(result, bufString)
 				} else {
-					result = s.hmm(bufString, buf, result)
+					result = s.hmm(bufString, buf, result, sb.vstate)
 				}
 				buf = buf[:0]
 			}
@@ -374,7 +379,7 @@ func (s *Segmenter) CutDAG(str string) []string {
 		if len(buf) == 1 {
 			result = append(result, bufString)
 		} else {
-			result = s.hmm(bufString, buf, result)
+			result = s.hmm(bufString, buf, result, sb.vstate)
 		}
 	}
 
