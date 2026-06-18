@@ -49,6 +49,7 @@ func TestInitLog_File(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	initLog()
+	defer closeLog() // release the lumberjack file handle before t.TempDir cleanup
 
 	assert.Equal(t, log.LstdFlags, log.Flags())
 
@@ -67,8 +68,21 @@ func TestInitLog_File(t *testing.T) {
 
 // TestRun_DataStorageError tests the run() error path when data storage fails to open.
 func TestRun_DataStorageError(t *testing.T) {
-	conf.Get().Global.DataPath = "/dev/null/impossible"
+	// Block data-storage init portably by putting a FILE where the "data" DB dir is
+	// expected (same pattern as TestRun_IndexStorageError below).
+	//
+	// This previously set DataPath = "/dev/null/impossible": on POSIX that is
+	// uncreatable (/dev/null is a file, so a subdir under it fails with ENOTDIR), so
+	// run() failed fast at data init. On Windows there is no /dev/null device, so the
+	// path resolves to C:\dev\null\impossible — which IS creatable, so data init
+	// SUCCEEDED, run() fell through to starting the HTTP server and blocked forever
+	// (hanging `go test ./...` and littering C:\dev\null\impossible).
+	tempDir := t.TempDir()
+	conf.Get().Global.DataPath = tempDir
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024
+
+	dataPath := filepath.Join(tempDir, "data")
+	assert.NoError(t, os.WriteFile(dataPath, []byte("blocker"), 0644))
 
 	err := run()
 	assert.Error(t, err)
