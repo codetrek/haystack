@@ -11,7 +11,7 @@ import "unsafe"
 var magicGraph = [4]byte{'V', 'S', 'G', '2'}
 
 // graphFormatVersion is bumped on any layout change within the VSG2 magic.
-const graphFormatVersion uint32 = 1
+const graphFormatVersion uint32 = 2
 
 // graphHeader is the on-disk header for graph-<name>.dat. It occupies the first
 // segPageSize bytes; all fields are LittleEndian at the byte offsets below (the
@@ -29,7 +29,7 @@ const graphFormatVersion uint32 = 1
 //	LAYER_START[after NODE_BASE]       (LayerSlots+1) uint32: per-(node,layer) CSR
 //	                                   base into POOL — layerStart[ls]..[ls+1] is
 //	                                   that layer's half-open range of edges.
-//	POOL       [PoolOff, page-aligned] PoolLen uint64: every neighbor id, grouped
+//	POOL       [PoolOff, page-aligned] PoolLen uint32: every neighbor id, grouped
 //	                                   by node ascending then layer ascending.
 //
 // The index sections (NODE_BASE, LAYER_START) are uint32 prefix sums; they index
@@ -37,8 +37,8 @@ const graphFormatVersion uint32 = 1
 // MaxUint32 (returning an error otherwise) — that assert, not any row cap, is what
 // guarantees the uint32 offsets never wrap (defaultMaxSegSize is only a tunable
 // default; growth merges pack up to defaultMaxMergedSize≈1<<20 rows, ~31M edges,
-// still far below MaxUint32). POOL is uint64 (a zero-copy view feeds getNeighborsRef's
-// []uint64 return) and is page-aligned so a future change can mmap it in place (it is
+// still far below MaxUint32). POOL is uint32 (node ids are dense and < the segment
+// row cap < 2^32) and is page-aligned so a future change can mmap it in place (it is
 // the one large section).
 type graphHeader struct {
 	Magic      [4]byte // [0:4]   "VSG2"
@@ -50,7 +50,7 @@ type graphHeader struct {
 	EntryLevel uint32  // [32:36] entry node level
 	_          uint32  // [36:40] pad to 8-align the offsets below
 	LayerSlots uint64  // [40:48] total (node,layer) slots; LAYER_START len = +1
-	PoolLen    uint64  // [48:56] total edges; POOL bytes = PoolLen*8
+	PoolLen    uint64  // [48:56] total edges; POOL bytes = PoolLen*4
 	PoolOff    uint64  // [56:64] absolute byte offset of POOL (page-aligned)
 }
 

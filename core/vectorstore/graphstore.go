@@ -20,7 +20,7 @@ type segGraphStore struct {
 
 	nextID      uint64
 	levels      []int              // nodeId → level
-	neighbors   []map[int][]uint64 // nodeId → layer → neighbor ids (BUILD path only)
+	neighbors   []map[int][]uint32 // nodeId → layer → neighbor ids (BUILD path only)
 	nodeSlot    []int              // nodeId → segment slot (for GetVectorRef)
 	nodeDoc     []int64            // nodeId → docId
 	docToNode   map[int64]uint64   // docId → nodeId
@@ -38,7 +38,7 @@ type segGraphStore struct {
 	// methods are unaffected.
 	csrNodeBase   []uint32 // nodeId → first layer slot (len N+1)
 	csrLayerStart []uint32 // layer slot → first edge in csrPool (len LayerSlots+1)
-	csrPool       []uint64 // all neighbor ids, node ascending then layer ascending
+	csrPool       []uint32 // all neighbor ids, node ascending then layer ascending
 
 	entryID  uint64
 	maxLayer int
@@ -79,7 +79,7 @@ func (g *segGraphStore) PutNode(id uint64, level int, vector []float32, docId in
 		g.nodeDoc = append(g.nodeDoc, 0)
 	}
 	g.levels[id] = level
-	g.neighbors[id] = make(map[int][]uint64)
+	g.neighbors[id] = make(map[int][]uint32)
 	g.nodeSlot[id] = slot
 	g.nodeDoc[id] = docId
 	g.docToNode[docId] = id
@@ -102,7 +102,9 @@ func (g *segGraphStore) DeleteNode(id uint64) error {
 func (g *segGraphStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 	nb := g.getNeighborsRef(id, layer)
 	cp := make([]uint64, len(nb))
-	copy(cp, nb)
+	for i, v := range nb {
+		cp[i] = uint64(v)
+	}
 	return cp, nil
 }
 
@@ -123,7 +125,7 @@ func (g *segGraphStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 // ReadAt) and decoded into fresh heap slices, so the ref cannot be unmapped. The
 // graph is built-once / read-only thereafter and the search holds this store for its
 // whole duration, so the ref is never reallocated or mutated under the caller.
-func (g *segGraphStore) getNeighborsRef(id uint64, layer int) []uint64 {
+func (g *segGraphStore) getNeighborsRef(id uint64, layer int) []uint32 {
 	if g.csrNodeBase != nil {
 		if id >= uint64(len(g.csrNodeBase)-1) {
 			return nil
@@ -146,8 +148,10 @@ func (g *segGraphStore) SetNeighbors(id uint64, layer int, neighbors []uint64) e
 	if id >= uint64(len(g.neighbors)) || g.neighbors[id] == nil {
 		return fmt.Errorf("segGraphStore: SetNeighbors on unknown node %d", id)
 	}
-	cp := make([]uint64, len(neighbors))
-	copy(cp, neighbors)
+	cp := make([]uint32, len(neighbors))
+	for i, v := range neighbors {
+		cp[i] = uint32(v)
+	}
 	g.neighbors[id][layer] = cp
 	return nil
 }

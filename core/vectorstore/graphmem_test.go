@@ -60,9 +60,10 @@ func retained(build func() any) uint64 {
 	return withObj.HeapAlloc - afterFree.HeapAlloc
 }
 
-// TestGraphTopologyMemory_MapVsCSR cross-validates the Stage-1 win: the flat CSR
-// arrays must retain materially less heap than the per-node []map[int][]uint64 for
-// an identical topology. Run with: go test -run TestGraphTopologyMemory -v
+// TestGraphTopologyMemory_MapVsCSR cross-validates the win: the shipped uint32 flat
+// CSR arrays must retain materially less heap than the per-node []map[int][]uint64
+// (the original representation) for an identical topology. Run with:
+// go test -run TestGraphTopologyMemory -v
 func TestGraphTopologyMemory_MapVsCSR(t *testing.T) {
 	const n, m, m0 = 50000, 16, 32
 	topo := genTopology(n, m, m0, 99)
@@ -99,12 +100,14 @@ func TestGraphTopologyMemory_MapVsCSR(t *testing.T) {
 				ls++
 			}
 		}
-		pool := make([]uint64, edges)
+		pool := make([]uint32, edges)
 		p := 0
 		for _, layers := range topo {
 			for _, nb := range layers {
-				copy(pool[p:], nb)
-				p += len(nb)
+				for _, v := range nb {
+					pool[p] = uint32(v)
+					p++
+				}
 			}
 		}
 		totalEdges, totalSlots = edges, slots

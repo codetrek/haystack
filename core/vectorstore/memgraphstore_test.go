@@ -15,7 +15,7 @@ type memGraphStore struct {
 	metric    Metric
 	vectors   map[uint64][]float32 // stored form (normalized for cosine)
 	levels    map[uint64]int
-	neighbors map[uint64]map[int][]uint64 // nodeId -> layer -> neighbor ids
+	neighbors map[uint64]map[int][]uint32 // nodeId -> layer -> neighbor ids
 	docToNode map[int64]uint64
 	nodeDoc   map[uint64]int64 // nodeId -> docId, backs GetDocId
 	entryID   uint64
@@ -36,7 +36,7 @@ func newMemGraphStore(metric ...Metric) *memGraphStore {
 		metric:    m,
 		vectors:   make(map[uint64][]float32),
 		levels:    make(map[uint64]int),
-		neighbors: make(map[uint64]map[int][]uint64),
+		neighbors: make(map[uint64]map[int][]uint32),
 		docToNode: make(map[int64]uint64),
 		nodeDoc:   make(map[uint64]int64),
 		nextID:    0,
@@ -79,7 +79,7 @@ func (m *memGraphStore) PutNode(id uint64, level int, vector []float32, docId in
 	m.vectors[id] = cp
 	m.levels[id] = level
 	if _, ok := m.neighbors[id]; !ok {
-		m.neighbors[id] = make(map[int][]uint64)
+		m.neighbors[id] = make(map[int][]uint32)
 	}
 	m.docToNode[docId] = id
 	m.nodeDoc[id] = docId
@@ -114,14 +114,16 @@ func (m *memGraphStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 		return nil, nil
 	}
 	cp := make([]uint64, len(nb))
-	copy(cp, nb)
+	for i, v := range nb {
+		cp[i] = uint64(v)
+	}
 	return cp, nil
 }
 
 // getNeighborsRef returns the layer slice without copying (read-only; see interface).
 // SetNeighbors replaces the slice rather than editing in place, so a returned ref
 // stays valid even if the node is later updated.
-func (m *memGraphStore) getNeighborsRef(id uint64, layer int) []uint64 {
+func (m *memGraphStore) getNeighborsRef(id uint64, layer int) []uint32 {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	layers, ok := m.neighbors[id]
@@ -135,10 +137,12 @@ func (m *memGraphStore) SetNeighbors(id uint64, layer int, neighbors []uint64) e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.neighbors[id]; !ok {
-		m.neighbors[id] = make(map[int][]uint64)
+		m.neighbors[id] = make(map[int][]uint32)
 	}
-	cp := make([]uint64, len(neighbors))
-	copy(cp, neighbors)
+	cp := make([]uint32, len(neighbors))
+	for i, v := range neighbors {
+		cp[i] = uint32(v)
+	}
 	m.neighbors[id][layer] = cp
 	return nil
 }

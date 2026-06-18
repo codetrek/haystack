@@ -18,7 +18,7 @@ const graphMetaRecSize = 16
 // writeGraphFile serializes a built segGraphStore to segDir/graph-<name>.dat in the
 // flat/CSR VSG2 layout (see graphHeader) and fsyncs it, then fsyncs segDir. The
 // graph is immutable after this (built once). The store's mutable build-time
-// representation (neighbors []map[int][]uint64) is the source; the file is the flat
+// representation (neighbors []map[int][]uint32) is the source; the file is the flat
 // form the read path (openGraphFile) decodes into compact heap CSR arrays.
 func writeGraphFile(segDir, name string, g *segGraphStore) error {
 	n := len(g.nodeSlot)
@@ -59,7 +59,7 @@ func writeGraphFile(segDir, name string, g *segGraphStore) error {
 	}
 
 	// Pass 3: fill POOL (node ascending, then layer ascending).
-	pool := make([]uint64, poolLen)
+	pool := make([]uint32, poolLen)
 	p := 0
 	for id := 0; id < n; id++ {
 		if g.neighbors[id] == nil {
@@ -111,7 +111,7 @@ func writeGraphFile(segDir, name string, g *segGraphStore) error {
 	defer f.Close()
 
 	pad := make([]byte, poolOff-indexEnd)
-	for _, chunk := range [][]byte{hdr, meta, u32sToBytes(nodeBase), u32sToBytes(layerStart), pad, u64sToBytes(pool)} {
+	for _, chunk := range [][]byte{hdr, meta, u32sToBytes(nodeBase), u32sToBytes(layerStart), pad, u32sToBytes(pool)} {
 		if _, err := f.Write(chunk); err != nil {
 			return err
 		}
@@ -164,10 +164,10 @@ func openGraphFile(segDir, name string, seg *sealedSegment) (*segGraphStore, err
 	indexEnd := layerStartOff + (layerSlots+1)*4
 	// poolOff is read raw from the header (untrusted). Keep every comparison's
 	// arithmetic within file bounds: a near-MaxUint64 poolOff would wrap
-	// poolOff+poolLen*8 back below dataLen and slip past the guard into a
-	// slice-bounds panic at readU64s below. The short-circuit order guarantees
+	// poolOff+poolLen*4 back below dataLen and slip past the guard into a
+	// slice-bounds panic at readU32s below. The short-circuit order guarantees
 	// poolOff <= dataLen before the division, so dataLen-poolOff cannot underflow.
-	if indexEnd > dataLen || poolOff < indexEnd || poolOff > dataLen || poolLen > (dataLen-poolOff)/8 {
+	if indexEnd > dataLen || poolOff < indexEnd || poolOff > dataLen || poolLen > (dataLen-poolOff)/4 {
 		return nil, fmt.Errorf("graphfile: section layout overruns file in %s (len=%d)", segDir, dataLen)
 	}
 
@@ -228,13 +228,13 @@ func openGraphFile(segDir, name string, seg *sealedSegment) (*segGraphStore, err
 		return nil, fmt.Errorf("graphfile: layer-start tail %d != edge count %d in %s", layerStart[layerSlots], poolLen, segDir)
 	}
 
-	pool := make([]uint64, poolLen)
-	readU64s(data[poolOff:], pool)
+	pool := make([]uint32, poolLen)
+	readU32s(data[poolOff:], pool)
 	// Neighbor ids index visited.mark and GetVectorRef during search; reject any
 	// outside [0, NodeCount) so a corrupt pool can't drive an OOB index or a runaway
 	// visited-set allocation at search time.
 	for _, v := range pool {
-		if v >= nodeCount {
+		if uint64(v) >= nodeCount {
 			return nil, fmt.Errorf("graphfile: neighbor id %d >= node count %d in %s", v, nodeCount, segDir)
 		}
 	}
@@ -245,7 +245,7 @@ func openGraphFile(segDir, name string, seg *sealedSegment) (*segGraphStore, err
 	return g, nil
 }
 
-// u32sToBytes / u64sToBytes flatten a slice to LittleEndian bytes for writing.
+// u32sToBytes flattens a slice to LittleEndian bytes for writing.
 func u32sToBytes(s []uint32) []byte {
 	b := make([]byte, len(s)*4)
 	for i, v := range s {
@@ -254,24 +254,10 @@ func u32sToBytes(s []uint32) []byte {
 	return b
 }
 
-func u64sToBytes(s []uint64) []byte {
-	b := make([]byte, len(s)*8)
-	for i, v := range s {
-		binary.LittleEndian.PutUint64(b[i*8:], v)
-	}
-	return b
-}
-
-// readU32s / readU64s decode dst-many LittleEndian words from b (which the caller
+// readU32s decodes dst-many LittleEndian words from b (which the caller
 // has already bounds-checked to be long enough).
 func readU32s(b []byte, dst []uint32) {
 	for i := range dst {
 		dst[i] = binary.LittleEndian.Uint32(b[i*4:])
-	}
-}
-
-func readU64s(b []byte, dst []uint64) {
-	for i := range dst {
-		dst[i] = binary.LittleEndian.Uint64(b[i*8:])
 	}
 }
