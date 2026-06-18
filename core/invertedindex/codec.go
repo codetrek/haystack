@@ -54,18 +54,35 @@ func (idx *Index) decodeInvertedKey(key string) (int, string, int, string) {
 
 	key = key[1:]
 
-	parts := strings.Split(key, "|")
-	if len(parts) != 4 {
+	// Key layout: <tableId>|<keyword>|<doccount>|<tick>
+	//
+	// tableId, doccount and tick are all numeric and therefore never contain the
+	// '|' delimiter; the keyword is arbitrary indexed text that CAN contain '|'.
+	// A naive strings.Split(key, "|") mis-counts the fields for such keywords and
+	// returns InvalidId, which makes the background merger fail to recognize the
+	// row, regroup it under an empty keyword and rewrite its data under a garbage
+	// key — orphaning the posting permanently (it can never be matched or
+	// deleted). To stay robust we anchor on the FIRST '|' (end of tableId) and the
+	// LAST TWO '|' (start of doccount and tick) and treat everything in between as
+	// the keyword verbatim, '|' bytes and all.
+	first := strings.IndexByte(key, '|')
+	last := strings.LastIndexByte(key, '|')
+	if first < 0 || last <= first {
+		return InvalidId, "", 0, ""
+	}
+	prev := strings.LastIndexByte(key[:last], '|')
+	if prev <= first {
+		// Fewer than three delimiters: not a well-formed inverted-index key.
 		return InvalidId, "", 0, ""
 	}
 
-	tableId := parseId(parts[0])
-	keyword := parts[1]
-	doccount, err := strconv.Atoi(parts[2])
+	tableId := parseId(key[:first])
+	keyword := key[first+1 : prev]
+	doccount, err := strconv.Atoi(key[prev+1 : last])
 	if err != nil {
 		return InvalidId, "", 0, ""
 	}
-	tick := parts[3]
+	tick := key[last+1:]
 
 	return tableId, keyword, doccount, tick
 }

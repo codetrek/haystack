@@ -128,6 +128,39 @@ func TestDB_Scan(t *testing.T) {
 	assert.Equal(t, 3, count)
 }
 
+// TestDB_Scan_PrefixFollowedByFF guards the prefix-scan upper bound: every key
+// that starts with the prefix must be scanned, including keys whose first byte
+// after the prefix is 0xff. The old bound `append(prefix, 0xff)` excluded any
+// key of the form prefix+0xff+... (e.g. an inverted-index keyword containing
+// 0xff right after a search prefix), silently dropping it from Search results.
+func TestDB_Scan_PrefixFollowedByFF(t *testing.T) {
+	tmpDir := t.TempDir()
+	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
+	assert.NoError(t, err)
+	defer db.Close()
+
+	prefix := []byte("p|")
+	keys := [][]byte{
+		[]byte("p|a"),
+		{'p', '|', 0xff},
+		{'p', '|', 0xff, 'x'},
+		{'p', '|', 0xff, 0xff, 'z'},
+	}
+	for i, k := range keys {
+		assert.NoError(t, db.Put(k, []byte{byte(i)}))
+	}
+	db.Put([]byte("q|other"), []byte("x")) // outside the prefix
+
+	found := map[string]bool{}
+	err = db.Scan(prefix, func(key, _ []byte) bool {
+		found[string(append([]byte{}, key...))] = true
+		return true
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, len(keys), len(found),
+		"all keys with the prefix must be scanned, including those with 0xff right after the prefix")
+}
+
 func TestDB_ScanRange(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
