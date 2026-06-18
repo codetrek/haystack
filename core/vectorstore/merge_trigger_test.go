@@ -50,9 +50,11 @@ func TestCompact_ReclaimsHeavyTombstoneSegment(t *testing.T) {
 // TestCompact_NoOpWhenHealthy: nothing to reclaim → Compact is a no-op (segId stable).
 func TestCompact_NoOpWhenHealthy(t *testing.T) {
 	s := openTestStore(t, Cosine)
+	b := s.NewBatch()
 	for i := 0; i < 20; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil))
+		b.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 

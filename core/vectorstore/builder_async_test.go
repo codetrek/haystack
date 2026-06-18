@@ -18,9 +18,11 @@ func TestStore_Seal_BuildsInBackground_PendingThenIndexed(t *testing.T) {
 		}
 		return v
 	}
+	b := s.NewBatch()
 	for i := 0; i < 100; i++ {
-		put("s-"+itoa(i), randVec())
+		b.Put("s-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 
 	// Right after Seal returns, the segment is pending (no graph yet) but the
@@ -55,9 +57,11 @@ func TestStore_DeleteDuringPendingBuild_NoRace(t *testing.T) {
 		}
 		return v
 	}
+	b := s.NewBatch()
 	for i := 0; i < 200; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVec(), nil))
+		b.Put("d-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal()) // publishes pending, spawns the background build
 
 	// Hammer Delete on the just-sealed segment concurrently with the build.

@@ -25,10 +25,6 @@ func TestRecovery_SealedSegmentsAndHead(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
 	dim := 16
 	vecs := make(map[int64][]float32)
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -37,15 +33,11 @@ func TestRecovery_SealedSegmentsAndHead(t *testing.T) {
 		return v
 	}
 	// Sealed (indexed) batch.
-	for i := 0; i < 100; i++ {
-		put("s-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "s-", 100, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	// Head batch (only in the head bucket).
-	for i := 0; i < 30; i++ {
-		put("h-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "h-", 30, randVec, vecs)
 	// Delete one sealed doc (persisted in the bbolt tomb bucket) and one head doc
 	// (head bucket).
 	requireNoError(t, s.Delete("s-0"))

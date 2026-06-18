@@ -13,10 +13,6 @@ func TestStore_Search_MergesHeadAndIndexedSealed(t *testing.T) {
 	dim := 16
 	vecs := make(map[int64][]float32)
 
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -24,18 +20,30 @@ func TestStore_Search_MergesHeadAndIndexedSealed(t *testing.T) {
 		}
 		return v
 	}
+	// putBatch Puts n vectors in one batch commit (one fsync), then resolves the
+	// docId-keyed oracle AFTER commit (idToDoc is populated by Commit, not before).
+	putBatch := func(prefix string, n int) {
+		b := s.NewBatch()
+		ids := make([]string, n)
+		vs := make([][]float32, n)
+		for i := 0; i < n; i++ {
+			ids[i] = prefix + itoa(i)
+			vs[i] = randVec()
+			b.Put(ids[i], vs[i], nil)
+		}
+		requireNoError(t, b.Commit())
+		for i := 0; i < n; i++ {
+			vecs[s.idToDoc[ids[i]]] = append([]float32(nil), vs[i]...)
+		}
+	}
 
 	// Batch 1 → seal → build graph (indexed sealed segment).
-	for i := 0; i < 120; i++ {
-		put("s1-"+itoa(i), randVec())
-	}
+	putBatch("s1-", 120)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 
 	// Batch 2 stays in the head (brute leg).
-	for i := 0; i < 40; i++ {
-		put("h-"+itoa(i), randVec())
-	}
+	putBatch("h-", 40)
 
 	q := randVec()
 	got, err := s.Search("default", q, 10, nil)
@@ -54,7 +62,6 @@ func TestStore_Search_IndexedSegmentTombstoneFiltered(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	rng := rand.New(rand.NewSource(32))
 	dim := 8
-	put := func(id string, v []float32) { requireNoError(t, s.Put(id, v, nil)) }
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -62,9 +69,11 @@ func TestStore_Search_IndexedSegmentTombstoneFiltered(t *testing.T) {
 		}
 		return v
 	}
+	b := s.NewBatch()
 	for i := 0; i < 80; i++ {
-		put("x-"+itoa(i), randVec())
+		b.Put("x-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 
@@ -100,14 +109,16 @@ func TestStore_Search_TombstoneFilterMustFire(t *testing.T) {
 		target[d] = rng.Float32() + 0.5
 	}
 	// Insert the target vector plus a cloud of others, all sealed + indexed.
-	requireNoError(t, s.Put("target", append([]float32(nil), target...), nil))
+	b := s.NewBatch()
+	b.Put("target", append([]float32(nil), target...), nil)
 	for i := 0; i < 120; i++ {
 		v := make([]float32, dim)
 		for d := range v {
 			v[d] = rng.Float32()
 		}
-		requireNoError(t, s.Put("o-"+itoa(i), v, nil))
+		b.Put("o-"+itoa(i), v, nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 

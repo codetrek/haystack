@@ -27,9 +27,11 @@ func TestMergeCrash_BeforeSwap_OutputSwept(t *testing.T) {
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(11))
+	b := s.NewBatch()
 	for i := 0; i < 30; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+		b.Put("d-"+itoa(i), randVecN(rng, 8), nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal()) // seg-1-0 (the input, committed in the manifest)
 	requireNoError(t, s.WaitForIndex())
 
@@ -82,9 +84,11 @@ func TestMergeCrash_AfterSwap_OldInputSwept(t *testing.T) {
 	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(12))
+	b := s.NewBatch()
 	for i := 0; i < 40; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+		b.Put("d-"+itoa(i), randVecN(rng, 8), nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal()) // seg-1-0
 	requireNoError(t, s.WaitForIndex())
 
@@ -128,10 +132,17 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(13))
 	live := map[int64][]float32{}
+	b := s.NewBatch()
+	keys := make([]string, 50)
+	vs := make([][]float32, 50)
 	for i := 0; i < 50; i++ {
-		v := randVecN(rng, 8)
-		requireNoError(t, s.Put("d-"+itoa(i), v, nil))
-		live[s.idToDoc["d-"+itoa(i)]] = v
+		keys[i] = "d-" + itoa(i)
+		vs[i] = randVecN(rng, 8)
+		b.Put(keys[i], vs[i], nil)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 50; i++ {
+		live[s.idToDoc[keys[i]]] = vs[i]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

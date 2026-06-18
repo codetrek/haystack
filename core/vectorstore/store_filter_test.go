@@ -47,27 +47,34 @@ func buildFilterStore(t *testing.T, n, sealAt int, color func(i int) string) (*S
 	rng := rand.New(rand.NewSource(7))
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
-	put := func(i int) {
-		v := make([]float32, 8)
-		for d := range v {
-			v[d] = rng.Float32()
+	// putBatch Puts docs [lo,hi) in one batch commit (one fsync), then resolves the
+	// docId-keyed oracle AFTER commit (idToDoc is populated by Commit, not before).
+	putBatch := func(lo, hi int) {
+		b := s.NewBatch()
+		vs := make(map[int][]float32, hi-lo)
+		ps := make(map[int]Payload, hi-lo)
+		for i := lo; i < hi; i++ {
+			v := make([]float32, 8)
+			for d := range v {
+				v[d] = rng.Float32()
+			}
+			pl := Payload{"color": StringValue(color(i)), "n": Int64Value(int64(i))}
+			vs[i], ps[i] = v, pl
+			b.Put("k"+itoa(i), v, pl)
 		}
-		pl := Payload{"color": StringValue(color(i)), "n": Int64Value(int64(i))}
-		requireNoError(t, s.Put("k"+itoa(i), v, pl))
-		doc := s.idToDoc["k"+itoa(i)]
-		vecs[doc] = v
-		pls[doc] = pl
+		requireNoError(t, b.Commit())
+		for i := lo; i < hi; i++ {
+			doc := s.idToDoc["k"+itoa(i)]
+			vecs[doc] = vs[i]
+			pls[doc] = ps[i]
+		}
 	}
-	for i := 0; i < sealAt; i++ {
-		put(i)
-	}
+	putBatch(0, sealAt)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
 	requireNoError(t, s.CreateAttrIndex("n", Numeric))
-	for i := sealAt; i < n; i++ { // remainder stays in the head
-		put(i)
-	}
+	putBatch(sealAt, n) // remainder stays in the head
 	return s, vecs, pls
 }
 
@@ -206,22 +213,28 @@ func TestSearch_Filter_GraphDistantSelective_GraphSBranch(t *testing.T) {
 	dim := 16
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
-	put := func(id string, v []float32, hot bool) {
-		pl := Payload{"hot": BoolValue(hot)}
-		requireNoError(t, s.Put(id, v, pl))
-		doc := s.idToDoc[id]
-		vecs[doc] = v
-		pls[doc] = pl
-	}
 	// 1 in 50 docs is "hot" (selective). Hot docs are NOT clustered near the query
 	// — they are spread, so they are graph-distant from any single entry region.
 	n := 500
+	b := s.NewBatch()
+	keys := make([]string, n)
+	vs := make([][]float32, n)
+	ps := make([]Payload, n)
 	for i := 0; i < n; i++ {
 		v := make([]float32, dim)
 		for d := range v {
 			v[d] = rng.Float32()
 		}
-		put("k"+itoa(i), v, i%50 == 0)
+		keys[i] = "k" + itoa(i)
+		vs[i] = v
+		ps[i] = Payload{"hot": BoolValue(i%50 == 0)}
+		b.Put(keys[i], v, ps[i])
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < n; i++ {
+		doc := s.idToDoc[keys[i]]
+		vecs[doc] = vs[i]
+		pls[doc] = ps[i]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
@@ -259,25 +272,34 @@ func TestSearch_Filter_AfterMerge_MatchesOracle(t *testing.T) {
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
-	put := func(id string, color string) {
-		v := make([]float32, dim)
-		for d := range v {
-			v[d] = rng.Float32()
+	// putBatch Puts n vectors in one batch commit, then resolves the docId-keyed
+	// oracle AFTER commit (idToDoc is populated by Commit, not before).
+	putBatch := func(prefix string, n int, colorOf func(i int) string) {
+		b := s.NewBatch()
+		ids := make([]string, n)
+		vs := make([][]float32, n)
+		ps := make([]Payload, n)
+		for i := 0; i < n; i++ {
+			v := make([]float32, dim)
+			for d := range v {
+				v[d] = rng.Float32()
+			}
+			ids[i] = prefix + itoa(i)
+			vs[i] = v
+			ps[i] = Payload{"color": StringValue(colorOf(i))}
+			b.Put(ids[i], v, ps[i])
 		}
-		pl := Payload{"color": StringValue(color)}
-		requireNoError(t, s.Put(id, v, pl))
-		doc := s.idToDoc[id]
-		vecs[doc] = v
-		pls[doc] = pl
+		requireNoError(t, b.Commit())
+		for i := 0; i < n; i++ {
+			doc := s.idToDoc[ids[i]]
+			vecs[doc] = vs[i]
+			pls[doc] = ps[i]
+		}
 	}
 	// Two sealed segments, each with mixed colors.
-	for i := 0; i < 40; i++ {
-		put("a"+itoa(i), []string{"red", "blue"}[i%2])
-	}
+	putBatch("a", 40, func(i int) string { return []string{"red", "blue"}[i%2] })
 	requireNoError(t, s.Seal())
-	for i := 0; i < 40; i++ {
-		put("b"+itoa(i), []string{"red", "green"}[i%2])
-	}
+	putBatch("b", 40, func(i int) string { return []string{"red", "green"}[i%2] })
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	// Snapshot segment "a"'s id so we can assert the repack actually ran (a new
@@ -360,13 +382,21 @@ func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
+	b := s.NewBatch()
+	keys := make([]string, 60)
+	vs := make([][]float32, 60)
+	ps := make([]Payload, 60)
 	for i := 0; i < 60; i++ {
-		v := []float32{float32(i + 1), float32(i % 7), 1}
-		pl := Payload{"color": StringValue([]string{"red", "blue"}[i%2])}
-		requireNoError(t, s.Put("k"+itoa(i), v, pl))
-		doc := s.idToDoc["k"+itoa(i)]
-		vecs[doc] = v
-		pls[doc] = pl
+		keys[i] = "k" + itoa(i)
+		vs[i] = []float32{float32(i + 1), float32(i % 7), 1}
+		ps[i] = Payload{"color": StringValue([]string{"red", "blue"}[i%2])}
+		b.Put(keys[i], vs[i], ps[i])
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 60; i++ {
+		doc := s.idToDoc[keys[i]]
+		vecs[doc] = vs[i]
+		pls[doc] = ps[i]
 	}
 	requireNoError(t, s.Seal()) // crosses a seal boundary
 	requireNoError(t, s.WaitForIndex())
@@ -403,9 +433,11 @@ func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
 func TestSearch_Filter_UpdateCrossSegment_CountedOnce(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
+	b := s.NewBatch()
 	for i := 0; i < 40; i++ {
-		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0}, Payload{"color": StringValue("red")}))
+		b.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0}, Payload{"color": StringValue("red")})
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal()) // k* now live in a sealed segment
 	requireNoError(t, s.WaitForIndex())
 	// Update k0: old "red" copy tombstoned in the sealed segment, new "red" copy in

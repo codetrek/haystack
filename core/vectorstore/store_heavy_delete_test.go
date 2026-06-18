@@ -28,11 +28,13 @@ func TestStore_Search_HeavyDeleteRecall(t *testing.T) {
 	}
 
 	ids := make([]string, n)
+	b := s.NewBatch()
 	for i := 0; i < n; i++ {
 		id := "d-" + itoa(i)
 		ids[i] = id
-		requireNoError(t, s.Put(id, randVec(), nil))
+		b.Put(id, randVec(), nil)
 	}
+	requireNoError(t, b.Commit())
 	// Seal into a single sealed segment and build its HNSW (indexed leg).
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

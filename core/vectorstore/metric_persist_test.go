@@ -18,13 +18,15 @@ func TestOpen_RejectsMetricMismatch(t *testing.T) {
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(13))
 	dim := 8
+	b := s.NewBatch()
 	for i := 0; i < 20; i++ {
 		v := make([]float32, dim)
 		for d := range v {
 			v[d] = rng.Float32()
 		}
-		requireNoError(t, s.Put("d-"+itoa(i), v, nil))
+		b.Put("d-"+itoa(i), v, nil)
 	}
+	requireNoError(t, b.Commit())
 	// Seal so the metric is persisted in the manifest.
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

@@ -12,10 +12,6 @@ func TestStore_PerIndexMetric_EachReturnsItsOwnTopK(t *testing.T) {
 	rng := rand.New(rand.NewSource(123))
 	dim := 12
 	vecs := make(map[int64][]float32)
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -23,9 +19,7 @@ func TestStore_PerIndexMetric_EachReturnsItsOwnTopK(t *testing.T) {
 		}
 		return v
 	}
-	for i := 0; i < 150; i++ {
-		put("v-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "v-", 150, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.CreateVectorIndex("euclid", VectorIndexConfig{
 		Type: "hnsw", Metric: Euclidean, M: 16, EfConstruction: 200, EfSearch: 64,
@@ -69,10 +63,6 @@ func TestStore_PerIndexMetric_FilteredEachLeg(t *testing.T) {
 	dim := 12
 	// Track vecs partitioned by group so the oracle restricts to the matching subset.
 	vecsByGroup := map[string]map[int64][]float32{"x": {}, "y": {}}
-	put := func(id, grp string, v []float32) {
-		requireNoError(t, s.Put(id, v, Payload{"grp": StringValue(grp)}))
-		vecsByGroup[grp][s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -80,27 +70,37 @@ func TestStore_PerIndexMetric_FilteredEachLeg(t *testing.T) {
 		}
 		return v
 	}
-	// Sealed segment with both groups (exercises the indexed sealed legs after build).
-	for i := 0; i < 120; i++ {
-		grp := "x"
-		if i%2 == 0 {
-			grp = "y"
+	// putBatch Puts n group-tagged vectors in one batch commit, then resolves the
+	// grouped docId-keyed oracle AFTER commit (idToDoc is populated by Commit).
+	putBatch := func(prefix string, n int) {
+		b := s.NewBatch()
+		keys := make([]string, n)
+		gs := make([]string, n)
+		vs := make([][]float32, n)
+		for i := 0; i < n; i++ {
+			grp := "x"
+			if i%2 == 0 {
+				grp = "y"
+			}
+			keys[i] = prefix + itoa(i)
+			gs[i] = grp
+			vs[i] = randVec()
+			b.Put(keys[i], vs[i], Payload{"grp": StringValue(grp)})
 		}
-		put("s-"+itoa(i), grp, randVec())
+		requireNoError(t, b.Commit())
+		for i := 0; i < n; i++ {
+			vecsByGroup[gs[i]][s.idToDoc[keys[i]]] = append([]float32(nil), vs[i]...)
+		}
 	}
+	// Sealed segment with both groups (exercises the indexed sealed legs after build).
+	putBatch("s-", 120)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.CreateVectorIndex("euclid", VectorIndexConfig{
 		Type: "hnsw", Metric: Euclidean, M: 16, EfConstruction: 200, EfSearch: 64,
 	}))
 	requireNoError(t, s.WaitForIndex())
 	// Head docs (un-sealed) so the filtered head brute-S leg runs.
-	for i := 0; i < 30; i++ {
-		grp := "x"
-		if i%2 == 0 {
-			grp = "y"
-		}
-		put("h-"+itoa(i), grp, randVec())
-	}
+	putBatch("h-", 30)
 
 	q := randVec()
 	filter := Eq("grp", StringValue("x"))

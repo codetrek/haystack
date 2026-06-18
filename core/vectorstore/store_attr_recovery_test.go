@@ -11,10 +11,12 @@ func TestStore_CreateAttrIndex_SurvivesReopen(t *testing.T) {
 	kvs := newTestKV(t)
 	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
 	requireNoError(t, err)
+	b := s.NewBatch()
 	for i := 0; i < 30; i++ {
-		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
-			Payload{"color": StringValue(map[bool]string{true: "red", false: "blue"}[i%2 == 0])}))
+		b.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
+			Payload{"color": StringValue(map[bool]string{true: "red", false: "blue"}[i%2 == 0])})
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
@@ -37,10 +39,12 @@ func TestStore_AttrFile_Corrupt_RebuildsOnOpen(t *testing.T) {
 	kvs := newTestKV(t)
 	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
 	requireNoError(t, err)
+	b := s.NewBatch()
 	for i := 0; i < 20; i++ {
-		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
-			Payload{"color": StringValue("red")}))
+		b.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
+			Payload{"color": StringValue("red")})
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))

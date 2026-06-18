@@ -162,11 +162,17 @@ func TestMerge_CompactOfOne(t *testing.T) {
 		return v
 	}
 	live := map[int64][]float32{}
+	b := s.NewBatch()
+	keys := make([]string, 40)
+	vs := make([][]float32, 40)
 	for i := 0; i < 40; i++ {
-		id := "d-" + itoa(i)
-		v := randVec()
-		requireNoError(t, s.Put(id, v, nil))
-		live[s.idToDoc[id]] = v
+		keys[i] = "d-" + itoa(i)
+		vs[i] = randVec()
+		b.Put(keys[i], vs[i], nil)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 40; i++ {
+		live[s.idToDoc[keys[i]]] = vs[i]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

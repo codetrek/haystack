@@ -13,13 +13,15 @@ func TestRecovery_OrphanSegmentSwept(t *testing.T) {
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(71))
 	dim := 8
+	b := s.NewBatch()
 	for i := 0; i < 60; i++ {
 		v := make([]float32, dim)
 		for d := range v {
 			v[d] = rng.Float32()
 		}
-		requireNoError(t, s.Put("d-"+itoa(i), v, nil))
+		b.Put("d-"+itoa(i), v, nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 

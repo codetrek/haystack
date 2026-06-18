@@ -12,13 +12,15 @@ import (
 func putRandomSegment(t *testing.T, s *Store, n, dim int, seed int64) {
 	t.Helper()
 	rng := rand.New(rand.NewSource(seed))
+	b := s.NewBatch()
 	for i := 0; i < n; i++ {
 		v := make([]float32, dim)
 		for d := range v {
 			v[d] = rng.Float32()
 		}
-		requireNoError(t, s.Put("d-"+itoa(i), v, nil))
+		b.Put("d-"+itoa(i), v, nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 }

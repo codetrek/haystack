@@ -27,6 +27,28 @@ func openTestStore(t *testing.T, m Metric) *Store {
 	return s
 }
 
+// batchPutVecs Puts n random vectors (id = prefix+i for i in [0,n)) in ONE batch
+// commit — one fsync instead of n — then records the docId-keyed oracle into vecs
+// AFTER commit (s.idToDoc is only populated by Commit, not before). Drop-in for the
+// per-Put `put := func(id,v){ s.Put(...); vecs[s.idToDoc[id]]=v }` setup pattern,
+// for tests where the population is incidental setup (default maxSegSize, no per-Put
+// assertion) so Batch+Seal reproduces the identical end state.
+func batchPutVecs(t *testing.T, s *Store, prefix string, n int, randVec func() []float32, vecs map[int64][]float32) {
+	t.Helper()
+	b := s.NewBatch()
+	ids := make([]string, n)
+	vs := make([][]float32, n)
+	for i := 0; i < n; i++ {
+		ids[i] = prefix + itoa(i)
+		vs[i] = randVec()
+		b.Put(ids[i], vs[i], nil)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < n; i++ {
+		vecs[s.idToDoc[ids[i]]] = append([]float32(nil), vs[i]...)
+	}
+}
+
 // bruteForceKNN is the ground-truth oracle: it computes the metric distance for
 // every candidate and returns the k nearest docIds ascending by distance (ties
 // by docId).
