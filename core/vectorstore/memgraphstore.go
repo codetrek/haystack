@@ -118,6 +118,19 @@ func (m *memGraphStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 	return cp, nil
 }
 
+// getNeighborsRef returns the layer slice without copying (read-only; see interface).
+// SetNeighbors replaces the slice rather than editing in place, so a returned ref
+// stays valid even if the node is later updated.
+func (m *memGraphStore) getNeighborsRef(id uint64, layer int) []uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	layers, ok := m.neighbors[id]
+	if !ok {
+		return nil
+	}
+	return layers[layer]
+}
+
 func (m *memGraphStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
