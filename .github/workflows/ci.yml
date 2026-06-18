@@ -61,8 +61,13 @@ jobs:
           # -v prints each case's execution time. Show only result lines, and
           # drop the 0.00s cases (noise) — keep all FAILs and the full log on
           # failure (with assertion detail).
+          # -short: the tokenizer's exhaustive byte-fidelity fuzz (~20k inputs)
+          # is platform-independent pure-Go logic; the full run is the Linux
+          # coverage gate's job. macOS/Windows keep the fidelity SMOKE + every
+          # platform-sensitive test (vectorstore mmap etc. ignore -short). Only
+          # the tokenizer packages honor testing.Short().
           set -o pipefail
-          go test -v -timeout 15m ./... 2>&1 | tee vitest.log \
+          go test -short -v -timeout 15m ./... 2>&1 | tee vitest.log \
             | grep -E '^(ok|FAIL|--- (PASS|FAIL):|panic:)' | grep -vE '^--- PASS:.*\(0\.00s\)$'
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then echo "===== full test log ====="; cat vitest.log; fi

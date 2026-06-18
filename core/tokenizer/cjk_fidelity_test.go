@@ -287,8 +287,16 @@ func cjkFuzzInputs() []string {
 		}
 	}
 	const N = 20000
-	out := make([]string, 0, N)
-	for n := 0; n < N; n++ {
+	n := N
+	if testing.Short() {
+		// The exhaustive fuzz is platform-independent pure-Go logic; the full
+		// run is the Linux coverage gate's job. Under -short (the macOS/Windows
+		// portability matrix) a small sample keeps a fidelity smoke without the
+		// ~20k-input cost. The curated corpus/queries/edge cases still run in full.
+		n = 200
+	}
+	out := make([]string, 0, n)
+	for i := 0; i < n; i++ {
 		ln := 1 + rng.Intn(30)
 		var sb strings.Builder
 		for j := 0; j < ln; j++ {
