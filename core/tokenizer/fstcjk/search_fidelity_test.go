@@ -54,7 +54,7 @@ func (s *Segmenter) fstCutForSearch(str string) []string {
 			}
 			for i := 0; i < len(runes)-incr+1; i++ {
 				gram := string(runes[i : i+incr])
-				v, ok := s.findFreq([]rune(gram))
+				v, ok := s.findFreq([]rune(gram), nil)
 				if ok && v > 0 {
 					result = append(result, gram)
 				}
