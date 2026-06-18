@@ -1,1 +1,4 @@
 deps/** filter=lfs diff=lfs merge=lfs -text
+
+# Embedded prebuilt FST dictionary (go:embed build asset)
+core/tokenizer/fstcjk/dict.fst filter=lfs diff=lfs merge=lfs -text

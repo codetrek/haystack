@@ -163,6 +163,29 @@ func TestCJKTokenizer_TokenizeForSearch(t *testing.T) {
 	})
 }
 
+// TestCJKTokenizer_cutNilSegmenter covers the degraded path: if the embedded FST
+// ever fails to load (corrupt embed), seg stays nil and cut() must return nil
+// (segment to "no tokens") rather than panic. We simulate the failure by calling
+// cut() on a tokenizer whose seg was never set.
+func TestCJKTokenizer_cutNilSegmenter(t *testing.T) {
+	cjk := &CJKTokenizer{} // seg == nil, loaded == false
+	if got := cjk.cut("中华人民共和国"); got != nil {
+		t.Fatalf("cut with nil segmenter = %q, want nil", got)
+	}
+	// The public surface must also degrade gracefully (no panic, empty result)
+	// when the segmenter is unavailable. Force seg to stay nil by pre-tripping
+	// the once with a no-op that leaves seg nil.
+	cjk2 := &CJKTokenizer{}
+	cjk2.once.Do(func() {}) // mark loaded-attempted; seg stays nil
+	if got := cjk2.TokenizeForIndex("中华人民共和国"); len(got) != 0 {
+		t.Fatalf("TokenizeForIndex with nil segmenter = %q, want empty", got)
+	}
+	got, wild := cjk2.TokenizeForSearch("中华人民共和国", false)
+	if len(got) != 0 || wild != nil {
+		t.Fatalf("TokenizeForSearch with nil segmenter = %q,%v want empty,nil", got, wild)
+	}
+}
+
 func TestCJKTokenizer_LazyLoading(t *testing.T) {
 	t.Run("CJKTokenizer can be created without loading dict", func(t *testing.T) {
 		cjk := &CJKTokenizer{}
