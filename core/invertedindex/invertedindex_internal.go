@@ -14,7 +14,9 @@ func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
 	// Row values are fixed docIDSize-byte docids concatenated with no delimiter,
 	// so a docid of any other length (including the empty string) corrupts the
 	// value chunking on decode — fabricating/dropping docids that can never be
-	// searched or deleted. Reject at ingress, symmetric with the delete path.
+	// searched or deleted. Reject at WRITE ingress. (The delete path needs no
+	// such guard: a wrong-length docid in a removal simply matches no stored
+	// 8-byte docid and is a harmless no-op.)
 	if len(docid) != docIDSize {
 		log.Printf("[Inverted] Warning: ignoring add for table %d: docid must be %d bytes, got %d", tableId, docIDSize, len(docid))
 		return
@@ -33,10 +35,6 @@ func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
 }
 
 func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
-	if len(docid) != docIDSize {
-		log.Printf("[Inverted] Warning: ignoring delete for table %d: docid must be %d bytes, got %d", tableId, docIDSize, len(docid))
-		return
-	}
 	w := idx.getPendingDelete(tableId)
 	now := time.Now()
 	for _, kw := range keywords {
