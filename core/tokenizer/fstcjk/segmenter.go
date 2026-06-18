@@ -205,9 +205,11 @@ func (s *Segmenter) acceptRune(addr int, sum uint64, r rune) (int, uint64, bool)
 // absent: ok=false). We capture all of that here in a single walk.
 func (s *Segmenter) getDag(runes []rune, dag map[int][]dagEdge) {
 	n := len(runes)
-	for k := range dag {
-		delete(dag, k)
-	}
+	// Do NOT delete the map keys: that discards the pooled per-position edge slices
+	// and forces a fresh make([]dagEdge) for every rune on every call. Instead reuse
+	// each slot's backing slice via [:0]. Stale keys k >= n linger but are never read
+	// (calc only reads dag[0..n-1], all rewritten below), and are reused on a later
+	// larger call — keeping getDag's per-call allocs near zero after warm-up.
 	for k := 0; k < n; k++ {
 		lst := dag[k]
 		if lst == nil {
@@ -317,7 +319,10 @@ func (s *Segmenter) calc(runes []rune, dag map[int][]dagEdge, rs map[int]route) 
 // freq>0 keep it whole-but-split-to-chars... actually gse splits to runes only
 // when found; otherwise HMMCut. We mirror exactly.
 func (s *Segmenter) hmm(bufString string, buf []rune, result []string) []string {
-	v, ok := s.findFreq([]rune(bufString))
+	// buf is exactly []rune(bufString) (bufString was built as string(buf) by the
+	// caller), so reuse it directly instead of re-decoding the string into a fresh
+	// []rune.
+	v, ok := s.findFreq(buf)
 	if !ok || v == 0 {
 		return append(result, hmm.Cut(bufString)...)
 	}
