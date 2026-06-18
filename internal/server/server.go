@@ -49,6 +49,7 @@ func Run() {
 	defer cleanup()
 
 	initLog()
+	defer closeLog() // release the log file handle when the server stops
 
 	log.Println(strings.Repeat("=", 64))
 	log.Println("[Server] Starting haystack server...")
@@ -67,12 +68,19 @@ func run() error {
 		running.Shutdown()
 		return fmt.Errorf("error initializing data storage: %w", err)
 	}
+	// Close on EVERY return path (incl. the early-return startup-error paths below),
+	// not just the happy path: a failed startup otherwise leaks the open pebble
+	// handle, and on Windows an open handle blocks the data dir from being removed
+	// (e.g. t.TempDir cleanup in the run() error-path tests). Runs after the stores
+	// that use db are torn down (deferred LIFO, after the manual teardown below).
+	defer db.Close()
 
 	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
 	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing index storage: %w", err)
 	}
+	defer indexdb.Close()
 
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
@@ -150,12 +158,8 @@ func run() error {
 
 	idAlloc.Close()
 
-	// DB could be closed safely now!
-	log.Println("[Server] Closing storage...")
-	db.Close()
-	indexdb.Close()
-	log.Println("[Server] Storage closed")
-
+	// db and indexdb are closed by the deferred Close() calls registered right after
+	// each storage.Open above (they also cover the early-return error paths).
 	log.Println("[Server] Haystack server stopped")
 	return nil
 }

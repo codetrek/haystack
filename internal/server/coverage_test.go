@@ -49,6 +49,7 @@ func TestInitLog_File(t *testing.T) {
 	conf.Get().Global.DataPath = tempDir
 
 	initLog()
+	defer closeLog() // release the lumberjack file handle before t.TempDir cleanup
 
 	assert.Equal(t, log.LstdFlags, log.Flags())
 
