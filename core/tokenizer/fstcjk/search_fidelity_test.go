@@ -110,9 +110,6 @@ func TestCutForSearchFidelity(t *testing.T) {
 // hardest. This is the same generator the base TestHeavyFuzzFidelity uses, so
 // the two suites share a corpus distribution.
 func TestCutForSearchFuzzFidelity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
 	fst := loadFST(t)
 	g := newGse(t)
 
@@ -141,7 +138,7 @@ func TestCutForSearchFuzzFidelity(t *testing.T) {
 
 	total, identical := 0, 0
 	var diffs []string
-	N := 20000
+	N := fidelityFull(20000)
 	for n := 0; n < N; n++ {
 		ln := 1 + rng.Intn(30)
 		var sb strings.Builder

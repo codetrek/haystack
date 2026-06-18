@@ -1,0 +1,45 @@
+name: FST Fidelity
+
+# The FST CJK tokenizer is byte-identical to gse by construction; that invariant
+# can only break when the prebuilt dict.fst, the segmenter port, or the pinned
+# gse version changes. So the exhaustive live-gse golden-diff (which loads gse's
+# 8.6MB dictionary and fuzzes tens of thousands of strings) runs ONLY when one of
+# those files changes — not on every unrelated CI run. Normal CI relies on the
+# committed dict.fst plus the gse-free golden smoke (fstcjk TestSmokeGolden).
+on:
+  pull_request:
+    paths:
+      - 'core/tokenizer/fstcjk/**'
+      - 'core/tokenizer/cjk_fidelity_test.go'
+      - 'core/go.mod'
+      - '.github/workflows/fidelity.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'core/tokenizer/fstcjk/**'
+      - 'core/tokenizer/cjk_fidelity_test.go'
+      - 'core/go.mod'
+
+jobs:
+  fidelity:
+    name: FST vs gse byte-fidelity
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true # dict.fst is a Git LFS object the fidelity build embeds
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.2' # keep in sync with core/go.mod toolchain
+          cache: true
+
+      - name: Exhaustive FST-vs-gse byte-fidelity
+        working-directory: core
+        env:
+          HAYSTACK_FIDELITY: '1' # enables the live-gse golden suite
+          HAYSTACK_FIDELITY_FULL: '1' # full fuzz counts (~60k inputs)
+        run: go test -count=1 -run 'Fidelity|Fuzz|Parity' ./tokenizer/...

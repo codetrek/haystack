@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-ego/gse"
@@ -39,14 +40,47 @@ func loadFST(t testing.TB) *Segmenter {
 	return s
 }
 
-func newGse(t testing.TB) *gse.Segmenter {
-	t.Helper()
+// sharedGse loads the gse golden reference ONCE per test binary. Loading gse's
+// 8.6MB s_1+t_1 dictionary costs ~1.6s, and every fidelity test needs the same
+// read-only reference, so loading it per-test dominated CI time. gse.Cut is a
+// read-only operation on the loaded dict; the fidelity tests run sequentially,
+// so one shared instance is safe.
+var sharedGse = sync.OnceValue(func() *gse.Segmenter {
 	var seg gse.Segmenter
 	seg.SkipLog = true
 	if err := seg.LoadDict(); err != nil {
-		t.Fatalf("gse LoadDict: %v", err)
+		panic("gse LoadDict: " + err.Error())
 	}
 	return &seg
+})
+
+func newGse(t testing.TB) *gse.Segmenter {
+	t.Helper()
+	skipUnlessFidelity(t)
+	return sharedGse()
+}
+
+// skipUnlessFidelity skips the live-gse golden-fidelity suite unless
+// HAYSTACK_FIDELITY=1. The dict.fst artifact is committed and gse is pinned, so
+// "FST output == gse output" can only change when dict.fst, segmenter.go, or the
+// gse version changes — there is no value in re-loading gse's 8.6MB dictionary
+// and diffing tens of thousands of strings on every unrelated CI run. A
+// dedicated CI step sets the env (and HAYSTACK_FIDELITY_FULL for the exhaustive
+// fuzz) on changes to those files; normal runs rely on the committed .fst plus
+// the gse-free golden smoke (smoke_test.go).
+func skipUnlessFidelity(t testing.TB) {
+	t.Helper()
+	if os.Getenv("HAYSTACK_FIDELITY") == "" {
+		t.Skip("set HAYSTACK_FIDELITY=1 to run the live-gse golden-fidelity suite (CI runs it on dict.fst/gse/segmenter changes)")
+	}
+}
+
+// fidelityFull reports whether the exhaustive fuzz count should be used.
+func fidelityFull(full int) int {
+	if os.Getenv("HAYSTACK_FIDELITY_FULL") != "" {
+		return full
+	}
+	return 2000
 }
 
 func readLines(t testing.TB, path string) []string {
@@ -189,7 +223,7 @@ func TestFuzzFidelity(t *testing.T) {
 
 	total, identical := 0, 0
 	var diffs []string
-	N := 3000
+	N := fidelityFull(3000)
 	for n := 0; n < N; n++ {
 		ln := 1 + pick(n*7+1, 18)
 		var sb strings.Builder
@@ -227,12 +261,10 @@ func TestFuzzFidelity(t *testing.T) {
 }
 
 // TestHeavyFuzzFidelity stresses the full CJK plane + HMM OOV fallback with a
-// real PRNG and longer strings (20k inputs), where prior prototypes diverged
-// on tie-break + OOV penalty + HMM.
+// real PRNG and longer strings, where prior prototypes diverged on tie-break +
+// OOV penalty + HMM. Gated by HAYSTACK_FIDELITY (via newGse); count scales with
+// HAYSTACK_FIDELITY_FULL.
 func TestHeavyFuzzFidelity(t *testing.T) {
-	if testing.Short() {
-		t.Skip("short")
-	}
 	fst := loadFST(t)
 	g := newGse(t)
 
@@ -261,7 +293,7 @@ func TestHeavyFuzzFidelity(t *testing.T) {
 
 	total, identical := 0, 0
 	var diffs []string
-	N := 20000
+	N := fidelityFull(20000)
 	for n := 0; n < N; n++ {
 		ln := 1 + rng.Intn(30)
 		var sb strings.Builder

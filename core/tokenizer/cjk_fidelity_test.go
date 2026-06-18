@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-ego/gse"
@@ -44,15 +45,43 @@ const (
 )
 
 // newGseRef builds the golden reference: a real gse.Segmenter loaded with the
-// same s_1+t_1 dictionary the FST was built from.
-func newGseRef(t testing.TB) *gse.Segmenter {
-	t.Helper()
+// same s_1+t_1 dictionary the FST was built from. The dict (8.6MB) loads ONCE
+// per test binary via sync.OnceValue — it is a read-only reference shared across
+// the sequential fidelity tests, so per-test reloading (~1.6s each) is avoided.
+var sharedGseRef = sync.OnceValue(func() *gse.Segmenter {
 	var seg gse.Segmenter
 	seg.SkipLog = true
 	if err := seg.LoadDict(); err != nil {
-		t.Fatalf("gse LoadDict: %v", err)
+		panic("gse LoadDict: " + err.Error())
 	}
 	return &seg
+})
+
+func newGseRef(t testing.TB) *gse.Segmenter {
+	t.Helper()
+	skipUnlessFidelity(t)
+	return sharedGseRef()
+}
+
+// skipUnlessFidelity skips the live-gse golden-fidelity tests unless
+// HAYSTACK_FIDELITY=1. dict.fst is committed and gse is pinned, so FST-vs-gse
+// equivalence only changes when dict.fst, the segmenter, or the gse version
+// changes; a dedicated CI step runs this suite on those changes. Normal runs use
+// the gse-free golden smoke (cjk_smoke_test.go) for coverage.
+func skipUnlessFidelity(t testing.TB) {
+	t.Helper()
+	if os.Getenv("HAYSTACK_FIDELITY") == "" {
+		t.Skip("set HAYSTACK_FIDELITY=1 to run the live-gse golden-fidelity suite")
+	}
+}
+
+// fidelityFull returns the exhaustive fuzz count when HAYSTACK_FIDELITY_FULL is
+// set, else a smaller smoke count.
+func fidelityFull(full int) int {
+	if os.Getenv("HAYSTACK_FIDELITY_FULL") != "" {
+		return full
+	}
+	return 2000
 }
 
 // refTokenizeForIndex mirrors CJKTokenizer.TokenizeForIndex's post-processing
@@ -286,15 +315,7 @@ func cjkFuzzInputs() []string {
 			return rune(0x4E00 + rng.Intn(0x9FA5-0x4E00))
 		}
 	}
-	const N = 20000
-	n := N
-	if testing.Short() {
-		// The exhaustive fuzz is platform-independent pure-Go logic; the full
-		// run is the Linux coverage gate's job. Under -short (the macOS/Windows
-		// portability matrix) a small sample keeps a fidelity smoke without the
-		// ~20k-input cost. The curated corpus/queries/edge cases still run in full.
-		n = 200
-	}
+	n := fidelityFull(20000)
 	out := make([]string, 0, n)
 	for i := 0; i < n; i++ {
 		ln := 1 + rng.Intn(30)
