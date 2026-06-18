@@ -34,10 +34,11 @@ func (idx *Index) Search(tableId int, query string, limit int, filterKeyword fun
 			return true
 		}
 
-		docids := decodeInvertedValue(value)
-		if len(docids) > 0 {
-			for _, docid := range docids {
-				results.DocIds[docid] = struct{}{}
+		// Iterate the packed 8-byte docids straight into the result set, avoiding
+		// the intermediate []string that decodeInvertedValue would allocate.
+		if len(value)%8 == 0 {
+			for i := 0; i < len(value); i += 8 {
+				results.DocIds[string(value[i:i+8])] = struct{}{}
 			}
 		}
 
@@ -63,8 +64,10 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 	}
 
 	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
-		for _, docid := range decodeInvertedValue(value) {
-			results.DocIds[docid] = struct{}{}
+		if len(value)%8 == 0 {
+			for i := 0; i < len(value); i += 8 {
+				results.DocIds[string(value[i:i+8])] = struct{}{}
+			}
 		}
 		return true
 	})

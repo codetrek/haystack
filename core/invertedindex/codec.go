@@ -2,7 +2,6 @@ package invertedindex
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -34,17 +33,41 @@ func parseId(key string) int {
 	return v
 }
 
+// appendInvertedKeyPrefix appends "<keyTypeRow><tableId>|<keyword>|" to b. Shared
+// by the prefix and full-key encoders; hand-rolled (vs fmt.Sprintf) because it is
+// on every Search/GetDocs/write/merge path.
+func (idx *Index) appendInvertedKeyPrefix(b []byte, tableId int, keyword string) []byte {
+	b = append(b, idx.keyTypeRow)
+	b = strconv.AppendInt(b, int64(tableId), 10)
+	b = append(b, '|')
+	b = append(b, keyword...)
+	b = append(b, '|')
+	return b
+}
+
 func (idx *Index) encodeInvertedSearchKey(tableId int, query string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", idx.keyTypeRow, tableId, query))
+	// "<keyTypeRow><tableId>|<query>" (no trailing '|').
+	b := make([]byte, 0, 1+11+1+len(query))
+	b = append(b, idx.keyTypeRow)
+	b = strconv.AppendInt(b, int64(tableId), 10)
+	b = append(b, '|')
+	b = append(b, query...)
+	return b
 }
 
 func (idx *Index) encodeInvertedKeyPrefix(tableId int, keyword string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s|", idx.keyTypeRow, tableId, keyword))
+	b := make([]byte, 0, 1+11+1+len(keyword)+1)
+	return idx.appendInvertedKeyPrefix(b, tableId, keyword)
 }
 
 func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int) []byte {
-	return []byte(fmt.Sprintf("%s%d|%d",
-		string(idx.encodeInvertedKeyPrefix(tableId, keyword)), doccount, time.Now().UnixMicro()))
+	// "<prefix><doccount>|<tick>" where tick is the current micros.
+	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19)
+	b = idx.appendInvertedKeyPrefix(b, tableId, keyword)
+	b = strconv.AppendInt(b, int64(doccount), 10)
+	b = append(b, '|')
+	b = strconv.AppendInt(b, time.Now().UnixMicro(), 10)
+	return b
 }
 
 func (idx *Index) decodeInvertedKey(key string) (int, string, int, string) {
@@ -54,28 +77,47 @@ func (idx *Index) decodeInvertedKey(key string) (int, string, int, string) {
 
 	key = key[1:]
 
-	parts := strings.Split(key, "|")
-	if len(parts) != 4 {
+	// Expect exactly "<tableId>|<keyword>|<doccount>|<tick>" (3 separators, no more).
+	// Parse by locating the separators instead of strings.Split, which allocates a
+	// []string on every row scanned by the merger.
+	i1 := strings.IndexByte(key, '|')
+	if i1 < 0 {
 		return InvalidId, "", 0, ""
 	}
+	i2 := strings.IndexByte(key[i1+1:], '|')
+	if i2 < 0 {
+		return InvalidId, "", 0, ""
+	}
+	i2 += i1 + 1
+	i3 := strings.IndexByte(key[i2+1:], '|')
+	if i3 < 0 {
+		return InvalidId, "", 0, ""
+	}
+	i3 += i2 + 1
+	if strings.IndexByte(key[i3+1:], '|') >= 0 {
+		return InvalidId, "", 0, "" // a 5th part — same rejection as the old len(parts)!=4
+	}
 
-	tableId := parseId(parts[0])
-	keyword := parts[1]
-	doccount, err := strconv.Atoi(parts[2])
+	tableId := parseId(key[:i1])
+	keyword := key[i1+1 : i2]
+	doccount, err := strconv.Atoi(key[i2+1 : i3])
 	if err != nil {
 		return InvalidId, "", 0, ""
 	}
-	tick := parts[3]
+	tick := key[i3+1:]
 
 	return tableId, keyword, doccount, tick
 }
 
 func (idx *Index) encodeNextTableIdKey() []byte {
-	return []byte(fmt.Sprintf("%c", idx.keyTypeNextId))
+	return []byte{idx.keyTypeNextId}
 }
 
 func (idx *Index) encodeTableKey(tableId int) []byte {
-	return []byte(fmt.Sprintf("%c%d", idx.keyTypeTable, tableId))
+	b := make([]byte, 0, 1+11)
+	b = append(b, idx.keyTypeTable)
+	b = strconv.AppendInt(b, int64(tableId), 10)
+	return b
 }
 
 func encodeTableValue(info TableInfo) []byte {
@@ -89,38 +131,29 @@ func encodeInvertedValue(docids []string) []byte {
 }
 
 func decodeInvertedValue(data []byte) []string {
-	// Each docid is a 8-byte string
-	if len(data)%8 != 0 || len(data) == 0 {
+	// Each docid is an 8-byte string.
+	if len(data) == 0 || len(data)%8 != 0 {
 		return []string{}
 	}
 
 	const size = 8
-	var chunks []string
-	for i := 0; i < len(data); i += size {
-		end := i + size
-		if end > len(data) {
-			end = len(data)
-		}
-		chunks = append(chunks, string(data[i:end]))
+	chunks := make([]string, 0, len(data)/size)
+	for i := 0; i+size <= len(data); i += size {
+		chunks = append(chunks, string(data[i:i+size]))
 	}
 	return chunks
 }
 
 func decodeInvertedValueStr(data string) []string {
-	// Each docid is a 8-byte string
-	if len(data)%8 != 0 || len(data) == 0 {
+	// Each docid is an 8-byte string.
+	if len(data) == 0 || len(data)%8 != 0 {
 		return []string{}
 	}
 
 	const size = 8
-	var chunks []string
-	for i := 0; i < len(data); i += size {
-		end := i + size
-		if end > len(data) {
-			end = len(data)
-		}
-		chunks = append(chunks, data[i:end])
+	chunks := make([]string, 0, len(data)/size)
+	for i := 0; i+size <= len(data); i += size {
+		chunks = append(chunks, data[i:i+size])
 	}
-
 	return chunks
 }

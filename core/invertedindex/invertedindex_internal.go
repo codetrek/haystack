@@ -12,24 +12,26 @@ import (
 // documents and flush later.
 func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
 	cache := idx.getPendingWrite(tableId)
+	now := time.Now() // one timestamp for the whole update (per-keyword time.Now is hot)
 	for _, kw := range keywords {
 		// Add to write cache to merge with other documents and flush later. docid may be
 		// duplicated; however for performance we don't check for duplicates here — all
 		// duplicates will be merged later in the background.
 		cache.InvertedIndex[kw] = relatedDocs{
 			DocIds:    append(cache.InvertedIndex[kw].DocIds, docid),
-			UpdatedAt: time.Now(),
+			UpdatedAt: now,
 		}
 	}
 }
 
 func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
 	w := idx.getPendingDelete(tableId)
+	now := time.Now()
 	for _, kw := range keywords {
 		// Add to delete cache to merge with other documents and flush later.
 		w.InvertedIndex[kw] = relatedDocs{
 			DocIds:    append(w.InvertedIndex[kw].DocIds, docid),
-			UpdatedAt: time.Now(),
+			UpdatedAt: now,
 		}
 	}
 }
