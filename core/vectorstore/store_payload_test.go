@@ -34,10 +34,12 @@ func TestStore_Put_NilPayload_GetEmpty(t *testing.T) {
 
 func TestStore_Payload_SurvivesSealAndMerge(t *testing.T) {
 	s := openTestStore(t, Cosine)
+	b := s.NewBatch()
 	for i := 0; i < 30; i++ {
-		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i), 0, 0},
-			Payload{"n": Int64Value(int64(i))}))
+		b.Put("k"+itoa(i), []float32{float32(i), 0, 0},
+			Payload{"n": Int64Value(int64(i))})
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	_, got, found, err := s.Get("k5")

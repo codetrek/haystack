@@ -64,11 +64,7 @@ func TestStore_DefaultIndex_ExistsAndSearchCorrect(t *testing.T) {
 		}
 		return v
 	}
-	for i := 0; i < 120; i++ {
-		v := randVec()
-		requireNoError(t, s.Put("d-"+itoa(i), v, nil))
-		vecs[s.idToDoc["d-"+itoa(i)]] = append([]float32(nil), v...)
-	}
+	batchPutVecs(t, s, "d-", 120, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 
@@ -99,10 +95,6 @@ func TestStore_CreateVectorIndex_BruteThenConverges(t *testing.T) {
 	rng := rand.New(rand.NewSource(13))
 	dim := 16
 	vecs := make(map[int64][]float32)
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -111,18 +103,12 @@ func TestStore_CreateVectorIndex_BruteThenConverges(t *testing.T) {
 		return v
 	}
 	// Two sealed segments + a head, all under the default index.
-	for i := 0; i < 80; i++ {
-		put("a-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "a-", 80, randVec, vecs)
 	requireNoError(t, s.Seal())
-	for i := 0; i < 80; i++ {
-		put("b-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "b-", 80, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
-	for i := 0; i < 20; i++ {
-		put("h-"+itoa(i), randVec()) // head
-	}
+	batchPutVecs(t, s, "h-", 20, randVec, vecs) // head
 
 	// Create a SECOND index (same metric, different params). It is born pending for
 	// every existing sealed segment → immediately queryable via brute fallback.
@@ -193,9 +179,11 @@ func TestStore_IndexLag_CountsPendingSegments(t *testing.T) {
 		}
 		return v
 	}
+	b := s.NewBatch()
 	for i := 0; i < 40; i++ {
-		requireNoError(t, s.Put("a-"+itoa(i), randVec(), nil))
+		b.Put("a-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 
@@ -227,10 +215,6 @@ func TestStore_DropVectorIndex_LeavesOthersIntact(t *testing.T) {
 	rng := rand.New(rand.NewSource(41))
 	dim := 16
 	vecs := make(map[int64][]float32)
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -238,9 +222,7 @@ func TestStore_DropVectorIndex_LeavesOthersIntact(t *testing.T) {
 		}
 		return v
 	}
-	for i := 0; i < 100; i++ {
-		put("d-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "d-", 100, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
 	requireNoError(t, s.WaitForIndex())
@@ -309,13 +291,7 @@ func TestStore_Recover_RestoresAllIndexesAndResumesPending(t *testing.T) {
 	{
 		s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
 		requireNoError(t, err)
-		put := func(id string, v []float32) {
-			requireNoError(t, s.Put(id, v, nil))
-			vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-		}
-		for i := 0; i < 60; i++ {
-			put("a-"+itoa(i), randVec())
-		}
+		batchPutVecs(t, s, "a-", 60, randVec, vecs)
 		requireNoError(t, s.Seal()) // seg 1 (default builds N=1 graph)
 		requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
 		requireNoError(t, s.WaitForIndex()) // both indexes built for seg 1
@@ -357,10 +333,6 @@ func TestStore_Merge_BuildsAllIndexGraphsPerOutput(t *testing.T) {
 	rng := rand.New(rand.NewSource(71))
 	dim := 16
 	vecs := make(map[int64][]float32)
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -368,9 +340,7 @@ func TestStore_Merge_BuildsAllIndexGraphsPerOutput(t *testing.T) {
 		}
 		return v
 	}
-	for i := 0; i < 100; i++ {
-		put("m-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "m-", 100, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{Type: "hnsw", Metric: Cosine, M: 8}))
 	requireNoError(t, s.WaitForIndex()) // seg 1 indexed in BOTH default and aux
@@ -413,10 +383,6 @@ func TestStore_RebuildVectorIndex_DropsAndReconverges(t *testing.T) {
 	rng := rand.New(rand.NewSource(81))
 	dim := 16
 	vecs := make(map[int64][]float32)
-	put := func(id string, v []float32) {
-		requireNoError(t, s.Put(id, v, nil))
-		vecs[s.idToDoc[id]] = append([]float32(nil), v...)
-	}
 	randVec := func() []float32 {
 		v := make([]float32, dim)
 		for d := range v {
@@ -424,9 +390,7 @@ func TestStore_RebuildVectorIndex_DropsAndReconverges(t *testing.T) {
 		}
 		return v
 	}
-	for i := 0; i < 90; i++ {
-		put("r-"+itoa(i), randVec())
-	}
+	batchPutVecs(t, s, "r-", 90, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	if l := s.IndexLag("default"); l.PendingSegments != 0 {

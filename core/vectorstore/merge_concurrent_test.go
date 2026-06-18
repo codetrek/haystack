@@ -17,11 +17,17 @@ func TestMerge_DeleteDuringWindow_NotResurrected(t *testing.T) {
 	dim := 8
 	randVec := func() []float32 { return randVecN(rng, dim) }
 	live := map[int64][]float32{}
+	b := s.NewBatch()
+	keys := make([]string, 30)
+	vs := make([][]float32, 30)
 	for i := 0; i < 30; i++ {
-		id := "d-" + itoa(i)
-		v := randVec()
-		requireNoError(t, s.Put(id, v, nil))
-		live[s.idToDoc[id]] = v
+		keys[i] = "d-" + itoa(i)
+		vs[i] = randVec()
+		b.Put(keys[i], vs[i], nil)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 30; i++ {
+		live[s.idToDoc[keys[i]]] = vs[i]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
@@ -145,11 +151,17 @@ func TestMerge_DeleteDuringWindow_DurableAcrossRestart(t *testing.T) {
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(22))
 	live := map[int64][]float32{}
+	b := s.NewBatch()
+	keys := make([]string, 30)
+	vs := make([][]float32, 30)
 	for i := 0; i < 30; i++ {
-		id := "d-" + itoa(i)
-		v := randVecN(rng, 8)
-		requireNoError(t, s.Put(id, v, nil))
-		live[s.idToDoc[id]] = v
+		keys[i] = "d-" + itoa(i)
+		vs[i] = randVecN(rng, 8)
+		b.Put(keys[i], vs[i], nil)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 30; i++ {
+		live[s.idToDoc[keys[i]]] = vs[i]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

@@ -27,11 +27,7 @@ func TestStore_Recover_PreservesNonPrimaryMetric(t *testing.T) {
 		}
 		return v
 	}
-	for i := 0; i < 150; i++ {
-		v := randVec()
-		requireNoError(t, s.Put("v-"+itoa(i), v, nil))
-		vecs[s.idToDoc["v-"+itoa(i)]] = append([]float32(nil), v...)
-	}
+	batchPutVecs(t, s, "v-", 150, randVec, vecs)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.CreateVectorIndex("euclid", VectorIndexConfig{
 		Type: "hnsw", Metric: Euclidean, M: 16, EfConstruction: 200, EfSearch: 64,

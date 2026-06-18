@@ -50,6 +50,10 @@ func TestPackLiveDocs_BinPacksAndCarriesPayload(t *testing.T) {
 		requireNoError(t, writeSealedSegment(dir, seg, nil))
 		ss, err := openSealedSegment(dir, DotProduct, 1, nil)
 		requireNoError(t, err)
+		// Release the payload/vectors mmap before t.TempDir's RemoveAll (registered by
+		// the t.TempDir() above, so this LIFO cleanup runs first): Windows refuses to
+		// delete a still-mapped file.
+		t.Cleanup(func() { ss.close() })
 		return ss
 	}
 	a := mk([]string{"a0", "a1", "a2"}, [][]float32{{1, 0}, {0, 1}, {1, 1}})
@@ -103,7 +107,8 @@ func TestPackLiveDocs_ExcludesTombstoned(t *testing.T) {
 	requireNoError(t, writeSealedSegment(dir, seg, nil))
 	ss, err := openSealedSegment(dir, DotProduct, 1, nil)
 	requireNoError(t, err)
-	ss.markTombLocked(1) // tombstone "y" (in-memory; packLiveDocs reads eachLive)
+	t.Cleanup(func() { ss.close() }) // release the mmap before t.TempDir RemoveAll (Windows)
+	ss.markTombLocked(1)             // tombstone "y" (in-memory; packLiveDocs reads eachLive)
 
 	buckets, moved, err := packLiveDocs([]*sealedSegment{ss}, DotProduct, 50)
 	requireNoError(t, err)
@@ -157,11 +162,17 @@ func TestMerge_CompactOfOne(t *testing.T) {
 		return v
 	}
 	live := map[int64][]float32{}
+	b := s.NewBatch()
+	keys := make([]string, 40)
+	vs := make([][]float32, 40)
 	for i := 0; i < 40; i++ {
-		id := "d-" + itoa(i)
-		v := randVec()
-		requireNoError(t, s.Put(id, v, nil))
-		live[s.idToDoc[id]] = v
+		keys[i] = "d-" + itoa(i)
+		vs[i] = randVec()
+		b.Put(keys[i], vs[i], nil)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 40; i++ {
+		live[s.idToDoc[keys[i]]] = vs[i]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

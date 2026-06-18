@@ -117,9 +117,11 @@ func TestBatch_CoalesceLastWins(t *testing.T) {
 func TestBatch_DeleteHeadAndSealed(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	rng := rand.New(rand.NewSource(9))
+	b0 := s.NewBatch()
 	for i := 0; i < 40; i++ {
-		requireNoError(t, s.Put("seal-"+itoa(i), batchRandVec(rng, 16), nil))
+		b0.Put("seal-"+itoa(i), batchRandVec(rng, 16), nil)
 	}
+	requireNoError(t, b0.Commit())
 	requireNoError(t, s.Seal()) // seal-* now in a sealed segment
 	requireNoError(t, s.Put("head-0", batchRandVec(rng, 16), nil))
 

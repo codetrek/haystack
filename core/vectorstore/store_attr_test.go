@@ -107,23 +107,32 @@ func TestSearch_Filter_BruteSFloor_HeadAndSealed_MatchesOracle(t *testing.T) {
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
 	color := func(i int) string { return []string{"red", "blue", "green"}[i%3] }
-	put := func(i int) {
-		v := []float32{float32(i%7) + 1, float32((i * 3) % 11), float32((i * 5) % 13)}
-		pl := Payload{"color": StringValue(color(i)), "n": Int64Value(int64(i))}
-		requireNoError(t, s.Put("k"+itoa(i), v, pl))
-		doc := s.idToDoc["k"+itoa(i)]
-		vecs[doc] = v
-		pls[doc] = pl
+	putBatch := func(lo, hi int) {
+		b := s.NewBatch()
+		keys := make([]string, 0, hi-lo)
+		vs := make([][]float32, 0, hi-lo)
+		ps := make([]Payload, 0, hi-lo)
+		for i := lo; i < hi; i++ {
+			v := []float32{float32(i%7) + 1, float32((i * 3) % 11), float32((i * 5) % 13)}
+			pl := Payload{"color": StringValue(color(i)), "n": Int64Value(int64(i))}
+			id := "k" + itoa(i)
+			b.Put(id, v, pl)
+			keys = append(keys, id)
+			vs = append(vs, v)
+			ps = append(ps, pl)
+		}
+		requireNoError(t, b.Commit())
+		for j, id := range keys {
+			doc := s.idToDoc[id]
+			vecs[doc] = vs[j]
+			pls[doc] = ps[j]
+		}
 	}
 	// 24 docs into a sealed indexed segment, 12 in the head.
-	for i := 0; i < 24; i++ {
-		put(i)
-	}
+	putBatch(0, 24)
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
-	for i := 24; i < 36; i++ {
-		put(i)
-	}
+	putBatch(24, 36)
 	// Delete a matching doc that lives in the sealed segment (its stale posting sits
 	// in the immutable attr bitmap; only the tomb-AND suppresses it).
 	requireNoError(t, s.Delete("k0")) // k0 is "red", n=0, in the sealed segment
@@ -170,17 +179,24 @@ func TestSearch_Filter_AfterCompact_DeclsCarried(t *testing.T) {
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
-	put := func(i int, color string) {
+	b := s.NewBatch()
+	keys := make([]string, 0, 20)
+	vs := make([][]float32, 0, 20)
+	ps := make([]Payload, 0, 20)
+	for i := 0; i < 20; i++ {
 		id := "a" + itoa(i)
 		v := []float32{float32(i%7) + 1, float32((i * 3) % 11), float32((i * 5) % 13)}
-		pl := Payload{"color": StringValue(color)}
-		requireNoError(t, s.Put(id, v, pl))
-		doc := s.idToDoc[id]
-		vecs[doc] = v
-		pls[doc] = pl
+		pl := Payload{"color": StringValue([]string{"red", "blue"}[i%2])}
+		b.Put(id, v, pl)
+		keys = append(keys, id)
+		vs = append(vs, v)
+		ps = append(ps, pl)
 	}
-	for i := 0; i < 20; i++ {
-		put(i, []string{"red", "blue"}[i%2])
+	requireNoError(t, b.Commit())
+	for j, id := range keys {
+		doc := s.idToDoc[id]
+		vecs[doc] = vs[j]
+		pls[doc] = ps[j]
 	}
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())

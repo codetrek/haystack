@@ -50,9 +50,11 @@ func TestCompact_ReclaimsHeavyTombstoneSegment(t *testing.T) {
 // TestCompact_NoOpWhenHealthy: nothing to reclaim → Compact is a no-op (segId stable).
 func TestCompact_NoOpWhenHealthy(t *testing.T) {
 	s := openTestStore(t, Cosine)
+	b := s.NewBatch()
 	for i := 0; i < 20; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil))
+		b.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 
@@ -155,7 +157,15 @@ func TestAutoMerge_GrowthTriggersOnSeal(t *testing.T) {
 // WaitGroup discipline (no idtable/control-store teardown racing a Put). -race +
 // repetition is the real gate.
 func TestAutoMerge_CloseRaceNoPanic(t *testing.T) {
-	for iter := 0; iter < 80; iter++ {
+	// This is a probabilistic race (no deterministic seam) — it needs many rounds
+	// to surface a Close-vs-Compact Add-after-Wait. Full count runs on Linux; under
+	// -short (macOS/Windows CI, where each store lifecycle pays a heavy FS/AV tax) a
+	// reduced count keeps decent coverage without dominating the run.
+	iters := 80
+	if testing.Short() {
+		iters = 20
+	}
+	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
 		s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
 		requireNoError(t, err)

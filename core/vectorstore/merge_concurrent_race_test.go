@@ -19,7 +19,14 @@ import (
 // DotProduct metric is used so Get round-trips the exact re-Put vector (identity
 // prepare/restore).
 func TestMerge_ConcurrentDeletePutDuringInFlightMerge(t *testing.T) {
-	for iter := 0; iter < 40; iter++ {
+	// A deterministic in-window seam (testHookInMergeWindow) makes EVERY iteration
+	// hit the race window, so iterations only add RNG-seed variety — a handful is
+	// plenty under -short (macOS/Windows CI, heavy per-store FS tax); full on Linux.
+	iters := 40
+	if testing.Short() {
+		iters = 5
+	}
+	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
 		s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: DotProduct})
 		requireNoError(t, err)

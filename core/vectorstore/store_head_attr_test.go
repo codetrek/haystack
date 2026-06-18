@@ -33,13 +33,23 @@ func TestSearch_HeadLeg_UsesHeadAttr_MatchesOracle(t *testing.T) {
 	vecs := map[int64][]float32{}
 	pls := map[int64]Payload{}
 	colors := []string{"red", "blue", "green"}
+	b := s.NewBatch()
+	keys := make([]string, 60)
+	vs := make([][]float32, 60)
+	ps := make([]Payload, 60)
 	for i := 0; i < 60; i++ {
 		v := []float32{float32(i%7) + 1, float32((i+2)%5) + 1, float32((i+4)%3) + 1}
 		pl := Payload{"color": StringValue(colors[i%3]), "n": Int64Value(int64(i))}
-		requireNoError(t, s.Put("k"+itoa(i), v, pl))
-		doc := s.idToDoc["k"+itoa(i)]
-		vecs[doc] = v
-		pls[doc] = pl
+		keys[i] = "k" + itoa(i)
+		vs[i] = v
+		ps[i] = pl
+		b.Put(keys[i], v, pl)
+	}
+	requireNoError(t, b.Commit())
+	for i := 0; i < 60; i++ {
+		doc := s.idToDoc[keys[i]]
+		vecs[doc] = vs[i]
+		pls[doc] = ps[i]
 	}
 
 	q := vecs[s.idToDoc["k1"]]

@@ -27,13 +27,31 @@ func reopenUnclean(t *testing.T, s *Store, kvStore kv.Store) *Store {
 	return s2
 }
 
-// crashRelease drops the OS-held file handle a process kill would release — the
-// bbolt control-DB flock — so a same-process reopen can take it. It does NOT
-// commit the idtable or quiesce in-flight builds: that is the whole point of a
-// crash sim (lazy/in-memory state must be lost). Safe to call when the control
-// store is already closed (a test that closed it by hand).
+// crashRelease drops the OS-held resources a process kill would release — the
+// bbolt control-DB flock AND every sealed-segment mmap — so a same-process reopen
+// over the same dir can take the flock and, on Windows, delete/sweep the segment
+// files the dead process had mapped (Windows refuses to unlink a still-mapped
+// file; POSIX does not, which is why this only bites on Windows). It does NOT
+// commit the idtable or clear the in-memory head: that lazy/in-memory state must
+// be lost — the whole point of a crash sim.
+//
+// Freeing the mmaps in-process is only safe once no goroutine is still reading
+// them, so we first quiesce any in-flight builder/merger under s.mu exactly as
+// Close() does (a real kill is instant; here the goroutines are still live). This
+// lets an in-flight build finish and re-commit its durable, crash-recoverable
+// segIndexed state — but the crash-sim invariant is untouched: we never call
+// alloc.Close(), so the lazy idtable batch + in-memory head are still discarded.
+// Safe to call when the control store is already closed (a test that closed it by
+// hand): the mmap free and a second cs.Close() are both no-ops.
 func crashRelease(t *testing.T, s *Store) {
 	t.Helper()
+	s.mu.Lock()
+	s.closing = true // refuse new builds/merges, mirror Close() so the free is race-free
+	s.waitQuiescentLocked()
+	for _, ss := range s.sealed {
+		ss.close()
+	}
+	s.mu.Unlock()
 	_ = s.cs.Close()
 }
 

@@ -13,13 +13,15 @@ func sealedStoreWithAux(t *testing.T) *Store {
 	t.Helper()
 	s := openTestStore(t, Cosine)
 	rng := rand.New(rand.NewSource(55))
+	b := s.NewBatch()
 	for i := 0; i < 40; i++ {
 		v := make([]float32, 8)
 		for d := range v {
 			v[d] = rng.Float32()
 		}
-		requireNoError(t, s.Put("d-"+itoa(i), v, nil))
+		b.Put("d-"+itoa(i), v, nil)
 	}
+	requireNoError(t, b.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.CreateVectorIndex("aux", VectorIndexConfig{
 		Type: "hnsw", Metric: Cosine, M: 16, EfConstruction: 200, EfSearch: 64,
