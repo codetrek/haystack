@@ -15,6 +15,12 @@ const (
 	DefaultKeyTypeNextId = byte(22)
 
 	InvalidId = -1
+
+	// docIDSize is the fixed on-disk width of a doc id. Row values are docids
+	// concatenated with NO delimiter (see encodeInvertedValue), so the decoder
+	// chunks the value into docIDSize-byte ids — a docid of any other length
+	// corrupts every subsequent chunk. The add/remove paths validate against this.
+	docIDSize = 8
 )
 
 func isKeyType(key string, keyType byte) bool {
@@ -61,12 +67,19 @@ func (idx *Index) encodeInvertedKeyPrefix(tableId int, keyword string) []byte {
 }
 
 func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int) []byte {
-	// "<prefix><doccount>|<tick>" where tick is the current micros.
-	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19)
+	// "<prefix><doccount>|<tick>.<seq>" where tick is the current micros and seq
+	// is a per-Index monotonic counter. tick alone is not unique within a single
+	// microsecond, so two rows of the same (tableId,keyword,doccount) could get
+	// byte-identical keys and overwrite each other; the seq suffix makes every
+	// encoded key unique. decode treats everything after the last '|' as the
+	// opaque tick, so this does not change the on-disk format contract.
+	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19+1+20)
 	b = idx.appendInvertedKeyPrefix(b, tableId, keyword)
 	b = strconv.AppendInt(b, int64(doccount), 10)
 	b = append(b, '|')
 	b = strconv.AppendInt(b, time.Now().UnixMicro(), 10)
+	b = append(b, '.')
+	b = strconv.AppendUint(b, idx.keySeq.Add(1), 10)
 	return b
 }
 

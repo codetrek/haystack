@@ -2,6 +2,7 @@ package invertedindex
 
 import (
 	"context"
+	"sync/atomic"
 	"time"
 
 	"github.com/codetrek/haystack/core/kv"
@@ -136,6 +137,14 @@ type Index struct {
 
 	// keywords merger
 	merger *keywordsMerger
+
+	// keySeq disambiguates inverted-index keys written within the same
+	// microsecond: the tick (time.Now().UnixMicro()) is otherwise the sole
+	// disambiguator for two rows of the same (tableId,keyword,doccount), so two
+	// such writes in one microsecond would collide and one would overwrite the
+	// other (data loss, reachable in the merger's rewrite loop). Appended to the
+	// key tail, which decode treats as opaque — no on-disk format break.
+	keySeq atomic.Uint64
 }
 
 // New creates and starts a new Index.
