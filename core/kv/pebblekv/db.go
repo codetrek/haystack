@@ -217,6 +217,24 @@ func (d *PebbleDB) NewBatch(maxBatchSize int32) kv.Batch {
 	}
 }
 
+// keyUpperBound returns the smallest key strictly greater than every key that
+// begins with prefix — the correct exclusive upper bound for a prefix scan. It
+// always copies (it never aliases or mutates prefix, unlike append(prefix, ...))
+// and correctly handles prefixes ending in 0xff. A nil result means the prefix
+// is all-0xff and therefore has no finite upper bound (the caller's prefix check
+// terminates the scan instead).
+func keyUpperBound(prefix []byte) []byte {
+	end := make([]byte, len(prefix))
+	copy(end, prefix)
+	for i := len(end) - 1; i >= 0; i-- {
+		if end[i] != 0xff {
+			end[i]++
+			return end[:i+1]
+		}
+	}
+	return nil
+}
+
 // Scan performs a range scan over the database
 // key and value will INVALIDATE after the callback
 // so make sure to copy them if you need to use them later
@@ -226,10 +244,13 @@ func (d *PebbleDB) Scan(prefix []byte, cb func(key, value []byte) bool) error {
 		return fmt.Errorf("database is closed")
 	}
 
-	// Create an iterator with the prefix
+	// Create an iterator with the prefix. The upper bound must be the prefix
+	// successor (keyUpperBound), NOT append(prefix, 0xff): the latter excludes
+	// any key of the form prefix+0xff+... — e.g. an inverted-index keyword
+	// containing 0xff right after a search prefix — silently dropping it.
 	iter, err := d.db.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
-		UpperBound: append(prefix, 0xff),
+		UpperBound: keyUpperBound(prefix),
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create iterator: %v", err)

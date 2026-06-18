@@ -15,6 +15,12 @@ const (
 	DefaultKeyTypeNextId = byte(22)
 
 	InvalidId = -1
+
+	// docIDSize is the fixed on-disk width of a doc id. Row values are docids
+	// concatenated with NO delimiter (see encodeInvertedValue), so the decoder
+	// chunks the value into docIDSize-byte ids — a docid of any other length
+	// corrupts every subsequent chunk. The add/remove paths validate against this.
+	docIDSize = 8
 )
 
 func isKeyType(key string, keyType byte) bool {
@@ -61,12 +67,19 @@ func (idx *Index) encodeInvertedKeyPrefix(tableId int, keyword string) []byte {
 }
 
 func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int) []byte {
-	// "<prefix><doccount>|<tick>" where tick is the current micros.
-	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19)
+	// "<prefix><doccount>|<tick>.<seq>" where tick is the current micros and seq
+	// is a per-Index monotonic counter. tick alone is not unique within a single
+	// microsecond, so two rows of the same (tableId,keyword,doccount) could get
+	// byte-identical keys and overwrite each other; the seq suffix makes every
+	// encoded key unique. decode treats everything after the last '|' as the
+	// opaque tick, so this does not change the on-disk format contract.
+	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19+1+20)
 	b = idx.appendInvertedKeyPrefix(b, tableId, keyword)
 	b = strconv.AppendInt(b, int64(doccount), 10)
 	b = append(b, '|')
 	b = strconv.AppendInt(b, time.Now().UnixMicro(), 10)
+	b = append(b, '.')
+	b = strconv.AppendUint(b, idx.keySeq.Add(1), 10)
 	return b
 }
 
@@ -77,34 +90,33 @@ func (idx *Index) decodeInvertedKey(key string) (int, string, int, string) {
 
 	key = key[1:]
 
-	// Expect exactly "<tableId>|<keyword>|<doccount>|<tick>" (3 separators, no more).
-	// Parse by locating the separators instead of strings.Split, which allocates a
-	// []string on every row scanned by the merger.
-	i1 := strings.IndexByte(key, '|')
-	if i1 < 0 {
+	// Key layout: "<tableId>|<keyword>|<doccount>|<tick>". tableId, doccount and
+	// tick are numeric and never contain the '|' delimiter; the keyword is
+	// arbitrary indexed text that CAN contain '|'. So anchor on the FIRST '|'
+	// (end of tableId) and the LAST TWO '|' (start of doccount and tick) and take
+	// everything in between as the keyword verbatim. A "exactly 3 separators"
+	// parse instead rejects '|'-keywords (returns InvalidId), which makes the
+	// background merger regroup them under an empty keyword and rewrite their data
+	// under a garbage key — orphaning the postings permanently. Located via
+	// IndexByte (no allocation), keeping the merger's hot path alloc-free.
+	first := strings.IndexByte(key, '|')
+	last := strings.LastIndexByte(key, '|')
+	if first < 0 || last <= first {
 		return InvalidId, "", 0, ""
 	}
-	i2 := strings.IndexByte(key[i1+1:], '|')
-	if i2 < 0 {
+	prev := strings.LastIndexByte(key[:last], '|')
+	if prev <= first {
+		// Fewer than three delimiters: not a well-formed inverted-index key.
 		return InvalidId, "", 0, ""
-	}
-	i2 += i1 + 1
-	i3 := strings.IndexByte(key[i2+1:], '|')
-	if i3 < 0 {
-		return InvalidId, "", 0, ""
-	}
-	i3 += i2 + 1
-	if strings.IndexByte(key[i3+1:], '|') >= 0 {
-		return InvalidId, "", 0, "" // a 5th part — same rejection as the old len(parts)!=4
 	}
 
-	tableId := parseId(key[:i1])
-	keyword := key[i1+1 : i2]
-	doccount, err := strconv.Atoi(key[i2+1 : i3])
+	tableId := parseId(key[:first])
+	keyword := key[first+1 : prev]
+	doccount, err := strconv.Atoi(key[prev+1 : last])
 	if err != nil {
 		return InvalidId, "", 0, ""
 	}
-	tick := key[i3+1:]
+	tick := key[last+1:]
 
 	return tableId, keyword, doccount, tick
 }

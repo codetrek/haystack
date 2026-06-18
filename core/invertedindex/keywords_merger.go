@@ -218,6 +218,14 @@ func (idx *Index) mergeKeywordsIndex(m merging, maxKeywordIndexSize int) merging
 		var next *invertedIndexEntry
 		idx.db.ScanRange([]byte(nextIter), append([]byte{idx.keyTypeRow}, 0xff), func(key []byte, value []byte) bool {
 			tableId, keyword, doccount, _ := idx.decodeInvertedKey(string(key))
+			if tableId == InvalidId {
+				// Skip undecodable / garbage rows (legacy "|"-keyword corruption
+				// or any malformed key). Folding a tableId==-1 row into the running
+				// group would contaminate a real keyword's postings, and it also
+				// removes the collision with the lastTableId==-1 "first row"
+				// sentinel below (valid tableIds are always >= 0).
+				return true
+			}
 			if lastTableId == -1 {
 				lastTableId = tableId
 				current.Keyword = keyword
@@ -270,9 +278,11 @@ func (idx *Index) mergeKeywordsIndex(m merging, maxKeywordIndexSize int) merging
 			return false
 		})
 
-		if current != nil && current.Keyword != "" {
-			// we've reached the end of the database
-			// so we need to merge the current keyword
+		if current != nil && len(current.Rows) > 0 {
+			// Flush the final keyword group. Keying off len(Rows) (not the old
+			// `current.Keyword != ""`) so a legitimate EMPTY-keyword group at the
+			// scan tail is compacted instead of silently dropped, while the
+			// initial zero-row sentinel current is still skipped.
 			pending = append(pending, current)
 		}
 

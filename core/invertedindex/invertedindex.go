@@ -63,10 +63,18 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 		DocIds: make(map[string]struct{}),
 	}
 
-	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, key), func(key, value []byte) bool {
-		if len(value)%8 == 0 {
-			for i := 0; i < len(value); i += 8 {
-				results.DocIds[string(value[i:i+8])] = struct{}{}
+	want := key
+	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, key), func(k, value []byte) bool {
+		// The prefix "<tid>|<key>|" is ALSO a byte-prefix of rows for any keyword
+		// "key|..." (keywords may contain the '|' delimiter), so re-verify the
+		// decoded keyword is exactly the requested one before counting its docids
+		// — otherwise GetDocs("a") leaks the postings of keyword "a|x".
+		if _, kw, _, _ := idx.decodeInvertedKey(string(k)); kw != want {
+			return true
+		}
+		if len(value)%docIDSize == 0 {
+			for i := 0; i < len(value); i += docIDSize {
+				results.DocIds[string(value[i:i+docIDSize])] = struct{}{}
 			}
 		}
 		return true

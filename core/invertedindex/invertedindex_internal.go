@@ -11,6 +11,16 @@ import (
 // It will add the document to the keyword index cache to merge with other
 // documents and flush later.
 func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
+	// Row values are fixed docIDSize-byte docids concatenated with no delimiter,
+	// so a docid of any other length (including the empty string) corrupts the
+	// value chunking on decode — fabricating/dropping docids that can never be
+	// searched or deleted. Reject at WRITE ingress. (The delete path needs no
+	// such guard: a wrong-length docid in a removal simply matches no stored
+	// 8-byte docid and is a harmless no-op.)
+	if len(docid) != docIDSize {
+		log.Printf("[Inverted] Warning: ignoring add for table %d: docid must be %d bytes, got %d", tableId, docIDSize, len(docid))
+		return
+	}
 	cache := idx.getPendingWrite(tableId)
 	now := time.Now() // one timestamp for the whole update (per-keyword time.Now is hot)
 	for _, kw := range keywords {
@@ -70,6 +80,12 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 	keys := []string{}
 	docids := map[string]struct{}{}
 	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, kw), func(key, value []byte) bool {
+		// The prefix "<tid>|<kw>|" also matches rows of any keyword "kw|..." (the
+		// keyword may contain '|'), so skip rows whose decoded keyword is not
+		// exactly kw — otherwise deleting from "a" would rewrite/destroy "a|x".
+		if _, k, _, _ := idx.decodeInvertedKey(string(key)); k != kw {
+			return true
+		}
 		changed := false
 		tmpids := []string{}
 
@@ -108,17 +124,18 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 			delete(docids, id)
 		}
 
-		var key []byte
-		if len(keys) > 0 {
-			key = []byte(keys[0])
-			keys = keys[1:]
-		} else {
-			key = idx.encodeInvertedKey(tableId, kw, len(docs))
-		}
+		// Always re-encode under a fresh key carrying the TRUE doccount. Reusing
+		// an original key (keys[0]) would keep its stale, inflated doccount, which
+		// the merger's `doccount > maxSize/2` guard then quarantines from
+		// compaction forever. encodeInvertedKey's seq suffix keeps the new key
+		// distinct from the originals, all of which are deleted below.
+		key := idx.encodeInvertedKey(tableId, kw, len(docs))
 
 		writeInvertedIndex(batch, tableId, kw, docs, key)
 	}
 
+	// Delete every original row we collected; their surviving docids were
+	// rewritten under fresh, correctly-counted keys above.
 	for _, key := range keys {
 		batch.Delete([]byte(key))
 	}

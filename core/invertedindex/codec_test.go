@@ -119,7 +119,10 @@ func TestDecodeInvertedKeyErrors(t *testing.T) {
 		{"empty key", ""},
 		{"wrong key type prefix", string([]byte{byte(11)}) + "1|word|5|1234"},
 		{"too few parts", string([]byte{DefaultKeyTypeRow}) + "1|word"},
-		{"too many parts", string([]byte{DefaultKeyTypeRow}) + "1|word|5|1234|extra"},
+		// NOTE: a key with "extra" '|' (e.g. "1|word|5|1234|extra") is NOT an
+		// error — it is a valid row for the keyword "word|5" (keywords may contain
+		// the '|' delimiter). That round-trip is covered by
+		// TestDecodeInvertedKey_KeywordWithDelimiter.
 		{"non-numeric doccount", string([]byte{DefaultKeyTypeRow}) + "1|word|abc|1234"},
 	}
 

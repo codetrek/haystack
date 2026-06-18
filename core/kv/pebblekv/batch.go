@@ -60,9 +60,19 @@ func (b *PebbleBatch) DeleteRange(start, end []byte) error {
 
 // DeletePrefix deletes all keys with the given prefix in the batch
 func (b *PebbleBatch) DeletePrefix(prefix []byte) error {
+	// The exclusive end must be the prefix successor (keyUpperBound), NOT
+	// append(prefix, 0xff): the latter leaves any key of the form prefix+0xff+...
+	// undeleted (e.g. DeleteTable could not remove a keyword whose first byte is
+	// 0xff). Mirrors the same fix in Scan.
+	end := keyUpperBound(prefix)
+	if end == nil {
+		// prefix is all-0xff (unreachable for the inverted index's key-type
+		// prefixes, which start with a small key-type byte); best-effort bound.
+		end = append(append([]byte{}, prefix...), 0xff)
+	}
 	// Call the underlying writer directly (not the public DeleteRange wrapper)
 	// so the auto-commit counter advances by exactly one per DeletePrefix.
-	if err := b.batch.DeleteRange(prefix, append(prefix, 0xFF), nil); err != nil {
+	if err := b.batch.DeleteRange(prefix, end, nil); err != nil {
 		return err
 	}
 
