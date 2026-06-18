@@ -58,6 +58,14 @@ func splitIntoRuns(s string) []textRun {
 // It splits the text into CJK and non-CJK runs, tokenizes each with the
 // appropriate tokenizer, and returns merged, deduplicated, sorted results.
 func (t *MixedTokenizer) TokenizeForIndex(str string) []string {
+	// Strip NUL/C0 control bytes up front. A NUL is not a CJK rune, so without
+	// this it would fragment a CJK run in splitIntoRuns (中\x00国 -> "中","国")
+	// before CJKTokenizer's own normalization could remove it, reaching the
+	// index as split tokens. Stripping here keeps boundaries byte-identical to
+	// gse on real (control-free) text while making the cedar-sentinel
+	// divergence unreachable. It is a no-op for the ASCII regex path.
+	str = normalizeForSegmentation(str)
+
 	if !containsCJK(str) {
 		// Fast path: pure ASCII text
 		return t.ascii.TokenizeForIndex(str)
@@ -95,6 +103,10 @@ func (t *MixedTokenizer) TokenizeForIndex(str string) []string {
 // TokenizeForSearch tokenizes text for searching, handling mixed ASCII and CJK content.
 // It splits the text into runs and delegates to the appropriate tokenizer for each.
 func (t *MixedTokenizer) TokenizeForSearch(s string, exactMatching bool) ([]string, []string) {
+	// See TokenizeForIndex: strip NUL/C0 controls so a NUL cannot fragment a CJK
+	// run before CJKTokenizer normalizes it.
+	s = normalizeForSegmentation(s)
+
 	if !containsCJK(s) {
 		// Fast path: pure ASCII text
 		return t.ascii.TokenizeForSearch(s, exactMatching)
