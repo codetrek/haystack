@@ -2,7 +2,6 @@ package documents
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"strings"
 )
@@ -40,9 +39,24 @@ func parseCollectionID(key string) int {
 	return v
 }
 
+// appendDocKey builds "<prefix><collectionID>|<docid>" — the shape shared by the
+// document path/meta/words key encoders. Hand-rolled (vs fmt.Sprintf) since these
+// are on the per-document-save and per-search-result paths. The prefix byte is
+// appended raw (1 byte): the default prefixes are <128 so this is byte-identical
+// to the old "%c%d|%s" form, and a >=128 prefix never round-tripped anyway (decode
+// compares a single byte, while "%c" would UTF-8-encode it to two).
+func appendDocKey(prefix byte, collectionID int, docid string) []byte {
+	b := make([]byte, 0, 1+11+1+len(docid))
+	b = append(b, prefix)
+	b = strconv.AppendInt(b, int64(collectionID), 10)
+	b = append(b, '|')
+	b = append(b, docid...)
+	return b
+}
+
 // encodeDocumentPathKey encodes the key for a document path entry.
 func (s *Store) encodeDocumentPathKey(collectionID int, docid string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocPath, collectionID, docid))
+	return appendDocKey(s.keyTypeDocPath, collectionID, docid)
 }
 
 // decodeDocumentPathKey decodes a document path key, returning (collectionID, docid).
@@ -61,7 +75,7 @@ func (s *Store) decodeDocumentPathKey(key string) (int, string) {
 
 // encodeDocumentMetaKey encodes the key for a document metadata entry.
 func (s *Store) encodeDocumentMetaKey(collectionID int, docid string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocMeta, collectionID, docid))
+	return appendDocKey(s.keyTypeDocMeta, collectionID, docid)
 }
 
 // decodeDocumentMetaKey decodes a document metadata key, returning (collectionID, docid).
@@ -94,7 +108,7 @@ func decodeDocumentMetaValue(data []byte) (*Document, error) {
 
 // encodeDocumentWordsKey encodes the key for a document words entry.
 func (s *Store) encodeDocumentWordsKey(collectionID int, docid string) []byte {
-	return []byte(fmt.Sprintf("%c%d|%s", s.keyTypeDocWords, collectionID, docid))
+	return appendDocKey(s.keyTypeDocWords, collectionID, docid)
 }
 
 // decodeDocumentWordsKey decodes a document words key, returning (collectionID, docid).
@@ -126,7 +140,10 @@ func decodeDocumentWordsValue(data string) []string {
 
 // encodeMetaKey encodes the key for a collection metadata entry.
 func (s *Store) encodeMetaKey(collectionID int) []byte {
-	return []byte(fmt.Sprintf("%c%d", s.keyTypeDocCollection, collectionID))
+	b := make([]byte, 0, 1+11)
+	b = append(b, s.keyTypeDocCollection)
+	b = strconv.AppendInt(b, int64(collectionID), 10)
+	return b
 }
 
 // encodeFTMetaValue serialises a collection record as JSON.

@@ -628,10 +628,7 @@ func (h *hnswIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 			break
 		}
 
-		neighbors, err := h.store.GetNeighbors(c.id, layer)
-		if err != nil {
-			return nil, err
-		}
+		neighbors := h.store.getNeighborsRef(c.id, layer)
 
 		for _, nbId := range neighbors {
 			if visited.seen(nbId) {
@@ -656,11 +653,9 @@ func (h *hnswIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 	}
 
 	// Collect results.
-	out := make([]distItem, results.Len())
-	for i := range out {
-		out[i] = (*results)[i]
-	}
-	return out, nil
+	// results (resultsBuf) is a local heap, unused after this return — hand back its
+	// backing slice directly instead of copying it out.
+	return *results, nil
 }
 
 // searchLayerFiltered is searchLayer with an optional member gate
@@ -720,10 +715,7 @@ func (h *hnswIndex) searchLayerFiltered(query []float32, entryId uint64, ef int,
 			break
 		}
 
-		neighbors, err := h.store.GetNeighbors(c.id, layer)
-		if err != nil {
-			return nil, err
-		}
+		neighbors := h.store.getNeighborsRef(c.id, layer)
 
 		for _, nbId := range neighbors {
 			if visited.seen(nbId) {
@@ -755,11 +747,9 @@ func (h *hnswIndex) searchLayerFiltered(query []float32, entryId uint64, ef int,
 		}
 	}
 
-	out := make([]distItem, results.Len())
-	for i := range out {
-		out[i] = (*results)[i]
-	}
-	return out, nil
+	// results (resultsBuf) is a local heap, unused after this return — hand back its
+	// backing slice directly instead of copying it out.
+	return *results, nil
 }
 
 // selectNeighborsHeuristic selects up to M neighbors using the heuristic

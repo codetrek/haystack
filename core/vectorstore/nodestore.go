@@ -19,6 +19,12 @@ type graphNodeStore interface {
 	PutNode(id uint64, level int, vector []float32, docId int64) error
 	DeleteNode(id uint64) error
 	GetNeighbors(id uint64, layer int) ([]uint64, error)
+	// getNeighborsRef returns the node's layer neighbor slice WITHOUT copying, for
+	// read-only consumers on the search path (searchLayer/searchLayerFiltered). The
+	// caller MUST NOT mutate or retain the slice. Safe because graphs are mutated
+	// only single-threaded during build and are immutable once searched (and
+	// memGraphStore mutations replace the slice rather than editing it in place).
+	getNeighborsRef(id uint64, layer int) []uint64
 	SetNeighbors(id uint64, layer int, neighbors []uint64) error
 	GetEntryPoint() (uint64, int, error)
 	SetEntryPoint(id uint64, maxLayer int) error

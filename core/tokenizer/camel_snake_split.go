@@ -12,16 +12,28 @@ import (
 // 5. beginHANDLEUpdate_document => beginHANDLEUpdate_document, HANDLEUpdate_document, Update_document, document
 // 6. BEGINHandleUpdate_document => BEGINHandleUpdate_document, HandleUpdate_document, Update_document, document
 func CamelSnakeSplit(s string) []string {
-	s = strings.Trim(s, ".-_")
-	if len(s) == 0 {
+	r := camelSnakeSplitInto(nil, s)
+	if r == nil {
 		return []string{}
 	}
+	return r
+}
 
-	var result []string
+// camelSnakeSplitInto appends the camel/snake sub-tokens of s to dst and returns
+// the extended slice (dst is returned unchanged when s is empty). The sub-tokens
+// are slices of s (no copy), so this lets hot callers reuse one buffer across many
+// tokens instead of allocating a fresh result slice per token. CamelSnakeSplit is
+// the allocating convenience wrapper.
+func camelSnakeSplitInto(dst []string, s string) []string {
+	s = strings.Trim(s, ".-_")
+	if len(s) == 0 {
+		return dst
+	}
+
 	var last = rune(s[0])
 	for i, r := range s {
 		if i == 0 {
-			result = append(result, s)
+			dst = append(dst, s)
 			continue
 		}
 
@@ -43,8 +55,8 @@ func CamelSnakeSplit(s string) []string {
 		if len(sub) < 3 {
 			break
 		}
-		result = append(result, sub)
+		dst = append(dst, sub)
 	}
 
-	return result
+	return dst
 }

@@ -216,3 +216,23 @@ func TestSegGraphStore_MemEquivalence(t *testing.T) {
 		}
 	}
 }
+
+// TestSegGraphStore_getNeighborsRef_Guard covers getNeighborsRef's guard branch
+// (out-of-range id / nil-neighbors node) that the search tests never hit, since
+// search only ever passes valid node ids.
+func TestSegGraphStore_getNeighborsRef_Guard(t *testing.T) {
+	g := &segGraphStore{neighbors: []map[int][]uint64{nil}} // node 0 present but nil
+
+	if got := g.getNeighborsRef(5, 0); got != nil { // id >= len(neighbors)
+		t.Errorf("getNeighborsRef(out-of-range) = %v, want nil", got)
+	}
+	if got := g.getNeighborsRef(0, 0); got != nil { // neighbors[0] == nil
+		t.Errorf("getNeighborsRef(nil node) = %v, want nil", got)
+	}
+
+	g.neighbors[0] = map[int][]uint64{0: {7, 8}}
+	got := g.getNeighborsRef(0, 0)
+	if len(got) != 2 || got[0] != 7 || got[1] != 8 {
+		t.Errorf("getNeighborsRef(valid) = %v, want [7 8]", got)
+	}
+}

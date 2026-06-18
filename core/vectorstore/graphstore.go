@@ -95,6 +95,23 @@ func (g *segGraphStore) GetNeighbors(id uint64, layer int) ([]uint64, error) {
 	return cp, nil
 }
 
+// getNeighborsRef returns the layer slice without copying (read-only; see interface).
+// A sealed segment's graph is immutable once searched, so no lock is needed.
+//
+// The returned slice is owned Go heap, NOT mmap. Only the segment's VECTORS
+// (vectors.dat) are mmap'd — those are resolved separately via GetVectorRef. The
+// neighbor TOPOLOGY lives in graph-<name>.dat, which openGraphFile reads into a heap
+// buffer (readWholeFile uses ReadAt, not mmap) and decodes into fresh make([]uint64)
+// slices; segGraphStore.neighbors is []map[int][]uint64 (a Go map can't alias mmap).
+// The graph is built-once / read-only thereafter and the search holds this store for
+// its whole duration, so the ref cannot be reallocated, mutated, or unmapped.
+func (g *segGraphStore) getNeighborsRef(id uint64, layer int) []uint64 {
+	if id >= uint64(len(g.neighbors)) || g.neighbors[id] == nil {
+		return nil
+	}
+	return g.neighbors[id][layer]
+}
+
 func (g *segGraphStore) SetNeighbors(id uint64, layer int, neighbors []uint64) error {
 	if id >= uint64(len(g.neighbors)) || g.neighbors[id] == nil {
 		return fmt.Errorf("segGraphStore: SetNeighbors on unknown node %d", id)
