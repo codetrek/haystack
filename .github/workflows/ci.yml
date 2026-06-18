@@ -21,6 +21,11 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # core/tokenizer/fstcjk/dict.fst is a Git LFS object that go:embed
+          # compiles into the binary; without lfs the working tree holds the
+          # ~130B pointer and the embedded FST is silently corrupt.
+          lfs: true
 
       - name: Set up Go
         uses: actions/setup-go@v5
