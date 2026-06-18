@@ -173,8 +173,13 @@ func TestAutoMerge_CloseRaceNoPanic(t *testing.T) {
 		s.mcfg.Fanout = 2
 		s.mcfg.MergeFloor = 0.99 // almost everything is delete-driven bait
 
-		// Build a few indexed sealed segments so Compact has real merge candidates.
-		for i := 0; i < 12; i++ {
+		// Build a couple of indexed sealed segments so Compact has real merge
+		// candidates: 6 docs / maxSegSize=3 → 2 segments, which is exactly Fanout=2,
+		// and MergeFloor=0.99 makes them delete-driven bait — enough for Compact to
+		// launch a merge (and Add to the WaitGroup) so the Close race is exercised.
+		// Kept minimal per iteration: the race coverage is the iteration COUNT, not the
+		// per-iteration data volume (each store lifecycle pays a heavy FS tax on CI).
+		for i := 0; i < 6; i++ {
 			requireNoError(t, s.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil))
 		}
 		requireNoError(t, s.WaitForIndex())
