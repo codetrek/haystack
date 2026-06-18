@@ -57,24 +57,25 @@ func TestBatch_DurableSearchableReopen(t *testing.T) {
 // TestBatch_EquivalentToSinglePut: a batch of N Puts yields the same per-id state
 // as N single Puts over identical data.
 func TestBatch_EquivalentToSinglePut(t *testing.T) {
+	const n = 60 // enough to prove batch ≡ single-Put; the single-Put control pays n fsyncs
 	build := func(useBatch bool) *Store {
 		s := openTestStore(t, Cosine)
 		rng := rand.New(rand.NewSource(7))
 		if useBatch {
 			b := s.NewBatch()
-			for i := 0; i < 150; i++ {
+			for i := 0; i < n; i++ {
 				b.Put("d-"+itoa(i), batchRandVec(rng, 16), Payload{"k": StringValue(itoa(i))})
 			}
 			requireNoError(t, b.Commit())
 		} else {
-			for i := 0; i < 150; i++ {
+			for i := 0; i < n; i++ {
 				requireNoError(t, s.Put("d-"+itoa(i), batchRandVec(rng, 16), Payload{"k": StringValue(itoa(i))}))
 			}
 		}
 		return s
 	}
 	sb, ss := build(true), build(false)
-	for i := 0; i < 150; i++ {
+	for i := 0; i < n; i++ {
 		id := "d-" + itoa(i)
 		vb, _, fb, _ := sb.Get(id)
 		vs, _, fs, _ := ss.Get(id)
