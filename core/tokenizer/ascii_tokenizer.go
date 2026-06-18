@@ -27,10 +27,13 @@ func (t *ASCIITokenizer) TokenizeForIndex(str string) []string {
 		uniqueWords[strings.ToLower(word)] = struct{}{}
 	}
 
+	var splitBuf []string
 	for _, word := range words {
-		camelSplited := CamelSnakeSplit(word)
+		// Reuse splitBuf across words: the sub-tokens are slices of word and are
+		// copied into uniqueWords by pushWord, so they need not outlive this loop.
+		splitBuf = camelSnakeSplitInto(splitBuf[:0], word)
 
-		for _, word := range camelSplited {
+		for _, word := range splitBuf {
 			pushWord(word)
 		}
 	}
