@@ -81,10 +81,15 @@ func TestSeal_IdtableDurableBeforeHeadClear(t *testing.T) {
 
 	// Put a batch of docs, capturing the docId each string id was assigned.
 	docIDOf := make(map[string]int64)
+	dids := make([]string, 40)
+	db := s.NewBatch()
 	for i := 0; i < 40; i++ {
-		id := "d-" + itoa(i)
-		requireNoError(t, s.Put(id, randVec(), nil))
-		docIDOf[id] = s.idToDoc[id]
+		dids[i] = "d-" + itoa(i)
+		db.Put(dids[i], randVec(), nil)
+	}
+	requireNoError(t, db.Commit())
+	for i := 0; i < 40; i++ {
+		docIDOf[dids[i]] = s.idToDoc[dids[i]]
 	}
 	// Seal: dumps the records durably, but (pre-fix) leaves the idtable batch
 	// uncommitted while clearing the head bucket that carried the id→docId records.

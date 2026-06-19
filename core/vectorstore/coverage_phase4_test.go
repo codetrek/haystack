@@ -28,9 +28,11 @@ func TestLiveRatio_ZeroCountIsOne(t *testing.T) {
 // quiescence drain). The call is a no-op that returns nil.
 func TestMergeNow_NoOpWhenClosing(t *testing.T) {
 	s := openTestStore(t, Cosine)
+	bp := s.NewBatch()
 	for i := 0; i < 6; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil))
+		bp.Put("d-"+itoa(i), []float32{float32(i), 1, 0, 0, 0, 0, 0, 0}, nil)
 	}
+	requireNoError(t, bp.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 
@@ -80,9 +82,11 @@ func TestMergeNow_NoOpWhenInputPending(t *testing.T) {
 func TestSealLocked_WriteFaultPropagates(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	rng := rand.New(rand.NewSource(101))
+	bp := s.NewBatch()
 	for i := 0; i < 6; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+		bp.Put("d-"+itoa(i), randVecN(rng, 8), nil)
 	}
+	requireNoError(t, bp.Commit())
 	withCreateFault(t, func(f *faultFile) { f.failWrite = true })
 	if err := s.Seal(); err == nil {
 		t.Fatal("Seal should surface a writeSealedSegment write fault")
@@ -110,9 +114,11 @@ func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
 	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(909))
+	bp := s.NewBatch()
 	for i := 0; i < 6; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+		bp.Put("d-"+itoa(i), randVecN(rng, 8), nil)
 	}
+	requireNoError(t, bp.Commit())
 	testHookReconcileErr = errInjected
 	if err := s.Seal(); err == nil {
 		testHookReconcileErr = nil
@@ -150,9 +156,11 @@ func TestCommitMergeLocked_ReconcileErrorRollsBack(t *testing.T) {
 	requireNoError(t, err)
 	defer s.Close() // release output mmaps so t.TempDir cleanup works on Windows
 	rng := rand.New(rand.NewSource(808))
+	bp := s.NewBatch()
 	for i := 0; i < 12; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+		bp.Put("d-"+itoa(i), randVecN(rng, 8), nil)
 	}
+	requireNoError(t, bp.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex()) // no pending builds → the hook only hits the merge commit
 
@@ -186,9 +194,11 @@ func TestCommitMergeLocked_ReconcileErrorRollsBack(t *testing.T) {
 func TestSealLocked_NoBuildSpawnWhenClosing(t *testing.T) {
 	s := openTestStore(t, Cosine)
 	rng := rand.New(rand.NewSource(102))
+	bp := s.NewBatch()
 	for i := 0; i < 6; i++ {
-		requireNoError(t, s.Put("d-"+itoa(i), randVecN(rng, 8), nil))
+		bp.Put("d-"+itoa(i), randVecN(rng, 8), nil)
 	}
+	requireNoError(t, bp.Commit())
 	s.mu.Lock()
 	s.closing = true
 	err := s.sealLocked() // seals durably but skips the build spawn (and maybeMerge)

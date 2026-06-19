@@ -53,10 +53,12 @@ func TestCreateAttrIndex_Idempotent_And_KindMismatch(t *testing.T) {
 // filter on the dropped field falls back to a correct residual scan.
 func TestDropAttrIndex_RemovesDeclarationAndAttrDat(t *testing.T) {
 	s := openTestStore(t, Cosine)
+	ab := s.NewBatch()
 	for i := 0; i < 10; i++ {
-		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
-			Payload{"color": StringValue([]string{"red", "blue"}[i%2])}))
+		ab.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
+			Payload{"color": StringValue([]string{"red", "blue"}[i%2])})
 	}
+	requireNoError(t, ab.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
@@ -239,10 +241,12 @@ func TestSearch_Filter_AfterCompact_DeclsCarried(t *testing.T) {
 // correct.
 func TestSearch_Filter_UnIndexedSegment_ResidualFallback(t *testing.T) {
 	s := openTestStore(t, Cosine)
+	ab := s.NewBatch()
 	for i := 0; i < 12; i++ {
-		requireNoError(t, s.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
-			Payload{"color": StringValue([]string{"red", "blue"}[i%2])}))
+		ab.Put("k"+itoa(i), []float32{float32(i + 1), 0, 0},
+			Payload{"color": StringValue([]string{"red", "blue"}[i%2])})
 	}
+	requireNoError(t, ab.Commit())
 	requireNoError(t, s.Seal()) // sealed with NO declarations → ss.attr stays nil
 	requireNoError(t, s.WaitForIndex())
 	// Declare on the head only; the sealed segment was already frozen with no attr

@@ -125,9 +125,11 @@ func TestStore_Search_MatchesOracle_Cosine(t *testing.T) {
 		"c": {0.9, 0.1, 0, 0},
 		"d": {0, 0, 1, 0},
 	}
+	rb := s.NewBatch()
 	for id, v := range raw {
-		requireNoError(t, s.Put(id, v, nil))
+		rb.Put(id, v, nil)
 	}
+	requireNoError(t, rb.Commit())
 	q := []float32{1, 0, 0, 0}
 	res, err := s.Search("default", q, 2, nil)
 	requireNoError(t, err)
@@ -155,9 +157,11 @@ func TestStore_Search_MatchesOracle_Euclidean(t *testing.T) {
 		"c": {1, 1},   // dist ~1.41
 		"d": {10, 10}, // far
 	}
+	rb := s.NewBatch()
 	for id, v := range raw {
-		requireNoError(t, s.Put(id, v, nil))
+		rb.Put(id, v, nil)
 	}
+	requireNoError(t, rb.Commit())
 	q := []float32{0, 0}
 	res, err := s.Search("default", q, 3, nil)
 	requireNoError(t, err)
