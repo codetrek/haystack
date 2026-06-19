@@ -80,6 +80,43 @@ func (t *SuffixTokenizer) baseTokens(str string) []string {
 			out = appendWordBase(out, run.text)
 		}
 	}
+	// Bound token length in BOTH paths: a token longer than maxBaseChunkRunes is
+	// split into fixed-size chunks, so index expansion stays O(L) and the search
+	// path stays symmetric (a long query is chunked exactly as the index chunked
+	// it, so its chunks can still prefix-match the stored chunk suffixes).
+	return chunkTokens(out)
+}
+
+// chunkTokens splits any token longer than maxBaseChunkRunes into consecutive
+// fixed-size chunks. A substring straddling a chunk boundary becomes
+// unretrievable — an accepted trade-off for pathologically long tokens. It is a
+// no-op (returns the input slice) when nothing is over-length.
+func chunkTokens(toks []string) []string {
+	needs := false
+	for _, tok := range toks {
+		if len([]rune(tok)) > maxBaseChunkRunes {
+			needs = true
+			break
+		}
+	}
+	if !needs {
+		return toks
+	}
+	out := make([]string, 0, len(toks))
+	for _, tok := range toks {
+		runes := []rune(tok)
+		if len(runes) <= maxBaseChunkRunes {
+			out = append(out, tok)
+			continue
+		}
+		for start := 0; start < len(runes); start += maxBaseChunkRunes {
+			end := start + maxBaseChunkRunes
+			if end > len(runes) {
+				end = len(runes)
+			}
+			out = append(out, string(runes[start:end]))
+		}
+	}
 	return out
 }
 
@@ -139,8 +176,11 @@ func (t *SuffixTokenizer) TokenizeForIndex(str string) []string {
 	return result
 }
 
-// appendSuffixes adds the rune-suffixes of tok to uniq, chunking tokens longer
-// than maxBaseChunkRunes to keep expansion linear (see maxBaseChunkRunes).
+// appendSuffixes adds the rune-suffixes (length >= the script minimum) of tok to
+// uniq. tok is already length-bounded to maxBaseChunkRunes by baseTokens. A token
+// shorter than the minimum yields no qualifying suffix: unless dropShort is set
+// it is preserved verbatim (suffix indexes are commonly built over short text),
+// otherwise it is discarded. An empty token is always discarded.
 func appendSuffixes(uniq map[string]struct{}, tok string, dropShort bool) {
 	minLen := minASCIISuffixLen
 	if containsCJK(tok) {
@@ -151,27 +191,9 @@ func appendSuffixes(uniq map[string]struct{}, tok string, dropShort bool) {
 	if n == 0 {
 		return
 	}
-	for start := 0; start < n; start += maxBaseChunkRunes {
-		end := start + maxBaseChunkRunes
-		if end > n {
-			end = n
-		}
-		emitChunkSuffixes(uniq, runes[start:end], minLen, dropShort)
-	}
-}
-
-// emitChunkSuffixes adds the rune-suffixes (length >= minLen) of a single chunk.
-// A chunk shorter than minLen yields no qualifying suffix: unless dropShort is
-// set it is preserved verbatim (suffix indexes are commonly built over short
-// text), otherwise it is discarded.
-func emitChunkSuffixes(uniq map[string]struct{}, runes []rune, minLen int, dropShort bool) {
-	n := len(runes)
-	if n == 0 {
-		return
-	}
 	if n < minLen {
 		if !dropShort {
-			uniq[string(runes)] = struct{}{}
+			uniq[tok] = struct{}{}
 		}
 		return
 	}
