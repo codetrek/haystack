@@ -1,11 +1,41 @@
 package vectorstore
 
 import (
+	"encoding/binary"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+// TestGraphFile_PoolIsU32 pins the on-disk POOL element width to uint32 (4 B/edge):
+// the file ends exactly at PoolOff + PoolLen*4 (writeGraphFile writes POOL last with
+// no trailing pad). Run-fails while POOL is uint64 (would be *8).
+func TestGraphFile_PoolIsU32(t *testing.T) {
+	dir := t.TempDir()
+	seg := newSegment(DotProduct)
+	for i := 0; i < 40; i++ {
+		seg.append(int64(i+1), []float32{float32(i), float32(i % 7), float32(i % 3)}, 0, nil)
+	}
+	requireNoError(t, writeSealedSegment(dir, seg, nil))
+	ss, err := openSealedSegment(dir, DotProduct, 1, nil)
+	requireNoError(t, err)
+	defer ss.close()
+	_, err = buildSegmentGraph(dir, "default", ss, graphConfig{}.withDefaults())
+	requireNoError(t, err)
+
+	data, err := os.ReadFile(filepath.Join(dir, "graph-default.dat"))
+	requireNoError(t, err)
+	poolLen := binary.LittleEndian.Uint64(data[48:56])
+	poolOff := binary.LittleEndian.Uint64(data[56:64])
+	if poolLen == 0 {
+		t.Fatal("test segment unexpectedly produced an edge-less graph")
+	}
+	if got, want := uint64(len(data)), poolOff+poolLen*4; got != want {
+		t.Fatalf("graph file len = %d, want PoolOff+PoolLen*4 = %d (POOL not uint32?)", got, want)
+	}
+}
 
 func TestGraphFile_PersistReopen_SameResults(t *testing.T) {
 	rng := rand.New(rand.NewSource(11))
@@ -175,4 +205,59 @@ func buildTinySealedForGraphTest(t *testing.T, dir string) *sealedSegment {
 	requireNoError(t, err)
 	t.Cleanup(ss.close)
 	return ss
+}
+
+// TestGraphFile_CorruptHeaderRejected hardens the VSG2 reader's stated crash-safety:
+// a corrupt header field or section value must yield a clean error, never a panic.
+// It covers (1) a near-MaxUint64 poolOff whose poolOff+poolLen*4 wraps uint64 and
+// would otherwise slip past the layout bounds-check into a slice-bounds panic at
+// open, (2) a META slot past the segment row count (would OOB getVectorRef during
+// search), and (3) a POOL neighbor id >= node count (would OOB visited.mark/search).
+func TestGraphFile_CorruptHeaderRejected(t *testing.T) {
+	dir := t.TempDir()
+	seg := newSegment(DotProduct)
+	for i := 0; i < 40; i++ {
+		v := []float32{float32(i), float32(i % 7), float32(i % 3)}
+		seg.append(int64(i+1), v, 0, nil)
+	}
+	requireNoError(t, writeSealedSegment(dir, seg, nil))
+	ss, err := openSealedSegment(dir, DotProduct, 1, nil)
+	requireNoError(t, err)
+	defer ss.close()
+	_, err = buildSegmentGraph(dir, "default", ss, graphConfig{}.withDefaults())
+	requireNoError(t, err)
+
+	path := filepath.Join(dir, "graph-default.dat")
+	valid, err := os.ReadFile(path)
+	requireNoError(t, err)
+
+	corrupt := func(mutate func([]byte)) error {
+		b := make([]byte, len(valid))
+		copy(b, valid)
+		mutate(b)
+		requireNoError(t, os.WriteFile(path, b, 0644))
+		_, e := openGraphFile(dir, "default", ss)
+		return e
+	}
+
+	if err := corrupt(func(b []byte) {
+		binary.LittleEndian.PutUint64(b[56:64], math.MaxUint64-63) // poolOff
+	}); err == nil {
+		t.Fatal("openGraphFile must reject a near-MaxUint64 poolOff (overflow), got nil error")
+	}
+	if err := corrupt(func(b []byte) {
+		binary.LittleEndian.PutUint32(b[segPageSize+4:segPageSize+8], 1<<20) // node 0 META slot
+	}); err == nil {
+		t.Fatal("openGraphFile must reject an out-of-range META slot, got nil error")
+	}
+	if err := corrupt(func(b []byte) {
+		poolOff := binary.LittleEndian.Uint64(b[56:64])
+		poolLen := binary.LittleEndian.Uint64(b[48:56])
+		if poolLen == 0 {
+			t.Fatal("test segment unexpectedly produced an edge-less graph")
+		}
+		binary.LittleEndian.PutUint32(b[poolOff:poolOff+4], 1<<20) // first POOL neighbor id
+	}); err == nil {
+		t.Fatal("openGraphFile must reject a POOL neighbor id >= node count, got nil error")
+	}
 }

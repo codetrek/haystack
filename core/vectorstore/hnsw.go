@@ -630,7 +630,8 @@ func (h *hnswIndex) searchLayer(query []float32, entryId uint64, ef int, layer i
 
 		neighbors := h.store.getNeighborsRef(c.id, layer)
 
-		for _, nbId := range neighbors {
+		for _, nb32 := range neighbors {
+			nbId := uint64(nb32)
 			if visited.seen(nbId) {
 				continue
 			}
@@ -717,7 +718,8 @@ func (h *hnswIndex) searchLayerFiltered(query []float32, entryId uint64, ef int,
 
 		neighbors := h.store.getNeighborsRef(c.id, layer)
 
-		for _, nbId := range neighbors {
+		for _, nb32 := range neighbors {
+			nbId := uint64(nb32)
 			if visited.seen(nbId) {
 				continue
 			}
