@@ -1,9 +1,7 @@
 package searcher
 
 import (
-	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"os"
@@ -358,18 +356,13 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 	return finalResults, totalHits >= limit.MaxResults
 }
 
+// searchInContent scans one file's content for matches. It resolves the per-file
+// and global caps (request value when > 0, else config) and the context-line
+// count, delegates the line-by-line regex scan to the core engine, then maps the
+// core result onto the wire DTO. The pure scan logic now lives in
+// engine.ScanContent; this is the thin shell that keeps config/DTO concerns in
+// the server.
 func searchInContent(relPath string, reader io.Reader, eng *engine.Engine, beforeAfter int, limit *types.SearchLimit, totalHits *int) (types.SearchContentResult, error) {
-	fileMatch := types.SearchContentResult{
-		File:  filepath.Clean(relPath),
-		Lines: []types.LineMatch{},
-	}
-
-	scanner := bufio.NewScanner(reader)
-
-	lines := []string{}
-	lineNumber := 1
-	fileHits := 0
-
 	maxResultsPerFile := conf.Get().Server.Search.Limit.MaxResultsPerFile
 	if limit != nil && limit.MaxResultsPerFile > 0 {
 		maxResultsPerFile = limit.MaxResultsPerFile
@@ -380,69 +373,44 @@ func searchInContent(relPath string, reader io.Reader, eng *engine.Engine, befor
 		maxResults = limit.MaxResults
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		if beforeAfter > 0 {
-			lines = append(lines, line)
-		}
-		matches := eng.IsLineMatch(line)
-		if len(matches) > 0 {
-			for _, match := range matches {
-				fileMatch.Lines = append(fileMatch.Lines, types.LineMatch{
-					Line: types.SearchContentLine{
-						LineNumber: lineNumber,
-						Content:    line,
-						Match:      match,
-					},
-				})
+	cm, err := eng.ScanContent(relPath, reader, engine.ScanOptions{
+		BeforeAfter:       beforeAfter,
+		MaxResultsPerFile: maxResultsPerFile,
+		MaxResults:        maxResults,
+	}, totalHits)
+	return toSearchContentResult(cm), err
+}
 
-				(*totalHits)++
-				fileHits++
-				if fileHits >= maxResultsPerFile {
-					fileMatch.Truncate = true
-					break
-				}
-			}
-			if fileHits >= maxResultsPerFile || *totalHits >= maxResults {
-				break
-			}
-		}
-		lineNumber++
+// toSearchContentResult maps the core engine's ContentMatch onto the wire DTO.
+func toSearchContentResult(cm engine.ContentMatch) types.SearchContentResult {
+	res := types.SearchContentResult{
+		File:     cm.File,
+		Lines:    []types.LineMatch{},
+		Truncate: cm.Truncate,
 	}
-
-	if err := scanner.Err(); err != nil {
-		return fileMatch, fmt.Errorf("error scanning content for %s: %w", relPath, err)
+	for _, lm := range cm.Lines {
+		res.Lines = append(res.Lines, types.LineMatch{
+			Before: toContentLines(lm.Before),
+			Line:   toContentLine(lm.Line),
+			After:  toContentLines(lm.After),
+		})
 	}
+	return res
+}
 
-	// Populate before and after context lines
-	if beforeAfter > 0 {
-		for i := 0; i < len(fileMatch.Lines); i++ {
-			line := &fileMatch.Lines[i]
-			lineNum := line.Line.LineNumber
+func toContentLine(l engine.Line) types.SearchContentLine {
+	return types.SearchContentLine{LineNumber: l.LineNumber, Content: l.Content, Match: l.Match}
+}
 
-			// Add before context lines
-			for j := lineNum - beforeAfter; j < lineNum; j++ {
-				if j > 0 && j <= len(lines) {
-					line.Before = append(line.Before, types.SearchContentLine{
-						LineNumber: j,
-						Content:    lines[j-1], // -1 because line numbers are 1-based, but array is 0-based
-					})
-				}
-			}
-
-			// Add after context lines
-			for j := lineNum + 1; j <= lineNum+beforeAfter; j++ {
-				if j <= len(lines) {
-					line.After = append(line.After, types.SearchContentLine{
-						LineNumber: j,
-						Content:    lines[j-1], // -1 because line numbers are 1-based, but array is 0-based
-					})
-				}
-			}
-		}
+func toContentLines(ls []engine.Line) []types.SearchContentLine {
+	if len(ls) == 0 {
+		return nil
 	}
-
-	return fileMatch, nil
+	out := make([]types.SearchContentLine, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, toContentLine(l))
+	}
+	return out
 }
 
 // fuzzyMatchWithScore checks if pattern matches text and returns a score (0-100)

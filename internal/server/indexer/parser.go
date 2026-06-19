@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/codetrek/haystack/core/documents"
-	"github.com/codetrek/haystack/core/tokenizer"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/workspace"
 )
@@ -117,53 +116,50 @@ func parse(file ParseFile) (doc *documents.Document, newfile bool, oversize bool
 		return nil, false, false, fmt.Errorf("failed to stat file: %w", err)
 	}
 
-	fileSizeExceedLimit := info.Size() > conf.Get().Server.MaxFileSize
+	maxFileSize := conf.Get().Server.MaxFileSize
+	fileSizeExceedLimit := info.Size() > maxFileSize
 	if fileSizeExceedLimit {
 		log.Printf("[Indexer] File `%s` (%.2f MiB) is too large to index, skipping", file.RelFilePath, float64(info.Size())/1024/1024)
 	}
 
 	existing, _ := stInst.GetDocument(file.Workspace.Id, id, false)
-	// If the document exists and the modified time is the same, return nil
+	// If the document exists and the modified time is the same, return nil.
+	// (Done before reading the file, so unchanged files cost only a stat.)
 	if existing != nil &&
 		existing.ModifiedTime == info.ModTime().UnixNano() {
-		// log.Printf("[Indexer] File `%s` has not been touched, skipping", file.RelFilePath)
 		return nil, false, fileSizeExceedLimit, nil
 	}
 
-	var hash string
-	var words []string
-	if fileSizeExceedLimit {
-		hash = ""
-		words = []string{}
-	} else {
+	in := documents.ContentInput{
+		ID:          id,
+		RelPath:     file.RelFilePath,
+		Size:        info.Size(),
+		ModTime:     info.ModTime().UnixNano(),
+		Now:         time.Now().UnixNano(),
+		MaxFileSize: maxFileSize,
+	}
+	if existing != nil {
+		// Lets BuildContentDocument skip tokenization when the content hash is
+		// unchanged (oversize files have an empty hash and never match).
+		in.PriorHash = existing.Hash
+	}
+	if !fileSizeExceedLimit {
 		content, err := os.ReadFile(fullPath)
 		if err != nil {
 			return nil, false, false, fmt.Errorf("failed to read file: %w", err)
 		}
-		if !IsLikelyText(content) {
-			//			log.Printf("[Indexer] File `%s` is not a text file, skipping", file.RelFilePath)
-			return nil, false, fileSizeExceedLimit, nil
-		}
-
-		hash = GetContentHash(content)
-		// If the document exists and the hash is the same, return nil
-		if existing != nil && existing.Hash == hash {
-			// log.Printf("[Indexer] File hash for `%s` has not changed, skipping", file.RelFilePath)
-			return nil, false, fileSizeExceedLimit, nil
-		}
-
-		// We only index the content if the file size is below the limit
-		words = tokenizer.TokenizeForIndex(string(content))
+		in.Content = content
 	}
 
-	return &documents.Document{
-		ID:           id,
-		RelPath:      file.RelFilePath,
-		Size:         info.Size(),
-		ModifiedTime: info.ModTime().UnixNano(),
-		LastSyncTime: time.Now().UnixNano(),
-		Hash:         hash,
-		Words:        words,
-		PathWords:    tokenizer.TokenizeForIndex(file.RelFilePath),
-	}, existing == nil, fileSizeExceedLimit, nil
+	res := documents.BuildContentDocument(in)
+	if res.NonText {
+		// Not a text file, skip.
+		return nil, false, fileSizeExceedLimit, nil
+	}
+	if res.Unchanged {
+		// Content hash unchanged vs the existing document; nothing to re-index.
+		return nil, false, fileSizeExceedLimit, nil
+	}
+
+	return res.Doc, existing == nil, res.Oversize, nil
 }
