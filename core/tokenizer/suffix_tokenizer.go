@@ -173,7 +173,29 @@ func (t *SuffixTokenizer) TokenizeForIndex(str string) []string {
 		result = append(result, s)
 	}
 	sort.Strings(result)
-	return result
+	return dropPrefixRedundant(result)
+}
+
+// dropPrefixRedundant removes any key that is a prefix of another key in the
+// sorted set. Retrieval is a keyword PREFIX scan, so a query that would match
+// the shorter key (the query is a prefix of it) is also a prefix of the longer
+// key and matches that instead — the shorter key is redundant. In sorted order a
+// key is a prefix of some later key iff it is a prefix of its immediate
+// successor, so one linear pass suffices. This is the same optimization
+// ASCIITokenizer applies; here it also collapses repetitive suffixes (every
+// suffix of "aaaaaa" is a prefix of "aaaaaa", so only the longest is kept).
+func dropPrefixRedundant(sorted []string) []string {
+	if len(sorted) < 2 {
+		return sorted
+	}
+	out := make([]string, 0, len(sorted))
+	for i := 0; i < len(sorted)-1; i++ {
+		if strings.HasPrefix(sorted[i+1], sorted[i]) {
+			continue
+		}
+		out = append(out, sorted[i])
+	}
+	return append(out, sorted[len(sorted)-1])
 }
 
 // appendSuffixes adds the rune-suffixes (length >= the script minimum) of tok to

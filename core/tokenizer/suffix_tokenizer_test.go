@@ -34,13 +34,13 @@ func TestSuffixTokenizer_IndexWords(t *testing.T) {
 		{"camelCase is not split", "UserService.java",
 			[]string{"ava", "erservice", "ervice", "ice", "java", "rservice", "rvice", "serservice", "service", "userservice", "vice"}},
 		{"underscore splits like punctuation", "user_service.go",
-			[]string{"ervice", "go", "ice", "rvice", "ser", "service", "user", "vice"}},
+			[]string{"ervice", "go", "ice", "rvice", "service", "user", "vice"}},
 		{"underscore between caps and digits", "IMG_2024", []string{"024", "2024", "img"}},
 		{"accented latin kept", "café", []string{"afé", "café"}},
 		{"diaeresis kept mid-word", "naïve", []string{"aïve", "naïve", "ïve"}},
 		{"umlaut kept", "über", []string{"ber", "über"}},
 		{"single-char parts preserved", "a-b-c", []string{"a", "b", "c"}},
-		{"dotted numbers", "192.168.1.1", []string{"1", "168", "192"}},
+		{"dotted numbers, prefix-redundant '1' dropped", "192.168.1.1", []string{"168", "192"}},
 		{"version string", "v1.2.3", []string{"2", "3", "v1"}},
 		{"colon separated", "key:value", []string{"alue", "key", "lue", "value"}},
 		{"asterisk is a separator", "foo*bar", []string{"bar", "foo"}},
@@ -170,22 +170,45 @@ func TestSuffixTokenizer_Search(t *testing.T) {
 	}
 }
 
-// ── Long-token chunking bounds expansion (D2) ────────────────────────────────
+// ── Long-token chunking bounds expansion (D2) + prefix-dedup ─────────────────
 
 func TestSuffixTokenizer_LongTokenChunking(t *testing.T) {
 	st := &SuffixTokenizer{}
 
-	// 64 'a' then 64 'b': chunked at the boundary, so no key spans 'a'->'b' and
-	// no key exceeds maxBaseChunkRunes runes.
+	// 64 'a' then 64 'b': each over-length run is chunked at maxBaseChunkRunes,
+	// and (after prefix-dedup) every suffix of a chunk collapses into its single
+	// longest suffix. No key spans the 'a'->'b' boundary and none exceeds one
+	// chunk.
 	got := st.TokenizeForIndex(strings.Repeat("a", maxBaseChunkRunes) + strings.Repeat("b", maxBaseChunkRunes))
-	for _, k := range got {
-		assert.LessOrEqual(t, len([]rune(k)), maxBaseChunkRunes, "no key may exceed one chunk")
-		allA := k == strings.Repeat("a", len(k))
-		allB := k == strings.Repeat("b", len(k))
-		assert.True(t, allA || allB, "key %q must not span the chunk boundary", k)
+	assert.Equal(t, []string{strings.Repeat("a", maxBaseChunkRunes), strings.Repeat("b", maxBaseChunkRunes)}, got)
+}
+
+func TestSuffixTokenizer_PrefixDedup(t *testing.T) {
+	st := &SuffixTokenizer{}
+
+	// Retrieval is a keyword PREFIX scan, so a key that is a prefix of another key
+	// is redundant (the longer key covers the same queries) and is dropped.
+
+	// Repetitive token: every suffix is a prefix of the longest → only it survives.
+	assert.Equal(t, []string{"aaaaaa"}, st.TokenizeForIndex("aaaaaa"))
+
+	// "cat" is a prefix of "category" → dropped (query "cat" still finds it via
+	// "category").
+	assert.Equal(t, []string{"ategory", "category", "egory", "gory", "ory", "tegory"},
+		st.TokenizeForIndex("category cat"))
+
+	// "1" is a prefix of "168" and "192" → dropped.
+	assert.Equal(t, []string{"168", "192"}, st.TokenizeForIndex("1 168 192"))
+
+	// Sanity: no key in the result is a prefix of another, and the dropped key's
+	// queries still resolve (a search keyword still prefixes a kept key).
+	got := st.TokenizeForIndex("ababab")
+	for i := range got {
+		for j := range got {
+			if i != j {
+				assert.False(t, strings.HasPrefix(got[j], got[i]),
+					"%q must not be a prefix of %q", got[i], got[j])
+			}
+		}
 	}
-	// Each chunk yields suffixes of length 3..64 → 62 distinct per letter.
-	assert.Equal(t, 2*(maxBaseChunkRunes-minASCIISuffixLen+1), len(got))
-	assert.Contains(t, got, strings.Repeat("a", maxBaseChunkRunes))
-	assert.NotContains(t, got, strings.Repeat("a", maxBaseChunkRunes+1))
 }

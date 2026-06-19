@@ -11,9 +11,9 @@ import (
 // from the lookup key after a successful read.
 type Document struct {
 	ID           string `json:"-"`
-	RelPath      string `json:"rel_path"`
+	RelPath      string `json:"rel_path,omitempty"`
 	Size         int64  `json:"size"`
-	Hash         string `json:"hash"`
+	Hash         string `json:"hash,omitempty"`
 	ModifiedTime int64  `json:"modified_time"`
 	LastSyncTime int64  `json:"last_sync_time"`
 

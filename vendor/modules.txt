@@ -1,3 +1,4 @@
+## workspace
 # github.com/AntoineAugusti/wordsegmentation v0.0.0-20190117104728-17d202823a3d
 ## explicit
 github.com/AntoineAugusti/wordsegmentation
@@ -12,6 +13,15 @@ github.com/DataDog/zstd
 # github.com/beorn7/perks v1.0.1
 ## explicit; go 1.11
 github.com/beorn7/perks/quantile
+# github.com/bits-and-blooms/bitset v1.2.0
+## explicit; go 1.14
+github.com/bits-and-blooms/bitset
+# github.com/blevesearch/mmap-go v1.0.4
+## explicit; go 1.13
+github.com/blevesearch/mmap-go
+# github.com/blevesearch/vellum v1.0.10 => ./core/third_party/vellum
+## explicit; go 1.18
+github.com/blevesearch/vellum
 # github.com/cespare/xxhash/v2 v2.3.0
 ## explicit; go 1.11
 github.com/cespare/xxhash/v2
@@ -133,6 +143,8 @@ github.com/gogo/protobuf/types
 # github.com/golang/snappy v1.0.0
 ## explicit
 github.com/golang/snappy
+# github.com/google/go-cmp v0.7.0
+## explicit; go 1.21
 # github.com/google/uuid v1.6.0
 ## explicit
 github.com/google/uuid
@@ -201,6 +213,7 @@ github.com/spf13/cast
 ## explicit; go 1.17
 github.com/stretchr/testify/assert
 github.com/stretchr/testify/assert/yaml
+github.com/stretchr/testify/require
 # github.com/vcaesar/cedar v0.30.0
 ## explicit; go 1.17
 github.com/vcaesar/cedar
@@ -215,6 +228,12 @@ github.com/viterin/vek/vek32
 # github.com/yosida95/uritemplate/v3 v3.0.2
 ## explicit; go 1.14
 github.com/yosida95/uritemplate/v3
+# go.etcd.io/bbolt v1.4.3
+## explicit; go 1.23
+go.etcd.io/bbolt
+go.etcd.io/bbolt/errors
+go.etcd.io/bbolt/internal/common
+go.etcd.io/bbolt/internal/freelist
 # golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6
 ## explicit; go 1.23.0
 golang.org/x/exp/constraints
@@ -278,3 +297,4 @@ gopkg.in/natefinch/lumberjack.v2
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
+# github.com/blevesearch/vellum => ./core/third_party/vellum
