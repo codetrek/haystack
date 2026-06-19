@@ -86,18 +86,10 @@ func indexTypeByte(string) byte { return 0 }
 // indexTypeFromByte decodes the index Type byte. v1 only ever wrote 0 = hnsw.
 func indexTypeFromByte(b byte) string { return "hnsw" }
 
-// appendU32 appends v as 4 little-endian bytes. Shared by the controlStore value
-// encoders' siblings in attrfile.go / graphfile.go (the per-segment data-plane
-// records), kept here as the package's little-endian append primitive.
+// appendU32 appends v as 4 little-endian bytes — the package's little-endian append
+// primitive for per-segment data-plane records (used by attrfile.go).
 func appendU32(b []byte, v uint32) []byte {
 	var tmp [4]byte
 	binary.LittleEndian.PutUint32(tmp[:], v)
-	return append(b, tmp[:]...)
-}
-
-// appendU64 appends v as 8 little-endian bytes (see appendU32).
-func appendU64(b []byte, v uint64) []byte {
-	var tmp [8]byte
-	binary.LittleEndian.PutUint64(tmp[:], v)
 	return append(b, tmp[:]...)
 }
