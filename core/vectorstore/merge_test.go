@@ -245,9 +245,11 @@ func TestMerge_CompactOfOne(t *testing.T) {
 func TestMerge_MultiInputRehomesOnlyMovedDocs(t *testing.T) {
 	s := openTestStore(t, DotProduct)
 	mkSeg := func(ids []string) {
+		b := s.NewBatch()
 		for _, id := range ids {
-			requireNoError(t, s.Put(id, []float32{float32(len(id)), 1, 0}, nil))
+			b.Put(id, []float32{float32(len(id)), 1, 0}, nil)
 		}
+		requireNoError(t, b.Commit())
 		requireNoError(t, s.Seal())
 	}
 	mkSeg([]string{"a", "aa"}) // seg 1

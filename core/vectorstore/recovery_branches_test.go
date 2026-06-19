@@ -29,14 +29,18 @@ func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 		}
 		return v
 	}
+	sb := s.NewBatch()
 	for i := 0; i < 60; i++ {
-		requireNoError(t, s.Put("s-"+itoa(i), randVec(), Payload{"p": StringValue("p")}))
+		sb.Put("s-"+itoa(i), randVec(), Payload{"p": StringValue("p")})
 	}
+	requireNoError(t, sb.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex()) // segment becomes indexed → recover reopens graph.dat
+	hb := s.NewBatch()
 	for i := 0; i < 5; i++ {
-		requireNoError(t, s.Put("h-"+itoa(i), randVec(), nil))
+		hb.Put("h-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, hb.Commit())
 
 	s2 := reopenStore(t, s, kvStore)
 
@@ -84,9 +88,11 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 		}
 		return v
 	}
+	pb := s.NewBatch()
 	for i := 0; i < 40; i++ {
-		requireNoError(t, s.Put("p-"+itoa(i), randVec(), nil))
+		pb.Put("p-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, pb.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.Close())
@@ -169,9 +175,11 @@ func TestRecovery_CrossSegmentUpdateTombstoneNotFlushed(t *testing.T) {
 	// Seal a batch so doc "x" lives in a sealed segment (slot 0).
 	const n = 6
 	requireNoError(t, s.Put("x", randVec(), Payload{"v": StringValue("old")}))
+	fb := s.NewBatch()
 	for i := 0; i < n; i++ {
-		requireNoError(t, s.Put("f-"+itoa(i), randVec(), nil))
+		fb.Put("f-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, fb.Commit())
 	requireNoError(t, s.Seal())
 	requireNoError(t, s.WaitForIndex())
 	xDoc := s.idToDoc["x"]
@@ -238,9 +246,11 @@ func TestRecovery_SealHeadClearIsAtomicNoDoubleStore(t *testing.T) {
 		return v
 	}
 	const n = 40
+	cb := s.NewBatch()
 	for i := 0; i < n; i++ {
-		requireNoError(t, s.Put("c-"+itoa(i), randVec(), nil))
+		cb.Put("c-"+itoa(i), randVec(), nil)
 	}
+	requireNoError(t, cb.Commit())
 
 	// Real Seal: dumps the head to a sealed segment AND clears the head bucket in
 	// one atomic control-store commit. alloc.Commit (inside Seal) makes the
