@@ -7,6 +7,7 @@ require (
 	github.com/blevesearch/vellum v1.0.10
 	github.com/cockroachdb/pebble v1.1.5
 	github.com/dustin/go-humanize v1.0.1
+	github.com/gabriel-vasile/mimetype v1.4.9
 	github.com/go-ego/gse v1.0.2
 	github.com/stretchr/testify v1.10.0
 	github.com/viterin/vek v0.4.3
@@ -44,6 +45,7 @@ require (
 	github.com/vcaesar/cedar v0.30.0 // indirect
 	github.com/viterin/partial v1.1.0 // indirect
 	golang.org/x/exp v0.0.0-20250506013437-ce4c2cf36ca6 // indirect
+	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
