@@ -110,14 +110,22 @@ func NewGitIgnore(rootPath string, ignoreCase bool) *GitIgnore {
 
 // IsIgnored checks if a path should be ignored by this .gitignore file
 func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
-	// Get the path relative to the base directory
-	relPath, err := filepath.Rel(f.baseDir, absPath)
-	if err != nil {
-		return false
+	// Get the path relative to the base directory. In the scan hot path baseDir
+	// is always an ancestor of absPath, so we derive the relative path with a
+	// prefix slice and skip filepath.Rel's double Clean — its allocations
+	// dominate this function's allocation profile. Fall back to filepath.Rel for
+	// the rare non-ancestor caller.
+	rel, ok := relUnderBase(absPath, f.baseDir)
+	if !ok {
+		var err error
+		rel, err = filepath.Rel(f.baseDir, absPath)
+		if err != nil {
+			return false
+		}
 	}
 
 	// Normalize path separators to forward slashes
-	relPath = "/" + filepath.ToSlash(relPath)
+	relPath := "/" + filepath.ToSlash(rel)
 	if isDir && !strings.HasSuffix(relPath, "/") {
 		relPath += "/"
 	}
@@ -128,6 +136,30 @@ func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
 
 	// Use the library's matching function
 	return f.ignorer.MatchesPath(relPath)
+}
+
+// relUnderBase returns the path of absPath relative to base — using the OS
+// separator, with no leading separator, and "." when the two are equal — but
+// only when base is an ancestor of (or equal to) absPath. The boolean is false
+// when absPath is not under base, in which case the caller should fall back to
+// filepath.Rel. For the ancestor case this matches filepath.Rel's output
+// without allocating.
+func relUnderBase(absPath, base string) (string, bool) {
+	if absPath == base {
+		return ".", true
+	}
+	if len(absPath) <= len(base) || !strings.HasPrefix(absPath, base) {
+		return "", false
+	}
+	// Require a separator boundary so "/foo" is not treated as a prefix of
+	// "/foobar". base may itself end in a separator (e.g. a filesystem root).
+	if os.IsPathSeparator(base[len(base)-1]) {
+		return absPath[len(base):], true
+	}
+	if os.IsPathSeparator(absPath[len(base)]) {
+		return absPath[len(base)+1:], true
+	}
+	return "", false
 }
 
 func (f *GitIgnoreRules) isNegate(relPath string) bool {
