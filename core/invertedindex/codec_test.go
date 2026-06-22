@@ -2,6 +2,7 @@ package invertedindex
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -215,49 +216,53 @@ func TestEncodeTableValue(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// encodeInvertedValue / decodeInvertedValue round-trip
+// encodeInvertedValue / decodeInvertedValue round-trip (delta-varint)
 // ---------------------------------------------------------------------------
 func TestEncodeDecodeInvertedValue(t *testing.T) {
-	// Each docid is an 8-byte big-endian int64. These literals are the int64
-	// values whose big-endian bytes spell the ASCII labels below, so the encoded
-	// buffer is byte-identical to the previous string representation (no reindex).
-	docids := []int64{0x6162636465666768 /*abcdefgh*/, 0x3132333435363738 /*12345678*/, 0x5858585858585858 /*XXXXXXXX*/}
+	// Unsorted, realistic densely-allocated docids. encode sorts and delta-varint
+	// encodes them; decode returns the ascending set.
+	docids := []int64{100, 5, 5000, 6, 101, 9}
+	want := []int64{5, 6, 9, 100, 101, 5000}
 	encoded := encodeInvertedValue(docids)
 
-	// Byte-parity with the old string-docid format.
-	if string(encoded) != "abcdefgh12345678XXXXXXXX" {
-		t.Fatalf("encoded bytes = %q, want %q", string(encoded), "abcdefgh12345678XXXXXXXX")
+	// Delta-varint must be far smaller than the old fixed 8-byte-per-id layout.
+	if len(encoded) >= len(docids)*8 {
+		t.Errorf("delta-varint did not shrink value: %d bytes for %d ids", len(encoded), len(docids))
 	}
 
 	decoded := decodeInvertedValue(encoded)
-	if len(decoded) != len(docids) {
-		t.Fatalf("expected %d docids, got %d", len(docids), len(decoded))
-	}
-	for i, want := range docids {
-		if decoded[i] != want {
-			t.Errorf("docids[%d]: got %d, want %d", i, decoded[i], want)
-		}
+	if !slices.Equal(decoded, want) {
+		t.Fatalf("round-trip mismatch: got %v, want %v", decoded, want)
 	}
 }
 
 func TestDecodeInvertedValueEdgeCases(t *testing.T) {
-	tests := []struct {
+	// Round-trip cases: encode then decode reproduces the ascending docid set.
+	roundTrips := []struct {
 		name string
-		data []byte
-		want int
+		ids  []int64
+		want []int64
 	}{
-		{"empty data", []byte{}, 0},
-		{"not multiple of 8", []byte("abc"), 0},
-		{"exactly 8 bytes", []byte("12345678"), 1},
-		{"16 bytes", []byte("1234567890abcdef"), 2},
+		{"empty", nil, []int64{}},
+		{"single", []int64{42}, []int64{42}},
+		{"adjacent", []int64{7, 8, 9}, []int64{7, 8, 9}},
+		{"large gaps", []int64{0, 1 << 50}, []int64{0, 1 << 50}},
 	}
-	for _, tc := range tests {
+	for _, tc := range roundTrips {
 		t.Run(tc.name, func(t *testing.T) {
-			got := decodeInvertedValue(tc.data)
-			if len(got) != tc.want {
-				t.Errorf("decodeInvertedValue(%q): got %d docids, want %d", tc.data, len(got), tc.want)
+			got := decodeInvertedValue(encodeInvertedValue(tc.ids))
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("round-trip(%v): got %v, want %v", tc.ids, got, tc.want)
 			}
 		})
+	}
+
+	// A truncated trailing varint (a dangling continuation byte) stops the decode
+	// after the valid prefix instead of corrupting it.
+	valid := encodeInvertedValue([]int64{3, 70000}) // 70000 needs a multi-byte varint
+	truncated := valid[:len(valid)-1]
+	if got := decodeInvertedValue(truncated); len(got) == 0 || got[0] != 3 {
+		t.Errorf("truncated decode: got %v, want the valid prefix [3 ...]", got)
 	}
 }
 
@@ -265,38 +270,20 @@ func TestDecodeInvertedValueEdgeCases(t *testing.T) {
 // decodeInvertedValueStr
 // ---------------------------------------------------------------------------
 func TestDecodeInvertedValueStr(t *testing.T) {
-	// "abcdefgh12345678" → two 8-byte big-endian int64 docids.
-	data := "abcdefgh12345678"
-	want := []int64{0x6162636465666768, 0x3132333435363738}
+	want := []int64{2, 4, 8, 4096}
+	data := string(encodeInvertedValue(want))
 	decoded := decodeInvertedValueStr(data)
-
-	if len(decoded) != len(want) {
-		t.Fatalf("expected %d docids, got %d", len(want), len(decoded))
-	}
-	for i, w := range want {
-		if decoded[i] != w {
-			t.Errorf("docids[%d]: got %d, want %d", i, decoded[i], w)
-		}
+	if !slices.Equal(decoded, want) {
+		t.Fatalf("got %v, want %v", decoded, want)
 	}
 }
 
 func TestDecodeInvertedValueStrEdgeCases(t *testing.T) {
-	tests := []struct {
-		name string
-		data string
-		want int
-	}{
-		{"empty string", "", 0},
-		{"not multiple of 8", "abcde", 0},
-		{"exactly 8 chars", "12345678", 1},
+	if got := decodeInvertedValueStr(""); len(got) != 0 {
+		t.Errorf("empty string: got %v, want none", got)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := decodeInvertedValueStr(tc.data)
-			if len(got) != tc.want {
-				t.Errorf("decodeInvertedValueStr(%q): got %d docids, want %d", tc.data, len(got), tc.want)
-			}
-		})
+	if got := decodeInvertedValueStr(string(encodeInvertedValue([]int64{99}))); !slices.Equal(got, []int64{99}) {
+		t.Errorf("single: got %v, want [99]", got)
 	}
 }
 

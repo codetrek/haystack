@@ -151,9 +151,9 @@ func TestRewriteIndexMultipleRows(t *testing.T) {
 		TableId: testTable1,
 		Keyword: "keyword1",
 		Rows: []recordRow{
-			{Key: "key1", Value: "cdocdoc1cdocdoc2", DocCount: 2},
-			{Key: "key2", Value: "cdocdoc3cdocdoc4", DocCount: 2},
-			{Key: "key3", Value: "cdocdoc5cdocdoc6", DocCount: 2},
+			{Key: "key1", Value: MakeDocsForKeyword("doc1", "doc2"), DocCount: 2},
+			{Key: "key2", Value: MakeDocsForKeyword("doc3", "doc4"), DocCount: 2},
+			{Key: "key3", Value: MakeDocsForKeyword("doc5", "doc6"), DocCount: 2},
 		},
 		DocCount: 6,
 	}

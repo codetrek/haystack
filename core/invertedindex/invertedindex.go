@@ -35,12 +35,17 @@ func (idx *Index) Search(tableId int, query string, limit int, filterKeyword fun
 			return true
 		}
 
-		// Iterate the packed 8-byte docids straight into the result set, decoding
-		// each big-endian int64 in place — no per-docid string allocation.
-		if len(value)%docIDSize == 0 {
-			for i := 0; i < len(value); i += docIDSize {
-				results.DocIds[int64(binary.BigEndian.Uint64(value[i:i+docIDSize]))] = struct{}{}
+		// Accumulate the value's delta-varint docids straight into the result set,
+		// reconstructing each id from the running gap — no per-docid allocation.
+		var cur uint64
+		for i := 0; i < len(value); {
+			delta, n := binary.Uvarint(value[i:])
+			if n <= 0 {
+				break
 			}
+			cur += delta
+			results.DocIds[int64(cur)] = struct{}{}
+			i += n
 		}
 
 		if limit > 0 && len(results.DocIds) >= limit {
@@ -73,10 +78,15 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 		if _, kw, _, _ := idx.decodeInvertedKey(string(k)); kw != want {
 			return true
 		}
-		if len(value)%docIDSize == 0 {
-			for i := 0; i < len(value); i += docIDSize {
-				results.DocIds[int64(binary.BigEndian.Uint64(value[i:i+docIDSize]))] = struct{}{}
+		var cur uint64
+		for i := 0; i < len(value); {
+			delta, n := binary.Uvarint(value[i:])
+			if n <= 0 {
+				break
 			}
+			cur += delta
+			results.DocIds[int64(cur)] = struct{}{}
+			i += n
 		}
 		return true
 	})

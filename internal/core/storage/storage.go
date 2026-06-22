@@ -9,7 +9,12 @@ import (
 	"github.com/codetrek/haystack/core/kv/pebblekv"
 )
 
-const StorageVersion = "1.4"
+// StorageVersion names the on-disk KV directory. Bump it on any breaking
+// on-disk format change to force a clean reindex into a fresh directory; add the
+// previous version to cleanup's list so the stale DB is removed. 1.5 switches the
+// inverted-index posting-row values from fixed 8-byte big-endian docids to a
+// delta-varint encoding, which the 1.4 decoder cannot read.
+const StorageVersion = "1.5"
 
 func cleanup(storagePath string) {
 	// Perform cleanup tasks here, such as removing old files or directories
@@ -20,6 +25,7 @@ func cleanup(storagePath string) {
 		"1.1",
 		"1.2",
 		"1.3",
+		"1.4", // pre-delta-varint posting-value format; superseded by 1.5
 	}
 
 	for _, item := range cleanupList {

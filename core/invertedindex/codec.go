@@ -3,6 +3,7 @@ package invertedindex
 import (
 	"encoding/binary"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,12 +17,6 @@ const (
 	DefaultKeyTypeNextId = byte(22)
 
 	InvalidId = -1
-
-	// docIDSize is the fixed on-disk width of a doc id. Row values are docids
-	// concatenated with NO delimiter (see encodeInvertedValue), so the decoder
-	// chunks the value into docIDSize-byte ids — a docid of any other length
-	// corrupts every subsequent chunk. The add/remove paths validate against this.
-	docIDSize = 8
 )
 
 func isKeyType(key string, keyType byte) bool {
@@ -138,34 +133,65 @@ func encodeTableValue(info TableInfo) []byte {
 	return content
 }
 
-// encodeInvertedValue packs docids into a fixed-width byte string: each docid is
-// its 8-byte big-endian form, concatenated with no delimiter. Big-endian keeps
-// the on-disk bytes identical to the previous string-docid representation (the
-// docid was always the big-endian encoding of an idtable int64), so the format
-// is unchanged and no reindex is required.
+// encodeInvertedValue encodes a posting row's docids as a delta-varint sequence:
+// the docids are sorted (by their unsigned 64-bit bit pattern) and written as the
+// first id followed by successive gaps, each a base-128 uvarint. Real docids are
+// small, densely-allocated idtable ids, so the gaps are tiny and most encode to a
+// single byte — far smaller than the previous fixed 8-byte-per-id layout, and
+// cheaper to decode than a general-purpose block compressor. Order within a row
+// is irrelevant (the docids are a set), so sorting here is free; deduplication
+// remains the caller's responsibility. Sorting/subtracting in uint64 space (not
+// int64) keeps every gap non-negative and makes the round-trip exact for any
+// int64 docid, including negative and max values. This is an on-disk format
+// change from the old big-endian layout and requires a reindex.
 func encodeInvertedValue(docids []int64) []byte {
-	buf := make([]byte, len(docids)*docIDSize)
+	if len(docids) == 0 {
+		return []byte{}
+	}
+	us := make([]uint64, len(docids))
 	for i, id := range docids {
-		binary.BigEndian.PutUint64(buf[i*docIDSize:], uint64(id))
+		us[i] = uint64(id)
+	}
+	slices.Sort(us)
+
+	buf := make([]byte, 0, len(us)+len(us)/2) // most ids encode to ~1 byte
+	var tmp [binary.MaxVarintLen64]byte
+	var prev uint64
+	for i, u := range us {
+		delta := u
+		if i > 0 {
+			delta = u - prev // non-negative: us is sorted ascending in uint64 space
+		}
+		n := binary.PutUvarint(tmp[:], delta)
+		buf = append(buf, tmp[:n]...)
+		prev = u
 	}
 	return buf
 }
 
+// decodeInvertedValue is the inverse of encodeInvertedValue: it reads successive
+// uvarint gaps, accumulating each into the running docid. A truncated trailing
+// varint stops the decode; values this package wrote always decode fully.
 func decodeInvertedValue(data []byte) []int64 {
-	// Each docid is docIDSize bytes (big-endian int64).
-	if len(data) == 0 || len(data)%docIDSize != 0 {
+	if len(data) == 0 {
 		return []int64{}
 	}
-
-	ids := make([]int64, 0, len(data)/docIDSize)
-	for i := 0; i+docIDSize <= len(data); i += docIDSize {
-		ids = append(ids, int64(binary.BigEndian.Uint64(data[i:i+docIDSize])))
+	ids := make([]int64, 0, len(data)) // upper bound: one byte per id
+	var cur uint64
+	for i := 0; i < len(data); {
+		delta, n := binary.Uvarint(data[i:])
+		if n <= 0 {
+			break
+		}
+		cur += delta
+		ids = append(ids, int64(cur))
+		i += n
 	}
 	return ids
 }
 
 func decodeInvertedValueStr(data string) []int64 {
-	// Each docid is docIDSize bytes (big-endian int64). The merger holds row
-	// values as strings; copy once into a byte slice and reuse the byte decoder.
+	// The merger holds row values as strings; copy once into a byte slice and
+	// reuse the byte decoder.
 	return decodeInvertedValue([]byte(data))
 }

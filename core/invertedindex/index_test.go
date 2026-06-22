@@ -1,6 +1,7 @@
 package invertedindex
 
 import (
+	"encoding/binary"
 	"sort"
 	"testing"
 	"time"
@@ -729,17 +730,29 @@ func TestDoc2IDPadding(t *testing.T) {
 		{"abcdefghijklm", "abcdefgh"}, // truncated to first 8 bytes
 	}
 	for _, tc := range tests {
-		got := string(encodeInvertedValue([]int64{Doc2ID(tc.input)}))
-		if got != tc.want {
+		// The canonical docid form is its 8-byte big-endian encoding (idtable's
+		// docid identity), independent of the inverted-value codec.
+		var b [8]byte
+		binary.BigEndian.PutUint64(b[:], uint64(Doc2ID(tc.input)))
+		if got := string(b[:]); got != tc.want {
 			t.Errorf("Doc2ID(%q) canonical bytes = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
 
 func TestMakeDocsForKeyword(t *testing.T) {
-	result := MakeDocsForKeyword("doc1", "doc2")
-	if len(result) != 16 {
-		t.Errorf("expected 16 bytes, got %d", len(result))
+	// MakeDocsForKeyword delta-varint encodes the docids; decode must recover the
+	// same set (ascending in uint64 order).
+	got := decodeInvertedValue([]byte(MakeDocsForKeyword("doc1", "doc2")))
+	want := []int64{Doc2ID("doc1"), Doc2ID("doc2")}
+	sort.Slice(want, func(i, j int) bool { return uint64(want[i]) < uint64(want[j]) })
+	if len(got) != len(want) {
+		t.Fatalf("got %d docids, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("docid[%d] = %d, want %d", i, got[i], want[i])
+		}
 	}
 }
 
