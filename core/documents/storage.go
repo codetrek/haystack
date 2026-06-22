@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/queue"
@@ -260,5 +261,8 @@ func (s *Store) indexDocument(tableId int, docId string, newWords, oldWords []st
 	if s.idx == nil {
 		return
 	}
-	s.idx.Update(tableId, docId, newWords, oldWords)
+	// The inverted index keys postings by the docid's int64 value; docId here is
+	// its canonical 8-byte string form (as produced by idtable.GetId and used for
+	// the document-store keys), so decode it at this boundary.
+	s.idx.Update(tableId, idtable.DecodeId(docId), newWords, oldWords)
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/engine"
+	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/workspace"
@@ -52,20 +53,21 @@ type QueryFilters struct {
 }
 
 func sortDocuments(workspaceId int, editor *types.Editor, sr *invertedindex.SearchResult,
-	filter func(path string) bool) []string {
+	filter func(path string) bool) []int64 {
 	start := time.Now()
 
-	docs := map[string]string{}
+	docs := map[string]int64{}
 	if len(sr.DocIds) > 10000 {
 		stInst.ScanFiles(workspaceId, func(docid, relPath string) bool {
-			if _, ok := sr.DocIds[docid]; ok {
-				docs[relPath] = docid
+			id := idtable.DecodeId(docid)
+			if _, ok := sr.DocIds[id]; ok {
+				docs[relPath] = id
 			}
 			return true
 		})
 	} else {
 		for docid := range sr.DocIds {
-			relPath := stInst.GetDocumentPath(workspaceId, docid)
+			relPath := stInst.GetDocumentPath(workspaceId, idtable.EncodeId(docid))
 			if relPath != "" {
 				docs[relPath] = docid
 			}
@@ -81,7 +83,7 @@ func sortDocuments(workspaceId int, editor *types.Editor, sr *invertedindex.Sear
 		}
 	}
 
-	sorted := make([]string, 0, len(sr.DocIds))
+	sorted := make([]int64, 0, len(sr.DocIds))
 	if editor != nil {
 		var add = func(dir string) {
 			if dir != "" {
@@ -310,7 +312,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			break
 		}
 
-		doc, err := stInst.GetDocument(workspace.Id, docid, false)
+		doc, err := stInst.GetDocument(workspace.Id, idtable.EncodeId(docid), false)
 		if err != nil || doc == nil {
 			continue
 		}

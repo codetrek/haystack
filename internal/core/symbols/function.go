@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/tokenizer"
 	"github.com/codetrek/haystack/internal/conf"
@@ -197,14 +198,14 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, 
 			wordsInOldFuncNames = append(wordsInOldFuncNames, strings.ToLower(word))
 		}
 	}
-	idxInst.Update(sw.InvertedId, docId, wordsInNewFuncNames, wordsInOldFuncNames)
+	idxInst.Update(sw.InvertedId, idtable.DecodeId(docId), wordsInNewFuncNames, wordsInOldFuncNames)
 
 	s, err := GetSymbolTable(workspaceid)
 	if err != nil {
 		log.Println("[Symbols] Error: failed to get symbol table:", err)
 		return
 	}
-	idxInst.Update(s.InvertedId, docId, newFuncNames, oldFuncNames)
+	idxInst.Update(s.InvertedId, idtable.DecodeId(docId), newFuncNames, oldFuncNames)
 }
 
 func DeleteDocument(workspaceId int, docId string) error {
@@ -228,7 +229,7 @@ func DeleteDocument(workspaceId int, docId string) error {
 			log.Println("[Symbols] Error: failed to get existing functions for document:", docId, err)
 			return err
 		}
-		idxInst.Update(s.InvertedId, docId, []string{}, getUniqueFunctionNames(oldFunctions))
+		idxInst.Update(s.InvertedId, idtable.DecodeId(docId), []string{}, getUniqueFunctionNames(oldFunctions))
 
 		batch := NewBatch(db)
 		batch.Delete(EncodeDocFunctionsKey(workspaceId, docId))

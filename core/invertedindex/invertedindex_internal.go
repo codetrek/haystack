@@ -10,17 +10,11 @@ import (
 // updateIndex updates the keyword index in write cache.
 // It will add the document to the keyword index cache to merge with other
 // documents and flush later.
-func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
-	// Row values are fixed docIDSize-byte docids concatenated with no delimiter,
-	// so a docid of any other length (including the empty string) corrupts the
-	// value chunking on decode — fabricating/dropping docids that can never be
-	// searched or deleted. Reject at WRITE ingress. (The delete path needs no
-	// such guard: a wrong-length docid in a removal simply matches no stored
-	// 8-byte docid and is a harmless no-op.)
-	if len(docid) != docIDSize {
-		log.Printf("[Inverted] Warning: ignoring add for table %d: docid must be %d bytes, got %d", tableId, docIDSize, len(docid))
-		return
-	}
+func (idx *Index) updateIndex(tableId int, docid int64, keywords []string) {
+	// docids are fixed-width 8-byte big-endian int64s on disk; an int64 is always
+	// exactly that width by construction, so the value codec can never be
+	// corrupted by a malformed docid (the previous string-based ingress guard is
+	// no longer representable and has been removed).
 	cache := idx.getPendingWrite(tableId)
 	now := time.Now() // one timestamp for the whole update (per-keyword time.Now is hot)
 	for _, kw := range keywords {
@@ -34,7 +28,7 @@ func (idx *Index) updateIndex(tableId int, docid string, keywords []string) {
 	}
 }
 
-func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
+func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 	w := idx.getPendingDelete(tableId)
 	now := time.Now()
 	for _, kw := range keywords {
@@ -49,7 +43,7 @@ func (idx *Index) removeIndex(tableId int, docid string, keywords []string) {
 // writeInvertedIndex writes a keyword to the database.
 // Callers must pass the pre-computed key via idx.encodeInvertedKey so that the
 // configured key-type bytes are honoured.
-var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []string, key []byte) {
+var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
 	// Remove duplicates to ensure the data stored is clean
 	uniqueDocids := removeDuplicatesEfficiently(docids)
 	content := encodeInvertedValue(uniqueDocids)
@@ -58,18 +52,16 @@ var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []s
 
 // removeDocumentsFromInvertedIndex removes a document from the keywords index.
 // It will remove the document from the keywords index and rewrite the keyword with new docids.
-func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, removingDocids []string,
+func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, kw string, removingDocids []int64,
 	maxKeywordIndexSize int) error {
 	if len(kw) == 0 {
 		log.Println("[Inverted] Warning: Removing document from keywords index, but keyword is empty")
 		return nil
 	}
 
-	removings := map[string]struct{}{}
+	removings := map[int64]struct{}{}
 	for _, id := range removingDocids {
-		if id != "" {
-			removings[id] = struct{}{}
-		}
+		removings[id] = struct{}{}
 	}
 
 	if len(removings) == 0 {
@@ -78,7 +70,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 	}
 
 	keys := []string{}
-	docids := map[string]struct{}{}
+	docids := map[int64]struct{}{}
 	err := idx.db.Scan(idx.encodeInvertedKeyPrefix(tableId, kw), func(key, value []byte) bool {
 		// The prefix "<tid>|<kw>|" also matches rows of any keyword "kw|..." (the
 		// keyword may contain '|'), so skip rows whose decoded keyword is not
@@ -87,7 +79,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 			return true
 		}
 		changed := false
-		tmpids := []string{}
+		tmpids := []int64{}
 
 		ids := decodeInvertedValue(value)
 		for _, id := range ids {
@@ -96,9 +88,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 				changed = true
 				continue
 			}
-			if id != "" {
-				tmpids = append(tmpids, id)
-			}
+			tmpids = append(tmpids, id)
 		}
 
 		if changed || len(tmpids) < maxKeywordIndexSize/2 {
@@ -115,7 +105,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 	}
 
 	for len(docids) > 0 {
-		docs := []string{}
+		docs := []int64{}
 		for id := range docids {
 			if len(docs) >= maxKeywordIndexSize {
 				break
@@ -145,13 +135,13 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 
 // removeDuplicatesEfficiently removes duplicates from the docids slice.
 // It returns a new slice with duplicates removed, preserving first-occurrence order.
-func removeDuplicatesEfficiently(docids []string) []string {
+func removeDuplicatesEfficiently(docids []int64) []int64 {
 	if len(docids) <= 1 {
 		return docids
 	}
 
-	seen := make(map[string]bool, len(docids))
-	result := make([]string, 0, len(docids))
+	seen := make(map[int64]bool, len(docids))
+	result := make([]int64, 0, len(docids))
 
 	for _, docid := range docids {
 		if !seen[docid] {

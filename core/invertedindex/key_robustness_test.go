@@ -56,25 +56,31 @@ func TestEncodeInvertedKey_UniqueWithinMicrosecond(t *testing.T) {
 	}
 }
 
-// B4/B5/B8 — non-8-byte docids (including empty) are rejected at ingress, so the
-// fixed-width value codec is never corrupted.
-func TestUpdate_RejectsNon8ByteDocid(t *testing.T) {
+// B4/B5/B8 — docids are int64 by type, so the fixed-width value codec can never
+// be fed a wrong-length docid (the old string-ingress length guard is no longer
+// representable). This pins the surviving invariant: arbitrary int64 docids —
+// including 0, negative, and max — round-trip through Update/GetDocs intact and
+// every stored value stays a multiple of docIDSize.
+func TestUpdate_Int64DocidRoundTrip(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
-	env.idx.Update(1, "short", []string{"kw"}, nil)         // 5 bytes -> rejected
-	env.idx.Update(1, "", []string{"kw"}, nil)              // empty   -> rejected
-	env.idx.Update(1, "toolongdocid", []string{"kw"}, nil)  // 12 bytes -> rejected
-	env.idx.Update(1, makeDocID("ok"), []string{"kw"}, nil) // 8 bytes -> accepted
+
+	docids := []int64{0, 1, -1, 1 << 40, 9223372036854775807 /* max int64 */}
+	for _, id := range docids {
+		env.idx.Update(1, id, []string{"kw"}, nil)
+	}
 	forceFlush(env.idx)
 
 	res := env.idx.GetDocs(1, "kw")
-	if len(res.DocIds) != 1 {
-		t.Errorf("expected only the 8-byte doc indexed, got %d docs: %v", len(res.DocIds), res.DocIds)
+	if len(res.DocIds) != len(docids) {
+		t.Errorf("expected %d docs indexed, got %d: %v", len(docids), len(res.DocIds), res.DocIds)
 	}
-	if _, ok := res.DocIds[makeDocID("ok")]; !ok {
-		t.Error("the valid 8-byte doc was not indexed")
+	for _, id := range docids {
+		if _, ok := res.DocIds[id]; !ok {
+			t.Errorf("docid %d was not indexed/retrieved", id)
+		}
 	}
-	// No stored value may have a non-multiple-of-8 length (would corrupt decode).
+	// No stored value may have a non-multiple-of-docIDSize length (would corrupt decode).
 	_ = env.DB.Scan([]byte{env.idx.keyTypeRow}, func(k, v []byte) bool {
 		if len(v)%docIDSize != 0 {
 			t.Errorf("corrupt value length %d for key %q", len(v), k)
@@ -95,7 +101,7 @@ func TestMerge_SkipsInvalidIdGarbageRow(t *testing.T) {
 	// Garbage key with a non-numeric tableId ("\x01") -> decodes to InvalidId, and
 	// its \x01 second byte sorts it just before the real "\x141|kw|..." rows.
 	garbage := append([]byte{env.idx.keyTypeRow}, []byte("\x01|kw|3|999")...)
-	_ = env.DB.Put(garbage, encodeInvertedValue([]string{makeDocID("evil")}))
+	_ = env.DB.Put(garbage, encodeInvertedValue([]int64{makeDocID("evil")}))
 
 	m := merging{NextIter: string(env.idx.keyTypeRow)}
 	for i := 0; i < 5; i++ {

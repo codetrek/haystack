@@ -96,7 +96,7 @@ func TestReadmeExample(t *testing.T) {
 		t.Fatalf("eng.CollectDocuments: %v", err)
 	}
 
-	if _, found := result.DocIds[docID]; !found {
+	if _, found := result.DocIds[idtable.DecodeId(docID)]; !found {
 		t.Errorf("expected docID %q in results; got %v", docID, result.DocIds)
 	}
 

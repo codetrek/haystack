@@ -55,7 +55,7 @@ func TestMerge_KeywordWithDelimiter_NoOrphan(t *testing.T) {
 	// Index several distinct docs per keyword across separate flushes (each flush
 	// writes a distinct tick'd row) so the merger's rewriteIndex path
 	// (len(Rows) >= 2) actually fires for every keyword.
-	docsByKw := map[string][]string{}
+	docsByKw := map[string][]int64{}
 	for round := 0; round < 3; round++ {
 		for ki, kw := range keywords {
 			doc := makeDocID(fmt.Sprintf("d%d-%d", ki, round))

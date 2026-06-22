@@ -4,6 +4,7 @@
 package invertedindex
 
 import (
+	"encoding/binary"
 	"log"
 	"strings"
 )
@@ -15,8 +16,8 @@ const MaxInvertedIndexSize = 1000
 // matches that came from wildcard expansion and may be filtered further by the
 // caller. Both are sets keyed by document id.
 type SearchResult struct {
-	DocIds     map[string]struct{} `json:"docIds"`
-	WildDocIds map[string]struct{} `json:"wildDocIds,omitempty"`
+	DocIds     map[int64]struct{} `json:"docIds"`
+	WildDocIds map[int64]struct{} `json:"wildDocIds,omitempty"`
 }
 
 // Search returns the union of document ids whose keywords match query within
@@ -26,7 +27,7 @@ type SearchResult struct {
 // the number of distinct document ids collected; limit <= 0 means unlimited.
 func (idx *Index) Search(tableId int, query string, limit int, filterKeyword func(string) bool) SearchResult {
 	results := SearchResult{
-		DocIds: make(map[string]struct{}),
+		DocIds: make(map[int64]struct{}),
 	}
 
 	err := idx.db.Scan(idx.encodeInvertedSearchKey(tableId, strings.ToLower(query)), func(key, value []byte) bool {
@@ -34,11 +35,11 @@ func (idx *Index) Search(tableId int, query string, limit int, filterKeyword fun
 			return true
 		}
 
-		// Iterate the packed 8-byte docids straight into the result set, avoiding
-		// the intermediate []string that decodeInvertedValue would allocate.
-		if len(value)%8 == 0 {
-			for i := 0; i < len(value); i += 8 {
-				results.DocIds[string(value[i:i+8])] = struct{}{}
+		// Iterate the packed 8-byte docids straight into the result set, decoding
+		// each big-endian int64 in place — no per-docid string allocation.
+		if len(value)%docIDSize == 0 {
+			for i := 0; i < len(value); i += docIDSize {
+				results.DocIds[int64(binary.BigEndian.Uint64(value[i:i+docIDSize]))] = struct{}{}
 			}
 		}
 
@@ -60,7 +61,7 @@ func (idx *Index) Search(tableId int, query string, limit int, filterKeyword fun
 // lower-casing) as an inverted-key prefix, with no limit or filtering.
 func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 	results := SearchResult{
-		DocIds: make(map[string]struct{}),
+		DocIds: make(map[int64]struct{}),
 	}
 
 	want := key
@@ -74,7 +75,7 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 		}
 		if len(value)%docIDSize == 0 {
 			for i := 0; i < len(value); i += docIDSize {
-				results.DocIds[string(value[i:i+docIDSize])] = struct{}{}
+				results.DocIds[int64(binary.BigEndian.Uint64(value[i:i+docIDSize]))] = struct{}{}
 			}
 		}
 		return true
@@ -89,7 +90,7 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 // Update updates the keywords index for a document.
 // If len(newKeywords) == 0, it will remove the document from the keywords index.
 // This function MUST be called in dbMPSCQueue.
-func (idx *Index) Update(tableId int, docid string, newKeywords, oldKeywords []string) {
+func (idx *Index) Update(tableId int, docid int64, newKeywords, oldKeywords []string) {
 	// Handle the case of complete deletion
 	if len(newKeywords) == 0 {
 		if len(oldKeywords) > 0 {

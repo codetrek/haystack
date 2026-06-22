@@ -19,8 +19,8 @@ import (
 
 func TestSortDocuments_FilterRejectsDocs(t *testing.T) {
 	sr := &invertedindex.SearchResult{
-		DocIds:     map[string]struct{}{},
-		WildDocIds: map[string]struct{}{},
+		DocIds:     map[int64]struct{}{},
+		WildDocIds: map[int64]struct{}{},
 	}
 	result := sortDocuments(0, nil, sr, func(_ string) bool { return false })
 	assert.NotNil(t, result)
@@ -29,8 +29,8 @@ func TestSortDocuments_FilterRejectsDocs(t *testing.T) {
 
 func TestSortDocuments_EditorEmpty(t *testing.T) {
 	sr := &invertedindex.SearchResult{
-		DocIds:     map[string]struct{}{},
-		WildDocIds: map[string]struct{}{},
+		DocIds:     map[int64]struct{}{},
+		WildDocIds: map[int64]struct{}{},
 	}
 	editor := &types.Editor{}
 	result := sortDocuments(0, editor, sr, func(_ string) bool { return true })

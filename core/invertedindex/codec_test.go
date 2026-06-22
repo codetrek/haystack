@@ -218,17 +218,24 @@ func TestEncodeTableValue(t *testing.T) {
 // encodeInvertedValue / decodeInvertedValue round-trip
 // ---------------------------------------------------------------------------
 func TestEncodeDecodeInvertedValue(t *testing.T) {
-	// Each docid is 8 bytes
-	docids := []string{"abcdefgh", "12345678", "XXXXXXXX"}
+	// Each docid is an 8-byte big-endian int64. These literals are the int64
+	// values whose big-endian bytes spell the ASCII labels below, so the encoded
+	// buffer is byte-identical to the previous string representation (no reindex).
+	docids := []int64{0x6162636465666768 /*abcdefgh*/, 0x3132333435363738 /*12345678*/, 0x5858585858585858 /*XXXXXXXX*/}
 	encoded := encodeInvertedValue(docids)
-	decoded := decodeInvertedValue(encoded)
 
+	// Byte-parity with the old string-docid format.
+	if string(encoded) != "abcdefgh12345678XXXXXXXX" {
+		t.Fatalf("encoded bytes = %q, want %q", string(encoded), "abcdefgh12345678XXXXXXXX")
+	}
+
+	decoded := decodeInvertedValue(encoded)
 	if len(decoded) != len(docids) {
 		t.Fatalf("expected %d docids, got %d", len(docids), len(decoded))
 	}
 	for i, want := range docids {
 		if decoded[i] != want {
-			t.Errorf("docids[%d]: got %q, want %q", i, decoded[i], want)
+			t.Errorf("docids[%d]: got %d, want %d", i, decoded[i], want)
 		}
 	}
 }
@@ -258,17 +265,17 @@ func TestDecodeInvertedValueEdgeCases(t *testing.T) {
 // decodeInvertedValueStr
 // ---------------------------------------------------------------------------
 func TestDecodeInvertedValueStr(t *testing.T) {
-	// Each docid is 8 bytes
-	docids := []string{"abcdefgh", "12345678"}
-	encoded := strings.Join(docids, "")
-	decoded := decodeInvertedValueStr(encoded)
+	// "abcdefgh12345678" → two 8-byte big-endian int64 docids.
+	data := "abcdefgh12345678"
+	want := []int64{0x6162636465666768, 0x3132333435363738}
+	decoded := decodeInvertedValueStr(data)
 
-	if len(decoded) != len(docids) {
-		t.Fatalf("expected %d docids, got %d", len(docids), len(decoded))
+	if len(decoded) != len(want) {
+		t.Fatalf("expected %d docids, got %d", len(want), len(decoded))
 	}
-	for i, want := range docids {
-		if decoded[i] != want {
-			t.Errorf("docids[%d]: got %q, want %q", i, decoded[i], want)
+	for i, w := range want {
+		if decoded[i] != w {
+			t.Errorf("docids[%d]: got %d, want %d", i, decoded[i], w)
 		}
 	}
 }
@@ -299,14 +306,14 @@ func TestDecodeInvertedValueStrEdgeCases(t *testing.T) {
 func TestRemoveDuplicatesEfficiently(t *testing.T) {
 	tests := []struct {
 		name  string
-		input []string
+		input []int64
 		want  int
 	}{
-		{"empty", []string{}, 0},
-		{"single", []string{"a"}, 1},
-		{"no duplicates", []string{"a", "b", "c"}, 3},
-		{"with duplicates", []string{"a", "b", "a", "c", "b"}, 3},
-		{"all same", []string{"x", "x", "x"}, 1},
+		{"empty", []int64{}, 0},
+		{"single", []int64{1}, 1},
+		{"no duplicates", []int64{1, 2, 3}, 3},
+		{"with duplicates", []int64{1, 2, 1, 3, 2}, 3},
+		{"all same", []int64{9, 9, 9}, 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -320,15 +327,15 @@ func TestRemoveDuplicatesEfficiently(t *testing.T) {
 
 // Verify ordering is preserved (first occurrence wins)
 func TestRemoveDuplicatesPreservesOrder(t *testing.T) {
-	input := []string{"b", "a", "c", "a", "b"}
+	input := []int64{2, 1, 3, 1, 2}
 	got := removeDuplicatesEfficiently(input)
-	expected := []string{"b", "a", "c"}
+	expected := []int64{2, 1, 3}
 	if len(got) != len(expected) {
 		t.Fatalf("expected len %d, got %d", len(expected), len(got))
 	}
 	for i, v := range expected {
 		if got[i] != v {
-			t.Errorf("index %d: got %q, want %q", i, got[i], v)
+			t.Errorf("index %d: got %d, want %d", i, got[i], v)
 		}
 	}
 }

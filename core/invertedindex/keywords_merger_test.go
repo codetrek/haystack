@@ -1,6 +1,7 @@
 package invertedindex
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ const (
 type mockBatchWrite struct {
 	deleted     []string
 	writtenKeys []string
-	writtenData [][]string
+	writtenData [][]int64
 	tableIds    []int
 	keywords    []string
 }
@@ -49,7 +50,7 @@ func (m *mockBatchWrite) DeletePrefix(prefix []byte) error {
 func setupTestMocks() func() {
 	// Override the writeKeywordIndex function for testing
 	originalWriteKeywordIndex := writeInvertedIndex
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
 		mockBatch := batch.(*mockBatchWrite)
 		mockBatch.tableIds = append(mockBatch.tableIds, tableId)
 		mockBatch.keywords = append(mockBatch.keywords, keyword)
@@ -67,7 +68,7 @@ func newMockBatch(db kv.Store) *mockBatchWrite {
 	return &mockBatchWrite{
 		deleted:     []string{},
 		writtenKeys: []string{},
-		writtenData: [][]string{},
+		writtenData: [][]int64{},
 		tableIds:    []int{},
 		keywords:    []string{},
 	}
@@ -94,7 +95,7 @@ func verifyWriteOperations(t *testing.T, mockBatch *mockBatchWrite, index *inver
 
 	// For cases with merged data, check unique doc count
 	if len(mockBatch.writtenData) > 0 && expectedDocIDs > 0 {
-		uniqueDocs := make(map[string]struct{})
+		uniqueDocs := make(map[int64]struct{})
 		for _, docs := range mockBatch.writtenData {
 			for _, doc := range docs {
 				uniqueDocs[doc] = struct{}{}
@@ -210,22 +211,23 @@ func TestRewriteIndexWellBatched(t *testing.T) {
 	}
 }
 
-func Doc2ID(doc string) string {
-	// docid MUST be a 16 character string
+func Doc2ID(doc string) int64 {
+	// Reproduce the historical 8-byte (ASCII '0'-left-padded) docid label and read
+	// it as the big-endian int64 the index now stores. The bytes are identical to
+	// the previous string docid, so persisted encodings are unchanged.
 	if len(doc) > 8 {
-		return doc[0:8]
+		doc = doc[0:8]
 	}
-
-	return fmt.Sprintf("%s%s", strings.Repeat("0", 8-len(doc)), doc)
+	padded := strings.Repeat("0", 8-len(doc)) + doc
+	return int64(binary.BigEndian.Uint64([]byte(padded)))
 }
 
 func MakeDocsForKeyword(docs ...string) string {
-	result := ""
-	for _, doc := range docs {
-		result += Doc2ID(doc)
+	ids := make([]int64, len(docs))
+	for i, doc := range docs {
+		ids[i] = Doc2ID(doc)
 	}
-
-	return result
+	return string(encodeInvertedValue(ids))
 }
 
 // TestRewriteIndexMultipleBatches tests when multiple merge operations are needed
@@ -388,11 +390,11 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 	writtenTables := []int{}
 	writtenKeywords := []string{}
-	writtenDocIDs := [][]string{}
+	writtenDocIDs := [][]int64{}
 
 	batch := newMockBatch(nil)
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
 		writtenTables = append(writtenTables, tableId)
 		writtenKeywords = append(writtenKeywords, keyword)
 		writtenDocIDs = append(writtenDocIDs, docIDs)
@@ -470,7 +472,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 	if len(writtenDocIDs) != 1 {
 		t.Errorf("Expected 1 docID group, got %d", len(writtenDocIDs))
 	} else {
-		uniqueDocs := make(map[string]struct{})
+		uniqueDocs := make(map[int64]struct{})
 		for _, docID := range writtenDocIDs[0] {
 			uniqueDocs[docID] = struct{}{}
 		}
@@ -479,7 +481,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 			t.Errorf("Expected 5 unique doc IDs, got %d", len(uniqueDocs))
 		}
 
-		expectedDocs := []string{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
+		expectedDocs := []int64{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
 		for _, doc := range expectedDocs {
 			if _, ok := uniqueDocs[doc]; !ok {
 				t.Errorf("Expected to find doc ID %q but it was missing", doc)
@@ -498,7 +500,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	}()
 
 	// Track writes by table
-	writtenData := make(map[int]map[string][]string) // tableId -> keyword -> docIDs
+	writtenData := make(map[int]map[string][]int64) // tableId -> keyword -> docIDs
 	deletedKeys := []string{}
 
 	// Create mock batch
@@ -520,9 +522,9 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
 		if _, ok := writtenData[tableId]; !ok {
-			writtenData[tableId] = make(map[string][]string)
+			writtenData[tableId] = make(map[string][]int64)
 		}
 		writtenData[tableId][keyword] = docIDs
 	}
@@ -599,7 +601,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 		if docs, ok := ws1Data["keyword1"]; !ok {
 			t.Errorf("Expected keyword1 data for table1 but found none")
 		} else {
-			uniqueDocs := make(map[string]struct{})
+			uniqueDocs := make(map[int64]struct{})
 			for _, doc := range docs {
 				uniqueDocs[doc] = struct{}{}
 			}
@@ -608,10 +610,10 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 				t.Errorf("Expected 5 unique docs for table1, got %d", len(uniqueDocs))
 			}
 
-			expectedDocs := []string{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
+			expectedDocs := []int64{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
 			for _, doc := range expectedDocs {
 				if _, ok := uniqueDocs[doc]; !ok {
-					t.Errorf("Expected doc %s in table1 but it was missing", doc)
+					t.Errorf("Expected doc %d in table1 but it was missing", doc)
 				}
 			}
 		}
@@ -628,7 +630,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 		if docs, ok := ws2Data["keyword1"]; !ok {
 			t.Errorf("Expected keyword1 data for table2 but found none")
 		} else {
-			uniqueDocs := make(map[string]struct{})
+			uniqueDocs := make(map[int64]struct{})
 			for _, doc := range docs {
 				uniqueDocs[doc] = struct{}{}
 			}
@@ -637,10 +639,10 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 				t.Errorf("Expected 5 unique docs for table2, got %d", len(uniqueDocs))
 			}
 
-			expectedDocs := []string{Doc2ID("doc6"), Doc2ID("doc7"), Doc2ID("doc8"), Doc2ID("doc9"), Doc2ID("doc10")}
+			expectedDocs := []int64{Doc2ID("doc6"), Doc2ID("doc7"), Doc2ID("doc8"), Doc2ID("doc9"), Doc2ID("doc10")}
 			for _, doc := range expectedDocs {
 				if _, ok := uniqueDocs[doc]; !ok {
-					t.Errorf("Expected doc %s in table2 but it was missing", doc)
+					t.Errorf("Expected doc %d in table2 but it was missing", doc)
 				}
 			}
 		}
@@ -741,7 +743,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
 		// No-op for this test
 	}
 
@@ -900,7 +902,7 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 		newBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
 		// no-op: we don't need to persist data
 	}
 	newBatch = func(db kv.Store) kv.Batch {
@@ -977,7 +979,7 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 		newBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {}
 	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
@@ -1037,7 +1039,7 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 		newBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []string, data []byte) {}
+	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {}
 	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
@@ -1081,7 +1083,7 @@ func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
 	// Insert pending writes so the merge task sees them and sets WaitingForFlushCache.
 	pw := env.idx.getPendingWrite(1)
 	pw.InvertedIndex["testword"] = relatedDocs{
-		DocIds:    []string{"doc1"},
+		DocIds:    []int64{Doc2ID("doc1")},
 		UpdatedAt: time.Now(),
 	}
 
