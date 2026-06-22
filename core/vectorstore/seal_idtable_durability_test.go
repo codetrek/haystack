@@ -18,10 +18,10 @@ import (
 // KV. This is the unclean-crash pattern: nothing in s's process memory or its lazy
 // idtable batch is flushed — only what was committed to the control DB (and to the
 // KV) survives.
-func reopenUnclean(t *testing.T, s *Store, kvStore kv.Store) *Store {
+func reopenUnclean(t *testing.T, s *Store, _ kv.Store) *Store {
 	t.Helper()
 	crashRelease(t, s)
-	s2, err := Open(Options{Dir: s.dir, KV: kvStore, Metric: s.metric})
+	s2, err := Open(Options{Dir: s.dir, Metric: s.metric})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 	return s2
@@ -53,6 +53,7 @@ func crashRelease(t *testing.T, s *Store) {
 	}
 	s.mu.Unlock()
 	_ = s.cs.Close()
+	s.alloc.CrashRelease() // release the idtable bbolt flock the way a kill would, WITHOUT committing pending
 }
 
 // TestSeal_IdtableDurableBeforeHeadClear is the red-proof for the committed-data
@@ -67,7 +68,7 @@ func TestSeal_IdtableDurableBeforeHeadClear(t *testing.T) {
 		t.Skip("in-process crash sim reopens over the same KV with the old store's idtable commit goroutine still live; that POSIX-timing assumption is unreliable on Windows. A real Windows crash kills the process (no live goroutine) and pebble's committed state is durable cross-platform, so the property itself holds — it is exercised on Linux/macOS.")
 	}
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(4242))
 	dim := 16

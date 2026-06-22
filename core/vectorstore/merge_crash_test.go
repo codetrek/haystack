@@ -24,7 +24,7 @@ func randVecN(rng *rand.Rand, dim int) []float32 {
 // inputs (still manifest-referenced) survive intact with every doc.
 func TestMergeCrash_BeforeSwap_OutputSwept(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(11))
 	b := s.NewBatch()
@@ -81,7 +81,7 @@ func TestMergeCrash_BeforeSwap_OutputSwept(t *testing.T) {
 // that recover() must sweep, and the merged output must carry every live doc.
 func TestMergeCrash_AfterSwap_OldInputSwept(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(12))
 	b := s.NewBatch()
@@ -128,7 +128,7 @@ func TestMergeCrash_AfterSwap_OldInputSwept(t *testing.T) {
 // resolves correctly (plan §7b).
 func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(13))
 	live := map[int64][]float32{}
@@ -187,7 +187,7 @@ func TestMergeCrash_MidBuild_RecoverResumes(t *testing.T) {
 // round-trips the merge OUTPUTS (not the pre-merge inputs) across recovery.
 func TestMerge_SurvivesRecovery_EndToEnd(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	s.maxSegSize = 8
 	s.mcfg.Fanout = 2

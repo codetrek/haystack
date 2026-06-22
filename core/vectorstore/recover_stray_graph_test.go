@@ -34,7 +34,7 @@ func putRandomSegment(t *testing.T, s *Store, n, dim int, seed int64) {
 func TestRecovery_StrayGraphSweptFromLiveSegDir(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	putRandomSegment(t, s, 60, 8, 91)
 
@@ -63,9 +63,8 @@ func TestRecovery_StrayGraphSweptFromLiveSegDir(t *testing.T) {
 // stray-graph sweep as a recover error, not a silent partial recovery (the error
 // leg of sweepStrayGraphsLocked).
 func TestRecovery_StrayGraphSweep_FsRemoveError(t *testing.T) {
-	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	putRandomSegment(t, s, 60, 8, 92)
 	stray := filepath.Join(s.dir, "seg-1-0", graphFileName("ghost"))
@@ -81,7 +80,7 @@ func TestRecovery_StrayGraphSweep_FsRemoveError(t *testing.T) {
 	}
 	defer func() { fsRemove = orig }()
 
-	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	if err == nil {
 		_ = s2.Close()
 		t.Fatal("expected recover to surface the stray-graph unlink failure")

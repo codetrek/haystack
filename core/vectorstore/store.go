@@ -11,22 +11,13 @@ import (
 	"sync/atomic"
 
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/kv"
 	bolt "go.etcd.io/bbolt"
 )
 
-// Distinct idtable key-prefix bytes for the vectorstore allocator, so it never
-// collides with idtable's default doc-id allocator (28/29) when sharing a KV.
-const (
-	idtableKeyTypeNextId = byte(40)
-	idtableKeyTypeKey    = byte(41)
-)
-
-// Options configures a Store. KV backs the string→docId idtable; Dir holds the
-// bbolt control store (control.db) and the flat sealed-segment data dirs.
+// Options configures a Store. Dir holds the bbolt control store (control.db),
+// the standalone idtable (idtable.db), and the flat sealed-segment data dirs.
 type Options struct {
 	Dir    string
-	KV     kv.Store
 	Metric Metric
 }
 
@@ -63,7 +54,6 @@ type Store struct {
 	mu     sync.RWMutex
 	metric Metric
 	dir    string
-	kv     kv.Store
 	alloc  *idtable.Allocator
 	seg    *segment // the head
 	// cs is the bbolt-backed CONTROL plane: the small, transactional store
@@ -168,23 +158,16 @@ var testHookRecoverBeforeReopenWrite func()
 // Open creates or recovers a Store at opts.Dir, rebuilding the in-memory head
 // segment, the id↔docId map, and the allocator state from the bbolt head bucket.
 func Open(opts Options) (*Store, error) {
-	if opts.KV == nil {
-		return nil, errors.New("vectorstore: Options.KV is required")
-	}
 	if opts.Dir == "" {
 		return nil, errors.New("vectorstore: Options.Dir is required")
 	}
-	alloc, err := idtable.New(opts.KV, idtable.Options{
-		KeyTypeNextId: idtableKeyTypeNextId,
-		KeyTypeKey:    idtableKeyTypeKey,
-	})
-	if err != nil {
+	// The directory must exist before we create the idtable / control.db files in it.
+	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
 		return nil, err
 	}
-	// The directory must exist before openControlStore (control.db) creates its
-	// file in it; create it here so a fresh Dir works.
-	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
-		alloc.Close()
+	// idtable is a standalone bbolt component living under the store's own Dir.
+	alloc, err := idtable.Open(filepath.Join(opts.Dir, "idtable.db"), idtable.Options{})
+	if err != nil {
 		return nil, err
 	}
 	cs, err := openControlStore(opts.Dir)
@@ -195,7 +178,6 @@ func Open(opts Options) (*Store, error) {
 	s := &Store{
 		metric:   opts.Metric,
 		dir:      opts.Dir,
-		kv:       opts.KV,
 		alloc:    alloc,
 		seg:      newSegment(opts.Metric),
 		cs:       cs,
@@ -885,28 +867,17 @@ func (s *Store) docIDForAlloc(id string) (int64, error) {
 }
 
 // lookupDocID resolves a string id to its docId WITHOUT allocating, for the read
-// path (Get). It consults the in-memory idToDoc cache first; on a miss it reads
-// the idtable's durable key→id entry directly from the KV (the same key encoding
-// the allocator uses: {idtableKeyTypeKey}+id, value = 8-byte big-endian docId).
-// This is required so a sealed doc — whose head row was moved out of the head
-// bucket at seal time and whose string id is therefore absent from idToDoc after
-// recovery — is still resolvable on Get. A truly-unknown id (never Put) yields
-// found=false and, unlike GetId, allocates nothing.
+// path (Get). It consults the in-memory idToDoc cache first; on a miss it asks
+// the idtable for a non-allocating lookup. This is required so a sealed doc —
+// whose head row was moved out of the head bucket at seal time and whose string
+// id is therefore absent from idToDoc after recovery — is still resolvable on
+// Get. A truly-unknown id (never Put) yields found=false and, unlike GetId,
+// allocates nothing.
 func (s *Store) lookupDocID(id string) (int64, bool, error) {
 	if d, ok := s.idToDoc[id]; ok {
 		return d, true, nil
 	}
-	key := make([]byte, 1+len(id))
-	key[0] = idtableKeyTypeKey
-	copy(key[1:], id)
-	v, err := s.kv.Get(key)
-	if err != nil {
-		return 0, false, err
-	}
-	if len(v) != 8 {
-		return 0, false, nil // missing (nil) or malformed → unknown id
-	}
-	return int64(binary.BigEndian.Uint64(v)), true, nil
+	return s.alloc.Lookup([]byte(id))
 }
 
 // rebuildHead reconstructs the in-memory flat head from the durable head bucket.

@@ -1,7 +1,6 @@
 package vectorstore
 
 import (
-	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -18,7 +17,7 @@ import (
 func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(101))
 	dim := 12
@@ -75,9 +74,8 @@ func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 // must spawn a background builder for it; WaitForIndex blocks until it indexes;
 // Search must return results throughout (pending brute leg, then indexed graph).
 func TestRecovery_ResumesPendingBuild(t *testing.T) {
-	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(102))
 	dim := 12
@@ -127,7 +125,7 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 	requireNoError(t, cs.Close())
 
 	// Reopen: recover() loads the pending segment and resumes its build.
-	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 
@@ -161,7 +159,7 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 func TestRecovery_CrossSegmentUpdateTombstoneNotFlushed(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(7777))
 	dim := 8
@@ -234,7 +232,7 @@ func TestRecovery_CrossSegmentUpdateTombstoneNotFlushed(t *testing.T) {
 func TestRecovery_SealHeadClearIsAtomicNoDoubleStore(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(103))
 	dim := 10
@@ -293,22 +291,21 @@ func TestRecovery_SealHeadClearIsAtomicNoDoubleStore(t *testing.T) {
 	}
 }
 
-// TestLookupDocID_KVErrorPropagates makes the KV fail on a cache-miss read, so
-// lookupDocID's direct idtable read errors. Get and Delete must surface that
-// error rather than silently treating the id as not-found.
-func TestLookupDocID_KVErrorPropagates(t *testing.T) {
-	fkv := &faultKV{Store: newTestKV(t)}
-	s, err := Open(Options{Dir: t.TempDir(), KV: fkv, Metric: Cosine})
+// TestLookupDocID_AllocErrorPropagates closes the idtable out from under the
+// store so lookupDocID's non-allocating idtable read errors. Get and Delete must
+// surface that error rather than silently treating the id as not-found.
+func TestLookupDocID_AllocErrorPropagates(t *testing.T) {
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
-	// Arm the fault AFTER open (idtable.New already read its counter).
-	fkv.getErr = errors.New("kv get boom")
+	// Close the idtable so a cache-miss lookup errors (database is closed).
+	s.alloc.Close()
 
-	// "ghost" was never Put → idToDoc cache miss → lookupDocID reads the KV → errors.
+	// "ghost" was never Put → idToDoc cache miss → lookupDocID asks the idtable → errors.
 	if _, _, _, err := s.Get("ghost"); err == nil {
-		t.Fatal("Get should propagate the KV lookup error")
+		t.Fatal("Get should propagate the idtable lookup error")
 	}
 	if err := s.Delete("ghost"); err == nil {
-		t.Fatal("Delete should propagate the KV lookup error")
+		t.Fatal("Delete should propagate the idtable lookup error")
 	}
 }

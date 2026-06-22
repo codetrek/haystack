@@ -276,7 +276,6 @@ func TestStore_DropVectorIndex_DefaultRefusedUnknownNoop(t *testing.T) {
 
 func TestStore_Recover_RestoresAllIndexesAndResumesPending(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
 	rng := rand.New(rand.NewSource(61))
 	dim := 16
 	vecs := make(map[int64][]float32)
@@ -289,7 +288,7 @@ func TestStore_Recover_RestoresAllIndexesAndResumesPending(t *testing.T) {
 	}
 
 	{
-		s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+		s, err := Open(Options{Dir: dir, Metric: Cosine})
 		requireNoError(t, err)
 		batchPutVecs(t, s, "a-", 60, randVec, vecs)
 		requireNoError(t, s.Seal()) // seg 1 (default builds N=1 graph)
@@ -300,7 +299,7 @@ func TestStore_Recover_RestoresAllIndexesAndResumesPending(t *testing.T) {
 
 	// Reopen: both indexes' configs + states load from the manifest; indexed graphs
 	// reopen from disk, no rebuild needed.
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 	requireNoError(t, s2.WaitForIndex())

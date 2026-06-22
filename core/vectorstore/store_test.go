@@ -1,7 +1,8 @@
 package vectorstore
 
 import (
-	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -12,14 +13,8 @@ func TestStore_OpenClose(t *testing.T) {
 	}
 }
 
-func TestStore_OpenRequiresKV(t *testing.T) {
-	if _, err := Open(Options{Dir: t.TempDir(), Metric: Cosine}); err == nil {
-		t.Fatal("Open without KV should error")
-	}
-}
-
 func TestStore_OpenRequiresDir(t *testing.T) {
-	if _, err := Open(Options{KV: newTestKV(t), Metric: Cosine}); err == nil {
+	if _, err := Open(Options{Metric: Cosine}); err == nil {
 		t.Fatal("Open without Dir should error")
 	}
 }
@@ -214,9 +209,8 @@ func TestStore_Search_RejectsBadVectorAndK(t *testing.T) {
 
 func TestStore_Reopen_AfterClose(t *testing.T) {
 	dir := t.TempDir()
-	store := newTestKV(t) // shared across both opens, closed at cleanup
 
-	s1, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s1, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, Payload{"p": StringValue("pa")}))
 	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, Payload{"p": StringValue("pb")}))
@@ -224,7 +218,7 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 	requireNoError(t, s1.Delete("b"))
 	requireNoError(t, s1.Close()) // graceful: commits idtable + closes control store
 
-	s2, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 
@@ -245,9 +239,8 @@ func TestStore_Reopen_AfterClose(t *testing.T) {
 
 func TestStore_CrashRecovery_NoClose_HeadBucketIsSourceOfTruth(t *testing.T) {
 	dir := t.TempDir()
-	store := newTestKV(t) // shared; NOT closed between opens
 
-	s1, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s1, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s1.Put("a", []float32{1, 0, 0}, Payload{"p": StringValue("pa")}))
 	requireNoError(t, s1.Put("b", []float32{0, 1, 0}, Payload{"p": StringValue("pb")}))
@@ -264,7 +257,7 @@ func TestStore_CrashRecovery_NoClose_HeadBucketIsSourceOfTruth(t *testing.T) {
 	// Reopen over the SAME dir + SAME KV. Recovery must come entirely from the
 	// durable head bucket: the segment, the id→docId map, and a consistent
 	// allocator nextId.
-	s2, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 
@@ -297,8 +290,7 @@ func TestStore_CrashRecovery_NoClose_HeadBucketIsSourceOfTruth(t *testing.T) {
 
 func TestStore_CloseSurfacesControlStoreError(t *testing.T) {
 	dir := t.TempDir()
-	store := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	// Force cs.Close to surface an error so Store.Close propagates it (the
 	// control store is now the only Close that returns an error).
@@ -310,8 +302,7 @@ func TestStore_CloseSurfacesControlStoreError(t *testing.T) {
 
 func TestStore_PutControlStoreCommitError(t *testing.T) {
 	dir := t.TempDir()
-	store := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s.Close()
 	// Force the next control-store commit (the Put's durable head-row write) to fail.
@@ -323,8 +314,7 @@ func TestStore_PutControlStoreCommitError(t *testing.T) {
 
 func TestStore_DeleteControlStoreCommitError(t *testing.T) {
 	dir := t.TempDir()
-	store := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: store, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s.Close()
 	requireNoError(t, s.Put("a", []float32{1, 0}, nil))
@@ -342,8 +332,7 @@ func TestStore_DeleteControlStoreCommitError(t *testing.T) {
 // resurrected. A second, surviving Put proves the failed Put caused no cascade loss.
 func TestErroredPutNotResurrectedOnReopen(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: DotProduct})
+	s, err := Open(Options{Dir: dir, Metric: DotProduct})
 	requireNoError(t, err)
 	// Force the durable commit for "x" to fail.
 	s.cs.failNextUpdate = errInjected
@@ -354,7 +343,7 @@ func TestErroredPutNotResurrectedOnReopen(t *testing.T) {
 	requireNoError(t, s.Put("y", []float32{5, 6, 7, 8}, nil))
 	requireNoError(t, s.Close())
 
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: DotProduct})
+	s2, err := Open(Options{Dir: dir, Metric: DotProduct})
 	requireNoError(t, err)
 	defer s2.Close()
 	if _, _, found, _ := s2.Get("x"); found {
@@ -367,42 +356,22 @@ func TestErroredPutNotResurrectedOnReopen(t *testing.T) {
 
 func TestStore_OpenIdtableError(t *testing.T) {
 	dir := t.TempDir()
-	kvStore := &faultKV{Store: newTestKV(t), getErr: errors.New("kv get boom")}
-	// idtable.New issues a startup Get for nextId; faulting it fails Open before
-	// the control store is even opened.
-	if _, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine}); err == nil {
-		t.Fatal("Open should fail when the idtable startup read fails")
+	// Occupy the idtable's path with a directory so idtable.Open (bbolt) fails,
+	// which must fail Store.Open.
+	requireNoError(t, os.MkdirAll(filepath.Join(dir, "idtable.db"), 0o755))
+	if _, err := Open(Options{Dir: dir, Metric: Cosine}); err == nil {
+		t.Fatal("Open should fail when the idtable cannot be opened")
 	}
 }
 
 func TestStore_PutAllocError(t *testing.T) {
-	dir := t.TempDir()
-	kvStore := &faultKV{Store: newTestKV(t)}
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	defer s.Close()
-	// Now make GetId fail (IsClosed) so docIDForAlloc errors on the Put path.
-	kvStore.isClosed = true
+	// Close the idtable out from under the store so GetId fails, making
+	// docIDForAlloc error on the Put path.
+	s.alloc.Close()
 	if err := s.Put("a", []float32{1, 0}, nil); err == nil {
 		t.Fatal("Put should surface a docId-allocation failure")
-	}
-}
-
-func TestStore_OpenHeadRebuildError(t *testing.T) {
-	dir := t.TempDir()
-	base := newTestKV(t)
-	kvStore := &faultKV{Store: base}
-
-	// Seed the head bucket with one durable row so the rebuild has work to do.
-	s1, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
-	requireNoError(t, err)
-	requireNoError(t, s1.Put("a", []float32{1, 0}, nil))
-	crashRelease(t, s1) // leave the row on disk; do not commit alloc, drop OS locks
-
-	// Reopen: idtable.New's startup Get succeeds, but the head rebuild drives
-	// docIDForAlloc -> GetId, which fails because the KV reports closed.
-	kvStore.isClosed = true
-	if _, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine}); err == nil {
-		t.Fatal("Open should fail when the head rebuild's docId re-allocation fails")
 	}
 }

@@ -9,7 +9,7 @@ import (
 
 func TestRecovery_OrphanSegmentSwept(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(71))
 	dim := 8

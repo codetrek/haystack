@@ -213,7 +213,7 @@ func startTestServer(t *testing.T) func() {
 	mpsc := queue.NewMpsc("TestDBQueue")
 	mpsc.Start()
 
-	alloc, err := idtable.New(db, idtable.Options{})
+	alloc, err := idtable.Open(filepath.Join(conf.Get().Global.DataPath, "idtable.db"), idtable.Options{})
 	assert.NoError(t, err)
 	indexer.SetIdAllocator(alloc)
 

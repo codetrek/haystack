@@ -55,14 +55,13 @@ func TestStore_Payload_SurvivesSealAndMerge(t *testing.T) {
 // recovery).
 func TestStore_Payload_SurvivesRecovery(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	p := Payload{"tag": StringValue("x"), "rank": Float64Value(2.5)}
 	requireNoError(t, s.Put("a", []float32{1, 0, 0}, p))
 	requireNoError(t, s.Close())
 
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 	_, got, found, err := s2.Get("a")

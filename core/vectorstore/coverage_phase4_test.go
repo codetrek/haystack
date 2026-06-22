@@ -111,7 +111,7 @@ func TestSealLocked_WriteFaultPropagates(t *testing.T) {
 func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(909))
 	bp := s.NewBatch()
@@ -151,8 +151,7 @@ func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
 // crash-before-commit orphan a later recover sweeps. We drive a real merge to the
 // swap with testHookReconcileErr armed, then confirm every doc survives.
 func TestCommitMergeLocked_ReconcileErrorRollsBack(t *testing.T) {
-	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 	requireNoError(t, err)
 	defer s.Close() // release output mmaps so t.TempDir cleanup works on Windows
 	rng := rand.New(rand.NewSource(808))
