@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -171,6 +172,120 @@ func BenchmarkGitIgnore_WarmLookup(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		for _, e := range files {
 			g.IsIgnored(e.rel, e.isDir)
+		}
+	}
+}
+
+// walkAllEntries walks the whole tree under root, pruning only .git, and returns
+// every (relPath, isDir) — used to validate ignore decisions on a real repo
+// independently of gitignore-based pruning (so the entry set is identical across
+// builds and a cross-binary diff lines up).
+func walkAllEntries(root string) []benchEntry {
+	var out []benchEntry
+	type item struct{ full, rel string }
+	q := []item{{full: root, rel: ""}}
+	for len(q) > 0 {
+		cur := q[0]
+		q = q[1:]
+		des, err := os.ReadDir(cur.full)
+		if err != nil {
+			continue
+		}
+		for _, d := range des {
+			rel := d.Name()
+			if cur.rel != "" {
+				rel = filepath.Join(cur.rel, d.Name())
+			}
+			out = append(out, benchEntry{rel: rel, isDir: d.IsDir()})
+			if d.IsDir() && d.Name() != ".git" {
+				q = append(q, item{full: filepath.Join(cur.full, d.Name()), rel: rel})
+			}
+		}
+	}
+	return out
+}
+
+// BenchmarkGitIgnore_RealRepo benchmarks IsIgnored against a real repository's
+// directory tree and .gitignore files. Set GITIGNORE_BENCH_ROOT to the repo
+// path; the benchmark is skipped otherwise (so it is inert on CI).
+func BenchmarkGitIgnore_RealRepo(b *testing.B) {
+	root := os.Getenv("GITIGNORE_BENCH_ROOT")
+	if root == "" {
+		b.Skip("set GITIGNORE_BENCH_ROOT to a repo path to benchmark real-world gitignore matching")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		b.Fatal(err)
+	}
+	entries := collectScanEntries(abs)
+	if len(entries) == 0 {
+		b.Skipf("no entries under %s", abs)
+	}
+	var files []benchEntry
+	for _, e := range entries {
+		if !e.isDir {
+			files = append(files, e)
+		}
+	}
+	b.Logf("real repo %s: %d scan entries (%d files)", abs, len(entries), len(files))
+
+	b.Run("ColdScan", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			g := NewGitIgnore(abs, true)
+			for _, e := range entries {
+				g.IsIgnored(e.rel, e.isDir)
+			}
+		}
+	})
+	b.Run("WarmLookup", func(b *testing.B) {
+		g := NewGitIgnore(abs, true)
+		for _, e := range entries {
+			g.IsIgnored(e.rel, e.isDir)
+		}
+		b.ResetTimer()
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			for _, e := range files {
+				g.IsIgnored(e.rel, e.isDir)
+			}
+		}
+	})
+}
+
+// TestRealRepoDecisions records the ignore decision for every entry of a real
+// repository. With GITIGNORE_BENCH_DUMP set it writes "rel\tisDir\tignored"
+// lines to that file so two builds (e.g. the library baseline and the fast
+// path) can be diffed for real-world equivalence. Skipped without
+// GITIGNORE_BENCH_ROOT.
+func TestRealRepoDecisions(t *testing.T) {
+	root := os.Getenv("GITIGNORE_BENCH_ROOT")
+	if root == "" {
+		t.Skip("set GITIGNORE_BENCH_ROOT to a repo path to record real-world ignore decisions")
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries := walkAllEntries(abs)
+	g := NewGitIgnore(abs, true)
+
+	dump := os.Getenv("GITIGNORE_BENCH_DUMP")
+	var sb strings.Builder
+	ignored := 0
+	for _, e := range entries {
+		ig := g.IsIgnored(e.rel, e.isDir)
+		if ig {
+			ignored++
+		}
+		if dump != "" {
+			fmt.Fprintf(&sb, "%s\t%v\t%v\n", e.rel, e.isDir, ig)
+		}
+	}
+	t.Logf("%s: %d entries, %d ignored", abs, len(entries), ignored)
+	if dump != "" {
+		if err := os.WriteFile(dump, []byte(sb.String()), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	}
 }
