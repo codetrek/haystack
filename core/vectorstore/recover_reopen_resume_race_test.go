@@ -26,9 +26,8 @@ import (
 // -race`: with the two-phase recover, no builder exists while any reopen-write
 // runs, so the widen cannot produce a race. (Doc id: Phase-6 Task-8 recover race.)
 func TestRecover_ReopenWriteDoesNotRaceResumedBuild(t *testing.T) {
-	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 
 	// Suppress every merge so each Seal yields a distinct, surviving segment: a
@@ -112,7 +111,7 @@ func TestRecover_ReopenWriteDoesNotRaceResumedBuild(t *testing.T) {
 	testHookRecoverBeforeReopenWrite = func() { time.Sleep(8 * time.Millisecond) }
 	t.Cleanup(func() { testHookRecoverBeforeReopenWrite = nil })
 
-	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 

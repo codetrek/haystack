@@ -85,7 +85,16 @@ func run() error {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	idAlloc, err := idtable.New(db, idtable.Options{})
+	// idtable is now a standalone bbolt-backed component (no longer sharing the
+	// `data` pebble store). Migrate any pre-existing key→id entries out of the
+	// legacy 28/29 prefixes on `db` into the bbolt file on first run; the migration
+	// is idempotent (a no-op once the bbolt file holds entries).
+	idtablePath := filepath.Join(conf.Get().Global.DataPath, "idtable.db")
+	if err := idtable.MigrateFromKV(db, idtablePath, idtable.LegacyKeyTypeKey, idtable.LegacyKeyTypeNextId); err != nil {
+		running.Shutdown()
+		return fmt.Errorf("error migrating id table: %w", err)
+	}
+	idAlloc, err := idtable.Open(idtablePath, idtable.Options{})
 	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing id table: %w", err)

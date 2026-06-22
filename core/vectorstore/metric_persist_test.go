@@ -12,9 +12,8 @@ import (
 // is reachable by a config slip. The manifest must persist the metric and Open
 // must reject a mismatch with a clear error rather than silently wrong-restore.
 func TestOpen_RejectsMetricMismatch(t *testing.T) {
-	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(13))
 	dim := 8
@@ -33,14 +32,14 @@ func TestOpen_RejectsMetricMismatch(t *testing.T) {
 	requireNoError(t, s.Close())
 
 	// Reopen under a DIFFERENT metric: must error, not silently mis-read.
-	s2, err := Open(Options{Dir: dir, KV: kvStore, Metric: Euclidean})
+	s2, err := Open(Options{Dir: dir, Metric: Euclidean})
 	if err == nil {
 		_ = s2.Close()
 		t.Fatal("Open under Euclidean over a Cosine store should error (metric mismatch), got nil")
 	}
 
 	// Reopening under the SAME metric must still succeed.
-	s3, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s3, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s3.Close() })
 	if s3.Metric() != Cosine {

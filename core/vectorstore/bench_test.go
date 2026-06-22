@@ -24,7 +24,7 @@ func benchOpenStore(b *testing.B, m Metric) *Store {
 	if err != nil {
 		b.Fatal(err)
 	}
-	s, err := Open(Options{Dir: b.TempDir(), KV: kvs, Metric: m})
+	s, err := Open(Options{Dir: b.TempDir(), Metric: m})
 	if err != nil {
 		b.Fatal(err)
 	}

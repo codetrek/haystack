@@ -14,7 +14,6 @@ import (
 // on the missing-manifest branch too (with an empty referenced set, every seg-*
 // dir is an orphan).
 func TestRecovery_OrphanSweptOnMissingManifest(t *testing.T) {
-	kvStore := newTestKV(t)
 	dir := t.TempDir()
 
 	// Simulate a crash during the FIRST seal: a half-written segment dir exists but
@@ -23,7 +22,7 @@ func TestRecovery_OrphanSweptOnMissingManifest(t *testing.T) {
 	requireNoError(t, os.MkdirAll(orphan, 0755))
 	requireNoError(t, os.WriteFile(filepath.Join(orphan, "vectors.dat"), []byte("garbage"), 0644))
 
-	s, err := Open(Options{Dir: dir, KV: kvStore, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 

@@ -23,8 +23,7 @@ import (
 // after the fix it returns the decode error.
 func TestMerge_CorruptSealedPayload_AbortsFailClosed(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s.Put("a", []float32{1, 0, 0}, Payload{"k": StringValue("v")}))
 	requireNoError(t, s.Seal()) // one-row sealed segment (segId 1), no attr declared
@@ -48,7 +47,7 @@ func TestMerge_CorruptSealedPayload_AbortsFailClosed(t *testing.T) {
 
 	// Reopen: the segment opens fine (header/lens intact); only the blob content is
 	// corrupt, so the failure surfaces at decode time during the merge pack.
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())

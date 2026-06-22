@@ -8,8 +8,7 @@ import (
 
 func TestStore_CreateAttrIndex_SurvivesReopen(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	b := s.NewBatch()
 	for i := 0; i < 30; i++ {
@@ -23,7 +22,7 @@ func TestStore_CreateAttrIndex_SurvivesReopen(t *testing.T) {
 	requireNoError(t, s.Close())
 
 	// Reopen: the declared index must persist (manifest v3) and filter correctly.
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())
@@ -36,8 +35,7 @@ func TestStore_CreateAttrIndex_SurvivesReopen(t *testing.T) {
 
 func TestStore_AttrFile_Corrupt_RebuildsOnOpen(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	b := s.NewBatch()
 	for i := 0; i < 20; i++ {
@@ -57,7 +55,7 @@ func TestStore_AttrFile_Corrupt_RebuildsOnOpen(t *testing.T) {
 	}
 	requireNoError(t, os.WriteFile(matches[0], []byte("garbage"), 0644))
 
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())

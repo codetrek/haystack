@@ -111,17 +111,18 @@ func TestRun_IdTableInitError(t *testing.T) {
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024
 	conf.Get().Global.DataPath = tempDir
 
-	// Pre-seed a corrupt nextId so that idtable.New returns an error.
+	// Pre-seed a corrupt legacy nextId so the one-time idtable migration fails
+	// (it validates the source counter before copying it into the bbolt file).
 	dataDB, err := storage.Open(filepath.Join(tempDir, "data"), conf.Get().Server.CacheSize)
 	assert.NoError(t, err)
-	// KeyTypeNextId == 28 (DefaultKeyTypeNextId); write a non-numeric value.
-	err = dataDB.Put([]byte{idtable.DefaultKeyTypeNextId}, []byte("not-a-number"))
+	// LegacyKeyTypeNextId == 28; write a non-numeric value.
+	err = dataDB.Put([]byte{idtable.LegacyKeyTypeNextId}, []byte("not-a-number"))
 	assert.NoError(t, err)
 	dataDB.Close()
 
 	err = run()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error initializing id table")
+	assert.Contains(t, err.Error(), "error migrating id table")
 }
 
 // TestRun_LockError tests Run() when CheckAndLockServer fails (line 36-38).

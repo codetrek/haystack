@@ -376,8 +376,7 @@ func TestSearch_Filter_AfterMerge_MatchesOracle(t *testing.T) {
 // the independent oracle.
 func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s.CreateAttrIndex("color", Keyword))
 	vecs := map[int64][]float32{}
@@ -402,7 +401,7 @@ func TestSearch_Filter_RecoversAfterReopen(t *testing.T) {
 	requireNoError(t, s.WaitForIndex())
 	requireNoError(t, s.Close())
 
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())
@@ -495,8 +494,7 @@ func TestDropAttrIndex_Unknown_NoOp(t *testing.T) {
 // flipped on disk so decodePayload rejects it; Get must return that error.
 func TestGet_MalformedPayload_Errors(t *testing.T) {
 	dir := t.TempDir()
-	kvs := newTestKV(t)
-	s, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	requireNoError(t, s.Put("a", []float32{1, 0, 0}, Payload{"k": StringValue("v")}))
 	requireNoError(t, s.Seal()) // one-row sealed segment, no attr declared
@@ -519,7 +517,7 @@ func TestGet_MalformedPayload_Errors(t *testing.T) {
 
 	// Reopen WITHOUT declaring an attr index (so no attr scan decodes the blob first);
 	// the only decodePayload is in Get's sealed path.
-	s2, err := Open(Options{Dir: dir, KV: kvs, Metric: Cosine})
+	s2, err := Open(Options{Dir: dir, Metric: Cosine})
 	requireNoError(t, err)
 	defer s2.Close()
 	requireNoError(t, s2.WaitForIndex())

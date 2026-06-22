@@ -166,8 +166,7 @@ func TestAutoMerge_CloseRaceNoPanic(t *testing.T) {
 		iters = 20
 	}
 	for iter := 0; iter < iters; iter++ {
-		kvStore := newTestKV(t)
-		s, err := Open(Options{Dir: t.TempDir(), KV: kvStore, Metric: Cosine})
+		s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
 		requireNoError(t, err)
 		s.maxSegSize = 3
 		s.mcfg.Fanout = 2
