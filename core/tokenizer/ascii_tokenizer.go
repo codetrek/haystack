@@ -6,6 +6,10 @@ import (
 	"strings"
 )
 
+// reASCII is the original token grammar, retained as the oracle for the
+// differential test that pins the hand-written scanner (findASCIITokensInto) to
+// it. Production tokenization uses the scanner, which is byte-for-byte equivalent
+// but avoids the regexp engine's backtracking that dominated tokenizer CPU.
 var reASCII = regexp.MustCompile(`[a-zA-Z0-9][a-zA-Z0-9_]{1,78}[a-zA-Z0-9]|([0-9]{1,8}\.|[a-zA-Z0-9]{1,2}\.)+([0-9]{1,8}|[a-zA-Z0-9]{1,2})`)
 
 // ASCIITokenizer handles tokenization of ASCII text (Latin alphabet, digits,
@@ -17,7 +21,7 @@ type ASCIITokenizer struct{}
 // It collects words from the string, splits them into smaller parts if necessary,
 // and returns a sorted list of unique words.
 func (t *ASCIITokenizer) TokenizeForIndex(str string) []string {
-	words := reASCII.FindAllString(str, -1)
+	words := findASCIITokensInto(nil, str)
 
 	uniqueWords := make(map[string]struct{}, len(words))
 	pushWord := func(word string) {
@@ -77,13 +81,13 @@ func (t *ASCIITokenizer) TokenizeForSearch(s string, exactMatching bool) ([]stri
 	}
 
 	if exactMatching {
-		for _, w := range reASCII.FindAllString(s, -1) {
+		for _, w := range findASCIITokensInto(nil, s) {
 			push(w)
 		}
 		return result, nil
 	}
 
-	poses := reASCII.FindAllStringIndex(s, -1)
+	poses := findASCIITokenSpansInto(nil, s)
 	for _, pos := range poses {
 		start := pos[0]
 		end := pos[1]
