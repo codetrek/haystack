@@ -1,6 +1,7 @@
 package gitutils
 
 import (
+	"os"
 	"strings"
 
 	gitignore "github.com/sabhiram/go-gitignore"
@@ -13,19 +14,31 @@ import (
 // fallback, so the overall result is identical to compiling every pattern with
 // the library.
 //
-// The path passed to matches is the library's path form: a leading "/", forward
-// slashes, and a trailing "/" for directories (e.g. "/a/b/c.go", "/a/dir/").
+// The path passed to matches is the library's path form: forward slashes and a
+// trailing "/" for directories (e.g. "/a/b/c.go", "/a/dir/"). The leading "/" is
+// optional — the ignore loop passes it, the negation loop passes a root-relative
+// path without it — so the matchers below accept both forms, matching the
+// library, which treats a leading slash as transparent.
 type matcherSet struct {
 	literals []string          // class A: bare segment names; a segment equals the literal
 	suffixes []string          // class B: "*suffix" globs; a segment ends with suffix
-	dirs     []string          // class C: "dir/" patterns, stored as "/dir/" (path substring)
+	dirs     []dirMatcher      // class C: "dir/" patterns
 	anchored []anchoredMatcher // class D: "/name" or "/name/" patterns
 	fallback *gitignore.GitIgnore
 }
 
-// anchoredMatcher matches a pattern anchored at the .gitignore directory.
-// "/name"  -> exact="/name", prefix="/name/" (the file itself or anything under it)
-// "/name/" -> exact="",       prefix="/name/" (a directory and its contents only)
+// dirMatcher matches a "dir/" pattern: the directory as a non-leading segment
+// (mid, "/dir/") or as the leading segment of a root-relative path (head,
+// "dir/").
+type dirMatcher struct {
+	mid  string
+	head string
+}
+
+// anchoredMatcher matches a pattern anchored at the .gitignore directory,
+// against the path with any single leading slash removed.
+// "/name"  -> exact="name", prefix="name/" (the file itself or anything under it)
+// "/name/" -> exact="",     prefix="name/" (a directory and its contents only)
 type anchoredMatcher struct {
 	exact  string
 	prefix string
@@ -64,13 +77,13 @@ func (m *matcherSet) classify(p string) bool {
 		if strings.HasSuffix(body, "/") {
 			name := body[:len(body)-1]
 			if isPlainSegment(name) {
-				m.anchored = append(m.anchored, anchoredMatcher{prefix: "/" + name + "/"})
+				m.anchored = append(m.anchored, anchoredMatcher{prefix: name + "/"})
 				return true
 			}
 			return false
 		}
 		if isPlainSegment(body) {
-			m.anchored = append(m.anchored, anchoredMatcher{exact: "/" + body, prefix: "/" + body + "/"})
+			m.anchored = append(m.anchored, anchoredMatcher{exact: body, prefix: body + "/"})
 			return true
 		}
 		return false
@@ -80,7 +93,7 @@ func (m *matcherSet) classify(p string) bool {
 	if strings.HasSuffix(p, "/") {
 		name := p[:len(p)-1]
 		if isPlainSegment(name) {
-			m.dirs = append(m.dirs, "/"+name+"/")
+			m.dirs = append(m.dirs, dirMatcher{mid: "/" + name + "/", head: name + "/"})
 			return true
 		}
 		return false
@@ -111,18 +124,37 @@ func (m *matcherSet) classify(p string) bool {
 
 // matches reports whether any pattern in the set matches path f.
 func (m *matcherSet) matches(f string) bool {
-	for _, d := range m.dirs {
-		if strings.Contains(f, d) {
+	// Mirror the library's MatchesPath normalization: convert OS separators to
+	// forward slashes. On non-Windows this is a compile-time no-op. The negation
+	// loop in GitIgnore.IsIgnored passes raw, OS-separated paths, so without this
+	// the fast matchers would miss every match on Windows.
+	if os.PathSeparator != '/' {
+		f = strings.ReplaceAll(f, string(os.PathSeparator), "/")
+	}
+
+	// Class C: "dir" appears as a segment followed by "/", either after another
+	// segment ("/dir/") or as the leading segment ("dir/").
+	for i := range m.dirs {
+		d := &m.dirs[i]
+		if strings.Contains(f, d.mid) || strings.HasPrefix(f, d.head) {
 			return true
 		}
 	}
-	for i := range m.anchored {
-		am := &m.anchored[i]
-		if am.exact != "" && f == am.exact {
-			return true
+	// Class D: anchored at the start of the path, with any single leading slash
+	// removed so both "/name..." and "name..." forms match.
+	if len(m.anchored) > 0 {
+		g := f
+		if len(g) > 0 && g[0] == '/' {
+			g = g[1:]
 		}
-		if strings.HasPrefix(f, am.prefix) {
-			return true
+		for i := range m.anchored {
+			am := &m.anchored[i]
+			if am.exact != "" && g == am.exact {
+				return true
+			}
+			if strings.HasPrefix(g, am.prefix) {
+				return true
+			}
 		}
 	}
 	if (len(m.literals) > 0 || len(m.suffixes) > 0) && m.matchSegments(f) {

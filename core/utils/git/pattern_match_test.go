@@ -42,6 +42,11 @@ func TestMatcherSetMatchesLibrary(t *testing.T) {
 		"/a", "/o", "/x.o", "/buildx", "/buildx/", "/.env/", "/.environments",
 		"/a.b.cd", "/xa.b.c", "/a.b.c", "/node_modulesx", "/x/node_modules",
 		"/coverages", "/src/sub/", "/main.gox", "/.DS_Store/x", "/build/sub/deep",
+		// root-relative form (no leading slash), as the negation loop passes:
+		// matches() must add a leading slash and stay equivalent to the library.
+		"node_modules", "node_modules/x", "a/node_modules/x", "build/sub",
+		"coverage", "coverage/x", "app.log", "a/b.log", "x.min.js", "src/main.go",
+		"main.go", ".DS_Store", "dist/z", "vendor", "node_x",
 	}
 
 	for _, p := range patterns {

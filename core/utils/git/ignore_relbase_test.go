@@ -33,7 +33,10 @@ func TestRelUnderBaseMatchesFilepathRel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("filepath.Rel(%q, %q) unexpected error: %v", base, abs, err)
 		}
-		if got != want {
+		// Compare in slash form: relUnderBase slices the raw path while
+		// filepath.Rel returns OS-separated output (backslashes on Windows). The
+		// caller normalizes with ToSlash, so that is the invariant under test.
+		if filepath.ToSlash(got) != filepath.ToSlash(want) {
 			t.Errorf("relUnderBase(%q, %q) = %q, want %q (filepath.Rel)", abs, base, got, want)
 		}
 	}
