@@ -1,6 +1,7 @@
 package invertedindex
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -137,35 +138,34 @@ func encodeTableValue(info TableInfo) []byte {
 	return content
 }
 
-func encodeInvertedValue(docids []string) []byte {
-	// Each docid is a 8-byte string
-	return []byte(strings.Join(docids, ""))
+// encodeInvertedValue packs docids into a fixed-width byte string: each docid is
+// its 8-byte big-endian form, concatenated with no delimiter. Big-endian keeps
+// the on-disk bytes identical to the previous string-docid representation (the
+// docid was always the big-endian encoding of an idtable int64), so the format
+// is unchanged and no reindex is required.
+func encodeInvertedValue(docids []int64) []byte {
+	buf := make([]byte, len(docids)*docIDSize)
+	for i, id := range docids {
+		binary.BigEndian.PutUint64(buf[i*docIDSize:], uint64(id))
+	}
+	return buf
 }
 
-func decodeInvertedValue(data []byte) []string {
-	// Each docid is an 8-byte string.
-	if len(data) == 0 || len(data)%8 != 0 {
-		return []string{}
+func decodeInvertedValue(data []byte) []int64 {
+	// Each docid is docIDSize bytes (big-endian int64).
+	if len(data) == 0 || len(data)%docIDSize != 0 {
+		return []int64{}
 	}
 
-	const size = 8
-	chunks := make([]string, 0, len(data)/size)
-	for i := 0; i+size <= len(data); i += size {
-		chunks = append(chunks, string(data[i:i+size]))
+	ids := make([]int64, 0, len(data)/docIDSize)
+	for i := 0; i+docIDSize <= len(data); i += docIDSize {
+		ids = append(ids, int64(binary.BigEndian.Uint64(data[i:i+docIDSize])))
 	}
-	return chunks
+	return ids
 }
 
-func decodeInvertedValueStr(data string) []string {
-	// Each docid is an 8-byte string.
-	if len(data) == 0 || len(data)%8 != 0 {
-		return []string{}
-	}
-
-	const size = 8
-	chunks := make([]string, 0, len(data)/size)
-	for i := 0; i+size <= len(data); i += size {
-		chunks = append(chunks, data[i:i+size])
-	}
-	return chunks
+func decodeInvertedValueStr(data string) []int64 {
+	// Each docid is docIDSize bytes (big-endian int64). The merger holds row
+	// values as strings; copy once into a byte slice and reuse the byte decoder.
+	return decodeInvertedValue([]byte(data))
 }

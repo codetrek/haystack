@@ -6,7 +6,7 @@ import (
 )
 
 type relatedDocs struct {
-	DocIds    []string
+	DocIds    []int64
 	UpdatedAt time.Time
 }
 

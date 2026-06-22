@@ -178,7 +178,7 @@ var rewriteIndex = func(batch kv.Batch, idx *Index, index *invertedIndexEntry, m
 	rows := index.Rows
 	remainingDocCount := index.DocCount
 	for len(rows) > 1 {
-		docids := map[string]struct{}{}
+		docids := map[int64]struct{}{}
 		for len(rows) > 0 && (len(docids) < maxKeywordIndexSize /* docs batched */ || remainingDocCount < max(maxKeywordIndexSize/5, 4) /* docs left */) {
 			row := rows[0]
 			rows = rows[1:]
@@ -190,7 +190,7 @@ var rewriteIndex = func(batch kv.Batch, idx *Index, index *invertedIndexEntry, m
 			}
 		}
 
-		ids := make([]string, 0, len(docids))
+		ids := make([]int64, 0, len(docids))
 		for id := range docids {
 			ids = append(ids, id)
 		}

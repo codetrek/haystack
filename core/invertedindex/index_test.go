@@ -19,8 +19,9 @@ func forceFlush(idx *Index) {
 	idx.flushPendingDeletes(true, MaxInvertedIndexSize)
 }
 
-// makeDocID pads or truncates s to exactly 8 bytes (the canonical docid size).
-func makeDocID(s string) string {
+// makeDocID maps a label to the int64 docid the index stores (its canonical
+// 8-byte big-endian form), via the shared Doc2ID test helper.
+func makeDocID(s string) int64 {
 	return Doc2ID(s)
 }
 
@@ -383,7 +384,7 @@ func TestRemoveDocumentsFromInvertedIndex(t *testing.T) {
 
 	// Remove doc2 via removeDocumentsFromInvertedIndex
 	batch := env.DB.NewBatch(0)
-	err := env.idx.removeDocumentsFromInvertedIndex(batch, tableId, "target", []string{doc2}, MaxInvertedIndexSize)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, tableId, "target", []int64{doc2}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("removeDocumentsFromInvertedIndex failed: %v", err)
 	}
@@ -408,7 +409,7 @@ func TestRemoveDocumentsEmptyKeyword(t *testing.T) {
 
 	batch := env.DB.NewBatch(0)
 	// Empty keyword should be a no-op (returns nil)
-	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "", []string{"doc"}, MaxInvertedIndexSize)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "", []int64{Doc2ID("doc")}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("expected nil error for empty keyword, got: %v", err)
 	}
@@ -421,22 +422,9 @@ func TestRemoveDocumentsEmptyDocids(t *testing.T) {
 
 	batch := env.DB.NewBatch(0)
 	// Empty docid list should be a no-op (returns nil)
-	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "kw", []string{}, MaxInvertedIndexSize)
+	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "kw", []int64{}, MaxInvertedIndexSize)
 	if err != nil {
 		t.Fatalf("expected nil error for empty docids, got: %v", err)
-	}
-	batch.Commit()
-}
-
-func TestRemoveDocumentsOnlyEmptyStringDocids(t *testing.T) {
-	env := setupTestEnv(t)
-	defer env.teardown()
-
-	batch := env.DB.NewBatch(0)
-	// Only empty-string docids should be a no-op (returns nil)
-	err := env.idx.removeDocumentsFromInvertedIndex(batch, 1, "kw", []string{"", ""}, MaxInvertedIndexSize)
-	if err != nil {
-		t.Fatalf("expected nil error for empty-string docids, got: %v", err)
 	}
 	batch.Commit()
 }
@@ -568,7 +556,7 @@ func TestWriteInvertedIndexDeduplicates(t *testing.T) {
 	// Directly call writeInvertedIndex with duplicates
 	batch := env.DB.NewBatch(0)
 	key := env.idx.encodeInvertedKey(tableId, "dupkw", 3)
-	writeInvertedIndex(batch, tableId, "dupkw", []string{doc, doc, doc}, key)
+	writeInvertedIndex(batch, tableId, "dupkw", []int64{doc, doc, doc}, key)
 	batch.Commit()
 
 	res := env.idx.GetDocs(tableId, "dupkw")
@@ -714,7 +702,7 @@ func TestUpdateManyDocuments(t *testing.T) {
 
 	tableId, _ := env.idx.CreateTable("many-docs-test")
 
-	docids := make([]string, 20)
+	docids := make([]int64, 20)
 	for i := 0; i < 20; i++ {
 		docids[i] = makeDocID("d" + string(rune('A'+i)))
 		env.idx.Update(tableId, docids[i], []string{"popular"}, nil)
@@ -734,16 +722,16 @@ func TestUpdateManyDocuments(t *testing.T) {
 func TestDoc2IDPadding(t *testing.T) {
 	tests := []struct {
 		input string
-		want  int
+		want  string // canonical 8-byte big-endian form
 	}{
-		{"a", 8},
-		{"abcdefgh", 8},
-		{"abcdefghijklm", 8}, // truncated
+		{"a", "0000000a"},
+		{"abcdefgh", "abcdefgh"},
+		{"abcdefghijklm", "abcdefgh"}, // truncated to first 8 bytes
 	}
 	for _, tc := range tests {
-		got := Doc2ID(tc.input)
-		if len(got) != tc.want {
-			t.Errorf("Doc2ID(%q) length = %d, want %d", tc.input, len(got), tc.want)
+		got := string(encodeInvertedValue([]int64{Doc2ID(tc.input)}))
+		if got != tc.want {
+			t.Errorf("Doc2ID(%q) canonical bytes = %q, want %q", tc.input, got, tc.want)
 		}
 	}
 }
@@ -765,7 +753,7 @@ func TestRemoveDocumentsPartial(t *testing.T) {
 
 	tableId, _ := env.idx.CreateTable("partial-remove-test")
 
-	docs := make([]string, 5)
+	docs := make([]int64, 5)
 	for i := 0; i < 5; i++ {
 		docs[i] = makeDocID("p" + string(rune('1'+i)))
 		env.idx.Update(tableId, docs[i], []string{"partkey"}, nil)
@@ -784,11 +772,11 @@ func TestRemoveDocumentsPartial(t *testing.T) {
 	res := env.idx.GetDocs(tableId, "partkey")
 	if len(res.DocIds) != 3 {
 		// Collect what we got for debugging
-		gotDocs := make([]string, 0, len(res.DocIds))
+		gotDocs := make([]int64, 0, len(res.DocIds))
 		for d := range res.DocIds {
 			gotDocs = append(gotDocs, d)
 		}
-		sort.Strings(gotDocs)
+		sort.Slice(gotDocs, func(i, j int) bool { return gotDocs[i] < gotDocs[j] })
 		t.Errorf("expected 3 docs after partial removal, got %d: %v", len(res.DocIds), gotDocs)
 	}
 

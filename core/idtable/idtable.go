@@ -20,6 +20,9 @@ const (
 	DefaultLRUCacheSize   = 200_000
 	DefaultBatchSize      = int32(100)
 	DefaultCommitInterval = 5 * time.Second
+
+	// InvalidId is returned by DecodeId for a malformed (too-short) docid string.
+	InvalidId = int64(-1)
 )
 
 // Options configures an Allocator. Zero-value fields fall back to defaults.
@@ -264,4 +267,23 @@ func toBytes(v int64) []byte {
 
 func fromBytes(buf []byte) int64 {
 	return int64(binary.BigEndian.Uint64(buf))
+}
+
+// EncodeId returns the canonical on-disk string form of a docid: its 8-byte
+// big-endian encoding. This is the exact byte sequence GetId hands out and that
+// documents.Store / invertedindex use as a key/value component, so callers that
+// hold a docid as an int64 (e.g. search results) can rebuild the string form
+// expected by the string-keyed Store APIs.
+func EncodeId(id int64) string {
+	return string(toBytes(id))
+}
+
+// DecodeId is the inverse of EncodeId: it decodes an 8-byte big-endian docid
+// string back to its int64 value. A string shorter than 8 bytes is malformed
+// (it can never be a docid this package produced) and yields InvalidId.
+func DecodeId(s string) int64 {
+	if len(s) < 8 {
+		return InvalidId
+	}
+	return int64(binary.BigEndian.Uint64([]byte(s[:8])))
 }

@@ -116,7 +116,7 @@ func (c *andClause) collectDocuments(collectionID int) (*invertedindex.SearchRes
 
 	if len(rs) == 0 {
 		return &invertedindex.SearchResult{
-			DocIds: make(map[string]struct{}),
+			DocIds: make(map[int64]struct{}),
 		}, nil
 	}
 
@@ -171,14 +171,14 @@ func (t *term) collectDocuments(collectionID int) invertedindex.SearchResult {
 	return result
 }
 
-func (t *term) collectWithKeywords(invertedID int, kws []string) map[string]struct{} {
+func (t *term) collectWithKeywords(invertedID int, kws []string) map[int64]struct{} {
 	if len(kws) == 0 {
-		return map[string]struct{}{}
+		return map[int64]struct{}{}
 	}
 
 	if t.engine.idx == nil {
 		log.Printf("[Engine] collectWithKeywords: inverted index not initialised")
-		return map[string]struct{}{}
+		return map[int64]struct{}{}
 	}
 
 	rs := t.engine.idx.Search(invertedID, kws[0], -1, nil)

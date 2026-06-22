@@ -874,8 +874,8 @@ func TestFullIntegration(t *testing.T) {
 		ws := makeWS(t, map[string]string{"main.go": "package main\n"})
 
 		sr := &invertedindex.SearchResult{
-			DocIds:     map[string]struct{}{},
-			WildDocIds: map[string]struct{}{},
+			DocIds:     map[int64]struct{}{},
+			WildDocIds: map[int64]struct{}{},
 		}
 		result := sortDocuments(ws.Id, nil, sr, func(p string) bool { return true })
 		assert.NotNil(t, result)
@@ -888,8 +888,8 @@ func TestFullIntegration(t *testing.T) {
 		})
 
 		sr := &invertedindex.SearchResult{
-			DocIds:     map[string]struct{}{},
-			WildDocIds: map[string]struct{}{},
+			DocIds:     map[int64]struct{}{},
+			WildDocIds: map[int64]struct{}{},
 		}
 		editor := &types.Editor{
 			ActiveFile: "main.go",
@@ -930,7 +930,7 @@ func TestFullIntegration(t *testing.T) {
 			return relPath == "keep.go"
 		})
 		for _, docid := range sorted {
-			doc, _ := stInst.GetDocument(sharedWS.Id, docid, false)
+			doc, _ := stInst.GetDocument(sharedWS.Id, idtable.EncodeId(docid), false)
 			if doc != nil {
 				assert.Equal(t, "keep.go", doc.RelPath)
 			}
@@ -967,8 +967,8 @@ func TestFullIntegration(t *testing.T) {
 		assert.NotEmpty(t, docId, "wild.go must be indexed")
 
 		sr := &invertedindex.SearchResult{
-			DocIds:     map[string]struct{}{docId: {}},
-			WildDocIds: map[string]struct{}{docId: {}},
+			DocIds:     map[int64]struct{}{idtable.DecodeId(docId): {}},
+			WildDocIds: map[int64]struct{}{idtable.DecodeId(docId): {}},
 		}
 		result := sortDocuments(sharedWS.Id, nil, sr, func(_ string) bool { return true })
 		assert.NotNil(t, result)
@@ -988,8 +988,8 @@ func TestFullIntegration(t *testing.T) {
 		assert.NotEmpty(t, docId, "reject_wild.go must be indexed")
 
 		sr := &invertedindex.SearchResult{
-			DocIds:     map[string]struct{}{docId: {}},
-			WildDocIds: map[string]struct{}{docId: {}},
+			DocIds:     map[int64]struct{}{idtable.DecodeId(docId): {}},
+			WildDocIds: map[int64]struct{}{idtable.DecodeId(docId): {}},
 		}
 		result := sortDocuments(sharedWS.Id, nil, sr, func(_ string) bool { return false })
 		assert.NotNil(t, result)
@@ -999,19 +999,19 @@ func TestFullIntegration(t *testing.T) {
 	// --- sortDocuments: large DocIds triggers ScanFiles path (line 50-55) ---
 	t.Run("sortDocuments large docids uses ScanFiles", func(t *testing.T) {
 		// Build a SearchResult with >10000 fake DocIds to trigger the ScanFiles branch.
-		largeDocIds := make(map[string]struct{}, 10001)
+		largeDocIds := make(map[int64]struct{}, 10001)
 		for i := 0; i < 10001; i++ {
-			largeDocIds[fmt.Sprintf("fake-doc-%d", i)] = struct{}{}
+			largeDocIds[int64(1_000_000+i)] = struct{}{} // high range to avoid colliding with real small docids
 		}
 		// Also insert real indexed doc IDs so ScanFiles finds matches.
 		stInst.ScanFiles(sharedWS.Id, func(id, relPath string) bool {
-			largeDocIds[id] = struct{}{}
+			largeDocIds[idtable.DecodeId(id)] = struct{}{}
 			return true
 		})
 
 		sr := &invertedindex.SearchResult{
 			DocIds:     largeDocIds,
-			WildDocIds: map[string]struct{}{},
+			WildDocIds: map[int64]struct{}{},
 		}
 		result := sortDocuments(sharedWS.Id, nil, sr, func(_ string) bool { return true })
 		assert.NotNil(t, result)
@@ -1965,7 +1965,7 @@ func TestFullIntegration(t *testing.T) {
 		// Only files containing BOTH terms should survive intersection.
 		// Verify by resolving doc IDs to paths.
 		for docId := range result.DocIds {
-			doc, _ := stInst.GetDocument(sharedWS.Id, docId, false)
+			doc, _ := stInst.GetDocument(sharedWS.Id, idtable.EncodeId(docId), false)
 			if doc != nil {
 				assert.Equal(t, "andfileA.go", doc.RelPath,
 					"only andfileA.go should survive AND intersection")

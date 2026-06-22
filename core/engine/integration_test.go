@@ -79,13 +79,18 @@ func buildIndexedStack(t *testing.T, docMap map[string][]string) *indexedStack {
 	return &indexedStack{idx: idx, docs: docs, colID: col.ID(), ids: ids}
 }
 
-func (s *indexedStack) collect(t *testing.T, query string) map[string]struct{} {
+func (s *indexedStack) collect(t *testing.T, query string) map[int64]struct{} {
 	t.Helper()
 	eng := engine.New(s.idx, s.docs, s.colID, engine.Options{MaxWildcardLength: 24, MaxKeywordDistance: 32})
 	require.NoError(t, eng.Compile(query, false))
 	res, err := eng.CollectDocuments()
 	require.NoError(t, err)
 	return res.DocIds
+}
+
+// id decodes the int64 docid for relPath (engine results are keyed by int64).
+func (s *indexedStack) id(relPath string) int64 {
+	return idtable.DecodeId(s.ids[relPath])
 }
 
 func TestEngineCollectDocuments(t *testing.T) {
@@ -97,31 +102,31 @@ func TestEngineCollectDocuments(t *testing.T) {
 
 	t.Run("single keyword hits all containing docs", func(t *testing.T) {
 		got := s.collect(t, "hello")
-		assert.Contains(t, got, s.ids["alpha.go"])
-		assert.Contains(t, got, s.ids["beta.go"])
-		assert.NotContains(t, got, s.ids["gamma.go"])
+		assert.Contains(t, got, s.id("alpha.go"))
+		assert.Contains(t, got, s.id("beta.go"))
+		assert.NotContains(t, got, s.id("gamma.go"))
 	})
 
 	t.Run("multiple AND keywords intersect", func(t *testing.T) {
 		// hello AND world → only alpha.go has both.
 		got := s.collect(t, "hello world")
-		assert.Contains(t, got, s.ids["alpha.go"])
-		assert.NotContains(t, got, s.ids["beta.go"])
-		assert.NotContains(t, got, s.ids["gamma.go"])
+		assert.Contains(t, got, s.id("alpha.go"))
+		assert.NotContains(t, got, s.id("beta.go"))
+		assert.NotContains(t, got, s.id("gamma.go"))
 	})
 
 	t.Run("OR clauses union and merge", func(t *testing.T) {
 		// "alpha | gamma" → alpha.go (via alpha) and gamma.go (via gamma).
 		got := s.collect(t, "alpha | gamma")
-		assert.Contains(t, got, s.ids["alpha.go"])
-		assert.Contains(t, got, s.ids["gamma.go"])
-		assert.NotContains(t, got, s.ids["beta.go"])
+		assert.Contains(t, got, s.id("alpha.go"))
+		assert.Contains(t, got, s.id("gamma.go"))
+		assert.NotContains(t, got, s.id("beta.go"))
 	})
 
 	t.Run("shared keyword across docs", func(t *testing.T) {
 		got := s.collect(t, "shared")
-		assert.Contains(t, got, s.ids["beta.go"])
-		assert.Contains(t, got, s.ids["gamma.go"])
+		assert.Contains(t, got, s.id("beta.go"))
+		assert.Contains(t, got, s.id("gamma.go"))
 	})
 
 	t.Run("keyword absent from index yields no docs", func(t *testing.T) {
@@ -134,9 +139,9 @@ func TestEngineCollectDocuments(t *testing.T) {
 		// collectWithKeywords' multi-keyword intersection loop. Only alpha.go
 		// has both "hello" and "world".
 		got := s.collect(t, `"hello world"`)
-		assert.Contains(t, got, s.ids["alpha.go"])
-		assert.NotContains(t, got, s.ids["beta.go"])
-		assert.NotContains(t, got, s.ids["gamma.go"])
+		assert.Contains(t, got, s.id("alpha.go"))
+		assert.NotContains(t, got, s.id("beta.go"))
+		assert.NotContains(t, got, s.id("gamma.go"))
 	})
 
 	t.Run("wildcard suffix prunes wild-only docs", func(t *testing.T) {
@@ -144,8 +149,8 @@ func TestEngineCollectDocuments(t *testing.T) {
 		// {alpha,gamma}; gamma is in WildDocIds but not DocIds, so it's pruned
 		// (exercises the WildDocIds delete branch).
 		got := s.collect(t, "hello*world")
-		assert.Contains(t, got, s.ids["alpha.go"])
-		assert.Contains(t, got, s.ids["beta.go"])
+		assert.Contains(t, got, s.id("alpha.go"))
+		assert.Contains(t, got, s.id("beta.go"))
 	})
 
 	t.Run("unknown collection id yields no docs", func(t *testing.T) {

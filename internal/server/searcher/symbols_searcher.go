@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
@@ -141,7 +142,7 @@ func fuzzySearchSymbols(workspace *workspace.Workspace, req *types.SearchSymbols
 			break
 		}
 
-		s, err := getFunctionFileMatch(workspace, words, docId)
+		s, err := getFunctionFileMatch(workspace, words, idtable.EncodeId(docId))
 		if err != nil {
 			continue
 		}
@@ -188,8 +189,9 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 	symbolFiles := make(map[string][]types.SymbolsFileMatch)
 
 	for docId := range r.DocIds {
+		docIdStr := idtable.EncodeId(docId)
 		// Get document info for file path
-		doc, err := stInst.GetDocument(workspace.Id, docId, false)
+		doc, err := stInst.GetDocument(workspace.Id, docIdStr, false)
 		if err != nil || doc == nil {
 			continue
 		}
@@ -199,7 +201,7 @@ func searchSymbols(workspace *workspace.Workspace, req *types.SearchSymbolsReque
 		}
 
 		// Get functions from this document
-		functions, err := symbols.GetDocFunctions(workspace.Id, docId)
+		functions, err := symbols.GetDocFunctions(workspace.Id, docIdStr)
 		if err != nil {
 			continue
 		}
