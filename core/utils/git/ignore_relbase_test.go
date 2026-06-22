@@ -74,3 +74,26 @@ func TestDirOfMatchesFilepathDir(t *testing.T) {
 		}
 	}
 }
+
+// TestGitIgnoreRulesNonAncestorPath covers GitIgnoreRules.IsIgnored's fallback
+// for an absPath that is not under baseDir: relUnderBase declines and the method
+// falls back to filepath.Rel, returning false when Rel itself cannot relativize
+// the path. The scan hot path never reaches this branch, but the method is
+// exported so other callers can pass arbitrary paths.
+func TestGitIgnoreRulesNonAncestorPath(t *testing.T) {
+	rules, err := NewGitIgnoreRules([]string{"*.log"}, "/repo/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Not under baseDir, but filepath.Rel still succeeds ("../b/app.log"):
+	// exercises the fallback path. The boolean result is incidental — we only
+	// require it not to panic.
+	_ = rules.IsIgnored("/repo/b/app.log", false)
+
+	// filepath.Rel returns an error when an absolute baseDir is paired with a
+	// relative path; IsIgnored must then return false rather than panic.
+	if rules.IsIgnored("relative/app.log", false) {
+		t.Error("expected false when filepath.Rel cannot relativize the path")
+	}
+}
