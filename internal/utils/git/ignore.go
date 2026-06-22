@@ -10,6 +10,11 @@ import (
 	gitignore "github.com/sabhiram/go-gitignore"
 )
 
+// dirStackSize is the on-stack capacity for the ancestor-directory list built
+// per IsIgnored call. Paths up to this many levels deep allocate no backing
+// slice; deeper paths fall back to heap growth.
+const dirStackSize = 32
+
 // GitIgnore represents the entire gitignore system
 type GitIgnore struct {
 	rootPath   string
@@ -223,8 +228,11 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 		dirPath = filepath.Dir(absPath)
 	}
 
-	// Prepare list of directories to check, starting from most specific
-	var dirsToCheck []string
+	// Prepare list of directories to check, starting from most specific. Back
+	// the slice with a stack array so the common case (paths up to dirStackSize
+	// levels deep) allocates nothing; deeper paths fall back to heap growth.
+	var dirStack [dirStackSize]string
+	dirsToCheck := dirStack[:0]
 	currPath := dirPath
 	for currPath != g.rootPath && strings.HasPrefix(currPath, g.rootPath) {
 		dirsToCheck = append(dirsToCheck, currPath)
