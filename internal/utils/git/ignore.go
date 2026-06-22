@@ -6,8 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	gitignore "github.com/sabhiram/go-gitignore"
 )
 
 // dirStackSize is the on-stack capacity for the ancestor-directory list built
@@ -27,8 +25,8 @@ type GitIgnore struct {
 // GitIgnoreRules represents a single .gitignore file
 type GitIgnoreRules struct {
 	baseDir     string
-	negate      *gitignore.GitIgnore
-	ignorer     *gitignore.GitIgnore
+	negate      *matcherSet
+	ignorer     *matcherSet
 	isGitRoot   bool
 	hasPatterns bool // ignorer holds at least one positive pattern
 }
@@ -50,15 +48,15 @@ func NewGitIgnoreRules(patterns []string, baseDir string) (*GitIgnoreRules, erro
 		}
 	}
 
-	var neg *gitignore.GitIgnore
+	var neg *matcherSet
 	if len(negate) > 0 {
-		neg = gitignore.CompileIgnoreLines(negate...)
+		neg = compileMatcherSet(negate)
 	}
 
 	return &GitIgnoreRules{
 		baseDir:     baseDir,
 		negate:      neg,
-		ignorer:     gitignore.CompileIgnoreLines(positive...),
+		ignorer:     compileMatcherSet(positive),
 		hasPatterns: len(positive) > 0,
 	}, nil
 }
@@ -149,8 +147,8 @@ func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
 		return false
 	}
 
-	// Use the library's matching function
-	return f.ignorer.MatchesPath(relPath)
+	// Use the matcher set's matching function
+	return f.ignorer.matches(relPath)
 }
 
 // relUnderBase returns the path of absPath relative to base — using the OS
@@ -194,7 +192,7 @@ func (f *GitIgnoreRules) isNegate(relPath string) bool {
 	if f.negate == nil {
 		return false
 	}
-	return f.negate.MatchesPath(relPath)
+	return f.negate.matches(relPath)
 }
 
 var outOfRoot = filepath.Clean("../")
@@ -355,7 +353,7 @@ func (g *GitIgnore) loadGitIgnoreForDir(dir string) *GitIgnoreRules {
 		// Create an empty GitIgnoreRules when no .gitignore file exists
 		rf = &GitIgnoreRules{
 			baseDir: dir,
-			ignorer: gitignore.CompileIgnoreLines(),
+			ignorer: compileMatcherSet(nil),
 		}
 	}
 
