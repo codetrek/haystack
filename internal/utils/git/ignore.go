@@ -261,8 +261,10 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	// Check if parent directory is ignored
 	parentDir := filepath.Dir(absPath)
 	if parentDir != g.rootPath {
-		parentRelPath, err := filepath.Rel(g.rootPath, parentDir)
-		if err == nil {
+		// parentDir is always under rootPath, so derive the relative path with a
+		// prefix slice instead of filepath.Rel (avoids its redundant Clean).
+		parentRelPath, ok := relUnderBase(parentDir, g.rootPath)
+		if ok {
 			// If parent directory is ignored, files within it are also ignored
 			if g.IsIgnored(parentRelPath, true) {
 				return true
