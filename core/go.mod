@@ -9,6 +9,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gabriel-vasile/mimetype v1.4.9
 	github.com/go-ego/gse v1.0.2
+	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/stretchr/testify v1.10.0
 	github.com/viterin/vek v0.4.3
 	go.etcd.io/bbolt v1.4.3

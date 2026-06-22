@@ -6,9 +6,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	gitignore "github.com/sabhiram/go-gitignore"
 )
+
+// dirStackSize is the on-stack capacity for the ancestor-directory list built
+// per IsIgnored call. Paths up to this many levels deep allocate no backing
+// slice; deeper paths fall back to heap growth.
+const dirStackSize = 32
 
 // GitIgnore represents the entire gitignore system
 type GitIgnore struct {
@@ -21,10 +24,11 @@ type GitIgnore struct {
 
 // GitIgnoreRules represents a single .gitignore file
 type GitIgnoreRules struct {
-	baseDir   string
-	negate    *gitignore.GitIgnore
-	ignorer   *gitignore.GitIgnore
-	isGitRoot bool
+	baseDir     string
+	negate      *matcherSet
+	ignorer     *matcherSet
+	isGitRoot   bool
+	hasPatterns bool // ignorer holds at least one positive pattern
 }
 
 func NewGitIgnoreRules(patterns []string, baseDir string) (*GitIgnoreRules, error) {
@@ -44,15 +48,16 @@ func NewGitIgnoreRules(patterns []string, baseDir string) (*GitIgnoreRules, erro
 		}
 	}
 
-	var neg *gitignore.GitIgnore
+	var neg *matcherSet
 	if len(negate) > 0 {
-		neg = gitignore.CompileIgnoreLines(negate...)
+		neg = compileMatcherSet(negate)
 	}
 
 	return &GitIgnoreRules{
-		baseDir: baseDir,
-		negate:  neg,
-		ignorer: gitignore.CompileIgnoreLines(positive...),
+		baseDir:     baseDir,
+		negate:      neg,
+		ignorer:     compileMatcherSet(positive),
+		hasPatterns: len(positive) > 0,
 	}, nil
 }
 
@@ -110,14 +115,30 @@ func NewGitIgnore(rootPath string, ignoreCase bool) *GitIgnore {
 
 // IsIgnored checks if a path should be ignored by this .gitignore file
 func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
-	// Get the path relative to the base directory
-	relPath, err := filepath.Rel(f.baseDir, absPath)
-	if err != nil {
+	// With no positive patterns this file can never ignore a path (a negate-only
+	// or empty .gitignore), so skip the relative-path construction and matching
+	// entirely. Most ancestor directories on the scan path have no .gitignore and
+	// land here.
+	if !f.hasPatterns {
 		return false
 	}
 
+	// Get the path relative to the base directory. In the scan hot path baseDir
+	// is always an ancestor of absPath, so we derive the relative path with a
+	// prefix slice and skip filepath.Rel's double Clean — its allocations
+	// dominate this function's allocation profile. Fall back to filepath.Rel for
+	// the rare non-ancestor caller.
+	rel, ok := relUnderBase(absPath, f.baseDir)
+	if !ok {
+		var err error
+		rel, err = filepath.Rel(f.baseDir, absPath)
+		if err != nil {
+			return false
+		}
+	}
+
 	// Normalize path separators to forward slashes
-	relPath = "/" + filepath.ToSlash(relPath)
+	relPath := "/" + filepath.ToSlash(rel)
 	if isDir && !strings.HasSuffix(relPath, "/") {
 		relPath += "/"
 	}
@@ -126,15 +147,52 @@ func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
 		return false
 	}
 
-	// Use the library's matching function
-	return f.ignorer.MatchesPath(relPath)
+	// Use the matcher set's matching function
+	return f.ignorer.matches(relPath)
+}
+
+// relUnderBase returns the path of absPath relative to base — using the OS
+// separator, with no leading separator, and "." when the two are equal — but
+// only when base is an ancestor of (or equal to) absPath. The boolean is false
+// when absPath is not under base, in which case the caller should fall back to
+// filepath.Rel. For the ancestor case this matches filepath.Rel's output
+// without allocating.
+func relUnderBase(absPath, base string) (string, bool) {
+	if absPath == base {
+		return ".", true
+	}
+	if len(absPath) <= len(base) || !strings.HasPrefix(absPath, base) {
+		return "", false
+	}
+	// Require a separator boundary so "/foo" is not treated as a prefix of
+	// "/foobar". base may itself end in a separator (e.g. a filesystem root).
+	if os.IsPathSeparator(base[len(base)-1]) {
+		return absPath[len(base):], true
+	}
+	if os.IsPathSeparator(absPath[len(base)]) {
+		return absPath[len(base)+1:], true
+	}
+	return "", false
+}
+
+// dirOf returns the parent directory of a clean path. For a clean path (no
+// trailing separator, single separators) the parent is the substring up to the
+// last separator, so we avoid filepath.Dir's per-call Clean. It falls back to
+// filepath.Dir for anything unusual — no separator, a root, a trailing
+// separator, or slicing into a volume name (e.g. Windows "C:\").
+func dirOf(path string) string {
+	i := strings.LastIndexByte(path, filepath.Separator)
+	if i <= 0 || i == len(path)-1 || i < len(filepath.VolumeName(path))+1 {
+		return filepath.Dir(path)
+	}
+	return path[:i]
 }
 
 func (f *GitIgnoreRules) isNegate(relPath string) bool {
 	if f.negate == nil {
 		return false
 	}
-	return f.negate.MatchesPath(relPath)
+	return f.negate.matches(relPath)
 }
 
 var outOfRoot = filepath.Clean("../")
@@ -169,8 +227,10 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 		return true
 	}
 
-	// Convert the relative path to absolute
-	absPath := filepath.Join(g.rootPath, relPath)
+	// Convert the relative path to absolute. relPath is already Cleaned above and
+	// is a non-empty path that does not escape root, and rootPath is Cleaned, so
+	// the concatenation is already clean — skip filepath.Join's redundant Clean.
+	absPath := g.rootPath + string(os.PathSeparator) + relPath
 	if absPath == g.rootPath {
 		return false
 	}
@@ -178,15 +238,18 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	// Start with the directory containing the file/dir
 	dirPath := absPath
 	if !isDir {
-		dirPath = filepath.Dir(absPath)
+		dirPath = dirOf(absPath)
 	}
 
-	// Prepare list of directories to check, starting from most specific
-	var dirsToCheck []string
+	// Prepare list of directories to check, starting from most specific. Back
+	// the slice with a stack array so the common case (paths up to dirStackSize
+	// levels deep) allocates nothing; deeper paths fall back to heap growth.
+	var dirStack [dirStackSize]string
+	dirsToCheck := dirStack[:0]
 	currPath := dirPath
 	for currPath != g.rootPath && strings.HasPrefix(currPath, g.rootPath) {
 		dirsToCheck = append(dirsToCheck, currPath)
-		currPath = filepath.Dir(currPath)
+		currPath = dirOf(currPath)
 	}
 	// Add the root directory last (least specific)
 	dirsToCheck = append(dirsToCheck, g.rootPath)
@@ -207,10 +270,12 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	}
 
 	// Check if parent directory is ignored
-	parentDir := filepath.Dir(absPath)
+	parentDir := dirOf(absPath)
 	if parentDir != g.rootPath {
-		parentRelPath, err := filepath.Rel(g.rootPath, parentDir)
-		if err == nil {
+		// parentDir is always under rootPath, so derive the relative path with a
+		// prefix slice instead of filepath.Rel (avoids its redundant Clean).
+		parentRelPath, ok := relUnderBase(parentDir, g.rootPath)
+		if ok {
 			// If parent directory is ignored, files within it are also ignored
 			if g.IsIgnored(parentRelPath, true) {
 				return true
@@ -288,7 +353,7 @@ func (g *GitIgnore) loadGitIgnoreForDir(dir string) *GitIgnoreRules {
 		// Create an empty GitIgnoreRules when no .gitignore file exists
 		rf = &GitIgnoreRules{
 			baseDir: dir,
-			ignorer: gitignore.CompileIgnoreLines(),
+			ignorer: compileMatcherSet(nil),
 		}
 	}
 
