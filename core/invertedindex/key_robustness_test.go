@@ -1,6 +1,7 @@
 package invertedindex
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 )
@@ -56,11 +57,11 @@ func TestEncodeInvertedKey_UniqueWithinMicrosecond(t *testing.T) {
 	}
 }
 
-// B4/B5/B8 — docids are int64 by type, so the fixed-width value codec can never
-// be fed a wrong-length docid (the old string-ingress length guard is no longer
-// representable). This pins the surviving invariant: arbitrary int64 docids —
+// B4/B5/B8 — docids are int64 by type, so the value codec can never be fed a
+// wrong-length docid. This pins the surviving invariant: arbitrary int64 docids —
 // including 0, negative, and max — round-trip through Update/GetDocs intact and
-// every stored value stays a multiple of docIDSize.
+// every stored value is a canonical delta-varint sequence (decode then re-encode
+// reproduces it exactly; a truncated/garbage value would not).
 func TestUpdate_Int64DocidRoundTrip(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
@@ -80,10 +81,11 @@ func TestUpdate_Int64DocidRoundTrip(t *testing.T) {
 			t.Errorf("docid %d was not indexed/retrieved", id)
 		}
 	}
-	// No stored value may have a non-multiple-of-docIDSize length (would corrupt decode).
+	// Every stored value must be a canonical delta-varint encoding (decode∘encode
+	// is the identity on it); anything else would corrupt the decoder.
 	_ = env.DB.Scan([]byte{env.idx.keyTypeRow}, func(k, v []byte) bool {
-		if len(v)%docIDSize != 0 {
-			t.Errorf("corrupt value length %d for key %q", len(v), k)
+		if !bytes.Equal(encodeInvertedValue(decodeInvertedValue(v)), v) {
+			t.Errorf("non-canonical value (len %d) for key %q", len(v), k)
 		}
 		return true
 	})

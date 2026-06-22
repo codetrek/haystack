@@ -131,7 +131,7 @@ func TestCleanup_PartialOldDirs(t *testing.T) {
 }
 
 func TestStorageVersion(t *testing.T) {
-	assert.Equal(t, "1.4", StorageVersion)
+	assert.Equal(t, "1.5", StorageVersion)
 }
 
 func TestIsKeyType(t *testing.T) {
