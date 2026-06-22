@@ -13,14 +13,14 @@ func TestRelUnderBaseMatchesFilepathRel(t *testing.T) {
 	// Pairs where base is an ancestor of (or equal to) absPath: relUnderBase
 	// must return ok=true and the exact filepath.Rel result.
 	ancestor := [][2]string{
-		{"/repo", "/repo"},                       // equal -> "."
-		{"/repo", "/repo/main.go"},               // one level
-		{"/repo", "/repo/a/b/c.go"},              // multi level
-		{"/repo/a/b", "/repo/a/b/c.go"},          // deeper base
-		{"/", "/foo"},                            // filesystem root (base ends in sep)
-		{"/", "/a/b"},                            // root, nested
-		{"/repo/sub", "/repo/sub/.gitignore"},    // dotfile
-		{"/r", "/r/x"},                           // short base
+		{"/repo", "/repo"},                    // equal -> "."
+		{"/repo", "/repo/main.go"},            // one level
+		{"/repo", "/repo/a/b/c.go"},           // multi level
+		{"/repo/a/b", "/repo/a/b/c.go"},       // deeper base
+		{"/", "/foo"},                         // filesystem root (base ends in sep)
+		{"/", "/a/b"},                         // root, nested
+		{"/repo/sub", "/repo/sub/.gitignore"}, // dotfile
+		{"/r", "/r/x"},                        // short base
 	}
 	for _, p := range ancestor {
 		base, abs := p[0], p[1]
@@ -41,9 +41,9 @@ func TestRelUnderBaseMatchesFilepathRel(t *testing.T) {
 	// Pairs where absPath is NOT under base: relUnderBase must decline so the
 	// caller falls back to filepath.Rel.
 	notUnder := [][2]string{
-		{"/repo", "/repository"},   // prefix string but not a path ancestor
-		{"/repo", "/other/x"},      // unrelated
-		{"/repo/a", "/repo"},       // absPath shorter than base
+		{"/repo", "/repository"},      // prefix string but not a path ancestor
+		{"/repo", "/other/x"},         // unrelated
+		{"/repo/a", "/repo"},          // absPath shorter than base
 		{"/repo/foobar", "/repo/foo"}, // sibling sharing a name prefix
 	}
 	for _, p := range notUnder {
