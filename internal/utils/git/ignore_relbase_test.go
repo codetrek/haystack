@@ -53,3 +53,24 @@ func TestRelUnderBaseMatchesFilepathRel(t *testing.T) {
 		}
 	}
 }
+
+// dirOf is a hot-path fast version of filepath.Dir for clean paths. This pins
+// it to filepath.Dir's output across representative inputs, including the edge
+// cases that must fall back to filepath.Dir.
+func TestDirOfMatchesFilepathDir(t *testing.T) {
+	cases := []string{
+		"/repo/a/b/c.go",
+		"/repo/a/b",
+		"/repo/file",
+		"/repo",
+		"/a",
+		"/",
+		"relative/path", // no leading sep
+		"single",        // no separator at all
+	}
+	for _, p := range cases {
+		if got, want := dirOf(p), filepath.Dir(p); got != want {
+			t.Errorf("dirOf(%q) = %q, want %q (filepath.Dir)", p, got, want)
+		}
+	}
+}

@@ -177,6 +177,19 @@ func relUnderBase(absPath, base string) (string, bool) {
 	return "", false
 }
 
+// dirOf returns the parent directory of a clean path. For a clean path (no
+// trailing separator, single separators) the parent is the substring up to the
+// last separator, so we avoid filepath.Dir's per-call Clean. It falls back to
+// filepath.Dir for anything unusual — no separator, a root, a trailing
+// separator, or slicing into a volume name (e.g. Windows "C:\").
+func dirOf(path string) string {
+	i := strings.LastIndexByte(path, filepath.Separator)
+	if i <= 0 || i == len(path)-1 || i < len(filepath.VolumeName(path))+1 {
+		return filepath.Dir(path)
+	}
+	return path[:i]
+}
+
 func (f *GitIgnoreRules) isNegate(relPath string) bool {
 	if f.negate == nil {
 		return false
@@ -227,7 +240,7 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	// Start with the directory containing the file/dir
 	dirPath := absPath
 	if !isDir {
-		dirPath = filepath.Dir(absPath)
+		dirPath = dirOf(absPath)
 	}
 
 	// Prepare list of directories to check, starting from most specific. Back
@@ -238,7 +251,7 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	currPath := dirPath
 	for currPath != g.rootPath && strings.HasPrefix(currPath, g.rootPath) {
 		dirsToCheck = append(dirsToCheck, currPath)
-		currPath = filepath.Dir(currPath)
+		currPath = dirOf(currPath)
 	}
 	// Add the root directory last (least specific)
 	dirsToCheck = append(dirsToCheck, g.rootPath)
@@ -259,7 +272,7 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 	}
 
 	// Check if parent directory is ignored
-	parentDir := filepath.Dir(absPath)
+	parentDir := dirOf(absPath)
 	if parentDir != g.rootPath {
 		// parentDir is always under rootPath, so derive the relative path with a
 		// prefix slice instead of filepath.Rel (avoids its redundant Clean).
