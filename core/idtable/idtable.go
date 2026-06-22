@@ -19,7 +19,7 @@ import (
 
 const (
 	DefaultLRUCacheSize   = 200_000
-	DefaultCommitInterval = 5 * time.Second
+	DefaultCommitInterval = 1 * time.Second
 
 	// InvalidId is returned by DecodeId for a malformed (too-short) docid string.
 	InvalidId = int64(-1)
@@ -47,7 +47,7 @@ var (
 // Options configures an Allocator. Zero-value fields fall back to defaults.
 type Options struct {
 	LRUCacheSize   int           // default DefaultLRUCacheSize (200000)
-	CommitInterval time.Duration // default DefaultCommitInterval (5s)
+	CommitInterval time.Duration // default DefaultCommitInterval (1s)
 }
 
 // Allocator maps arbitrary keys to stable, compact int64 ids (returned as
