@@ -216,8 +216,10 @@ func (g *GitIgnore) IsIgnored(relPath string, isDir bool) bool {
 		return true
 	}
 
-	// Convert the relative path to absolute
-	absPath := filepath.Join(g.rootPath, relPath)
+	// Convert the relative path to absolute. relPath is already Cleaned above and
+	// is a non-empty path that does not escape root, and rootPath is Cleaned, so
+	// the concatenation is already clean — skip filepath.Join's redundant Clean.
+	absPath := g.rootPath + string(os.PathSeparator) + relPath
 	if absPath == g.rootPath {
 		return false
 	}
