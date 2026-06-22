@@ -21,10 +21,11 @@ type GitIgnore struct {
 
 // GitIgnoreRules represents a single .gitignore file
 type GitIgnoreRules struct {
-	baseDir   string
-	negate    *gitignore.GitIgnore
-	ignorer   *gitignore.GitIgnore
-	isGitRoot bool
+	baseDir     string
+	negate      *gitignore.GitIgnore
+	ignorer     *gitignore.GitIgnore
+	isGitRoot   bool
+	hasPatterns bool // ignorer holds at least one positive pattern
 }
 
 func NewGitIgnoreRules(patterns []string, baseDir string) (*GitIgnoreRules, error) {
@@ -50,9 +51,10 @@ func NewGitIgnoreRules(patterns []string, baseDir string) (*GitIgnoreRules, erro
 	}
 
 	return &GitIgnoreRules{
-		baseDir: baseDir,
-		negate:  neg,
-		ignorer: gitignore.CompileIgnoreLines(positive...),
+		baseDir:     baseDir,
+		negate:      neg,
+		ignorer:     gitignore.CompileIgnoreLines(positive...),
+		hasPatterns: len(positive) > 0,
 	}, nil
 }
 
@@ -110,6 +112,14 @@ func NewGitIgnore(rootPath string, ignoreCase bool) *GitIgnore {
 
 // IsIgnored checks if a path should be ignored by this .gitignore file
 func (f *GitIgnoreRules) IsIgnored(absPath string, isDir bool) bool {
+	// With no positive patterns this file can never ignore a path (a negate-only
+	// or empty .gitignore), so skip the relative-path construction and matching
+	// entirely. Most ancestor directories on the scan path have no .gitignore and
+	// land here.
+	if !f.hasPatterns {
+		return false
+	}
+
 	// Get the path relative to the base directory. In the scan hot path baseDir
 	// is always an ancestor of absPath, so we derive the relative path with a
 	// prefix slice and skip filepath.Rel's double Clean — its allocations
