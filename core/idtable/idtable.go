@@ -160,10 +160,13 @@ func (a *Allocator) GetId(key []byte) (string, error) {
 		return "", fmt.Errorf("database is closed")
 	}
 
-	sk := string(key)
-	if v, ok := a.lru.Get(sk); ok {
+	// Hot path: keep string(key) inline in the LRU lookup so the compiler's
+	// no-alloc map-key optimization applies — hoisting it to a variable would
+	// force an allocation of the key string on every cached hit.
+	if v, ok := a.lru.Get(string(key)); ok {
 		return EncodeId(v), nil
 	}
+	sk := string(key)
 	// pending is authoritative for uncommitted allocations (robust to LRU eviction).
 	if v, ok := a.pending[sk]; ok {
 		a.lru.Put(sk, v)
@@ -199,10 +202,10 @@ func (a *Allocator) Lookup(key []byte) (id int64, found bool, err error) {
 		return 0, false, fmt.Errorf("database is closed")
 	}
 
-	sk := string(key)
-	if v, ok := a.lru.Get(sk); ok {
+	if v, ok := a.lru.Get(string(key)); ok { // inline string(key): no-alloc map-key path
 		return v, true, nil
 	}
+	sk := string(key)
 	if v, ok := a.pending[sk]; ok {
 		return v, true, nil
 	}
