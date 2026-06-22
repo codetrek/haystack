@@ -69,9 +69,10 @@ func MigrateFromKV(src kv.Store, dstPath string, srcKeyTypeKey, srcKeyTypeNextId
 		if err != nil {
 			return err
 		}
-		// Idempotency: a destination that already has key entries was migrated
-		// before (or written by a running allocator); do not overwrite it.
-		if kb.Stats().KeyN > 0 {
+		// Idempotency: a destination that was already migrated (key entries OR the
+		// nextId counter present — the empty-source case writes only the counter)
+		// or written by a running allocator must not be overwritten.
+		if kb.Stats().KeyN > 0 || mb.Get(metaNextId) != nil {
 			return nil
 		}
 

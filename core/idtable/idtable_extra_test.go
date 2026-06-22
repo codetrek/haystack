@@ -96,6 +96,28 @@ func TestCloseDuringPeriodicCommits(t *testing.T) {
 	}
 }
 
+// TestGetId_PendingSurvivesLRUEviction pins the pending buffer's reason to exist:
+// an uncommitted allocation that is evicted from a full LRU must still resolve
+// from `pending` — it must NOT be re-allocated a second (duplicate) id.
+func TestGetId_PendingSurvivesLRUEviction(t *testing.T) {
+	// LRUCacheSize 1 so the second alloc evicts the first; long interval so
+	// nothing is committed (the entries stay only in pending + the LRU).
+	a := openTestAlloc(t, Options{LRUCacheSize: 1, CommitInterval: time.Hour})
+	defer a.Close()
+
+	first, err := a.GetId([]byte("a")) // id 1: in LRU + pending (uncommitted)
+	assert.NoError(t, err)
+	_, err = a.GetId([]byte("b")) // id 2: evicts "a" from the size-1 LRU
+	assert.NoError(t, err)
+	assert.Equal(t, int64(3), a.nextId, "exactly two ids allocated so far")
+
+	// "a" is gone from the LRU and never committed → only `pending` can answer.
+	again, err := a.GetId([]byte("a"))
+	assert.NoError(t, err)
+	assert.Equal(t, first, again, "evicted-but-uncommitted key must keep its id")
+	assert.Equal(t, int64(3), a.nextId, "must not allocate a duplicate id for a pending key")
+}
+
 func TestGetIdMultipleCallsSameKey(t *testing.T) {
 	alloc := openTestAlloc(t, Options{CommitInterval: 50 * time.Millisecond})
 	defer alloc.Close()
