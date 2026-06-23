@@ -34,10 +34,38 @@ type PebbleDB struct {
 	path   string
 	db     pebbleStore
 	closed atomic.Bool
+
+	// writeOpts is the WriteOptions applied to Set/Delete and batch Commit
+	// (pebble.Sync by default; pebble.NoSync when opened with NoSync/DisableWAL).
+	writeOpts *pebble.WriteOptions
 }
 
-// Open opens a Pebble database at the specified path and returns a kv.Store.
+// OpenOptions configures a pebblekv store. The zero value is the DEFAULT mode:
+// WAL on, commits NOT fsync'd (NoSync). Opt into durability with Sync, or drop
+// the WAL entirely with DisableWAL.
+type OpenOptions struct {
+	CacheSize int64
+	// DisableWAL turns off the write-ahead log entirely: writes live only in the
+	// memtable until it flushes to an SSTable, so an unclean shutdown loses the
+	// un-flushed tail. ONLY safe for a derived, rebuildable store (e.g. an index
+	// that can be rebuilt from source) — never for a store of record.
+	DisableWAL bool
+	// Sync requests a synchronous WAL fsync on every Set/Delete/batch Commit
+	// (pebble.Sync). The DEFAULT (unset) is NoSync: the WAL is still written but
+	// not fsync'd, so a clean restart recovers it from the OS page cache and only
+	// an OS-level crash / power loss can lose the un-synced tail. Set Sync for a
+	// store of record. Ignored when DisableWAL is set (there is no WAL to sync).
+	Sync bool
+}
+
+// Open opens a Pebble database at the default WAL mode — WAL on, commits not
+// fsync'd (NoSync). Use OpenWithOptions to request Sync or DisableWAL.
 func Open(path string, cacheSize int64) (kv.Store, error) {
+	return OpenWithOptions(path, OpenOptions{CacheSize: cacheSize})
+}
+
+// OpenWithOptions opens a Pebble database with explicit WAL/sync control.
+func OpenWithOptions(path string, o OpenOptions) (kv.Store, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %v", err)
@@ -45,7 +73,9 @@ func Open(path string, cacheSize int64) (kv.Store, error) {
 
 	// Configure Pebble options
 	opts := &pebble.Options{
-		Cache: pebble.NewCache(cacheSize),
+		Cache: pebble.NewCache(o.CacheSize),
+
+		DisableWAL: o.DisableWAL,
 
 		WALMinSyncInterval: func() time.Duration {
 			// Sync the WAL every 500us to avoid latency spikes.
@@ -83,11 +113,19 @@ func Open(path string, cacheSize int64) (kv.Store, error) {
 		return nil, fmt.Errorf("failed to open pebble: %v", err)
 	}
 
+	// Default to NoSync (skip the per-commit fsync); opt into durability with
+	// Sync. With the WAL disabled there is nothing to sync, so Sync is ignored.
+	writeOpts := pebble.NoSync
+	if o.Sync && !o.DisableWAL {
+		writeOpts = pebble.Sync
+	}
+
 	// Create a new DB instance
 	pdb := &PebbleDB{
-		path:   absPath,
-		db:     db,
-		closed: atomic.Bool{},
+		path:      absPath,
+		db:        db,
+		closed:    atomic.Bool{},
+		writeOpts: writeOpts,
 	}
 
 	return pdb, nil
@@ -168,7 +206,7 @@ func (d *PebbleDB) Put(key, value []byte) error {
 	}
 
 	// Use default write options (sync=true)
-	if err := d.db.Set(key, value, pebble.Sync); err != nil {
+	if err := d.db.Set(key, value, d.writeOpts); err != nil {
 		return fmt.Errorf("failed to put data: %v", err)
 	}
 	return nil
@@ -201,7 +239,7 @@ func (d *PebbleDB) Delete(key []byte) error {
 	}
 
 	// Use default write options (sync=true)
-	if err := d.db.Delete(key, pebble.Sync); err != nil {
+	if err := d.db.Delete(key, d.writeOpts); err != nil {
 		return fmt.Errorf("failed to delete data: %v", err)
 	}
 	return nil
@@ -214,6 +252,7 @@ func (d *PebbleDB) NewBatch(maxBatchSize int32) kv.Batch {
 		batch:        d.db.NewBatch(),
 		maxBatchSize: maxBatchSize,
 		count:        atomic.Int32{},
+		commitOpts:   d.writeOpts,
 	}
 }
 

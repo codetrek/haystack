@@ -50,6 +50,14 @@ func Open(storagePath string, cacheSize int64) (kv.Store, error) {
 		cacheSize = 8 * 1024 * 1024 // Default cache size
 	}
 
+	// The shared KV uses pebblekv's default NoSync commit mode: every batch Commit
+	// otherwise does a synchronous WAL fsync (pebble.Sync), the dominant indexing
+	// cost — a real /workspace/linux index ran ~3x faster without it. This whole DB
+	// (inverted index + documents store + collection catalog) is a derived cache
+	// rebuilt by re-scanning the workspace, so relaxed durability is sound: NoSync
+	// still writes the WAL, so a plain restart recovers it from the OS page cache;
+	// only an OS-level crash / power loss loses the un-fsynced tail, which a re-scan
+	// rebuilds. (Pass OpenWithOptions{Sync: true} for a store of record.)
 	db, err := pebblekv.Open(dbPath, cacheSize)
 	if err != nil {
 		return nil, err

@@ -29,6 +29,11 @@ type PebbleBatch struct {
 	// The batch will be committed silently when the count reaches maxBatchSize, and a new batch will be created
 	maxBatchSize int32
 	count        atomic.Int32
+
+	// commitOpts is the WriteOptions used by Commit (inherited from the opening
+	// PebbleDB). Nil means pebble.NoSync (the default), so a directly constructed
+	// batch is non-syncing.
+	commitOpts *pebble.WriteOptions
 }
 
 // Put adds a key-value pair to the batch
@@ -82,7 +87,11 @@ func (b *PebbleBatch) DeletePrefix(prefix []byte) error {
 // Commit commits the batch to the database
 func (b *PebbleBatch) Commit() error {
 	b.count.Store(0)
-	return b.batch.Commit(pebble.Sync)
+	opts := b.commitOpts
+	if opts == nil {
+		opts = pebble.NoSync
+	}
+	return b.batch.Commit(opts)
 }
 
 // Reset resets the batch for reuse
