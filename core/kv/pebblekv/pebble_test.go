@@ -34,6 +34,57 @@ func (e *errBatchWriter) Close() error {
 	return nil
 }
 
+// TestOpenWithOptions_WALModes covers the WAL/sync option paths: the writeOpts
+// selection (NoSync by default; Sync only when opted in and the WAL is on) and a
+// full Put/Get + batch round-trip through each mode, exercising the batch's
+// inherited commitOpts.
+func TestOpenWithOptions_WALModes(t *testing.T) {
+	cases := []struct {
+		name     string
+		opts     OpenOptions
+		wantSync bool
+	}{
+		{"default_nosync", OpenOptions{CacheSize: 1 << 20}, false},
+		{"sync", OpenOptions{CacheSize: 1 << 20, Sync: true}, true},
+		{"disablewal", OpenOptions{CacheSize: 1 << 20, DisableWAL: true}, false},
+		{"sync_ignored_under_disablewal", OpenOptions{CacheSize: 1 << 20, Sync: true, DisableWAL: true}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db, err := OpenWithOptions(t.TempDir()+"/db", c.opts)
+			assert.NoError(t, err)
+			defer db.Close()
+
+			// writeOpts selection (white-box; same package).
+			pdb := db.(*PebbleDB)
+			if c.wantSync {
+				assert.Equal(t, pebbledb.Sync, pdb.writeOpts)
+			} else {
+				assert.Equal(t, pebbledb.NoSync, pdb.writeOpts)
+			}
+
+			// Single-op round-trip.
+			assert.NoError(t, db.Put([]byte("k"), []byte("v")))
+			got, err := db.Get([]byte("k"))
+			assert.NoError(t, err)
+			assert.Equal(t, []byte("v"), got)
+
+			// Batch round-trip (Commit uses the inherited commitOpts).
+			b := db.NewBatch(0)
+			assert.NoError(t, b.Put([]byte("bk"), []byte("bv")))
+			assert.NoError(t, b.Delete([]byte("k")))
+			assert.NoError(t, b.Commit())
+
+			got, err = db.Get([]byte("bk"))
+			assert.NoError(t, err)
+			assert.Equal(t, []byte("bv"), got)
+			got, err = db.Get([]byte("k"))
+			assert.NoError(t, err)
+			assert.Nil(t, got)
+		})
+	}
+}
+
 func TestOpen_And_BasicOps(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
