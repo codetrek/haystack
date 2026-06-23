@@ -63,6 +63,19 @@ type Options struct {
 	// MaxInvertedIndexSize caps the number of doc-ids stored per index row.
 	// Default: 1000 (MaxInvertedIndexSize).
 	MaxInvertedIndexSize int
+
+	// MaxPendingPostings optionally bounds the number of buffered POSTING ENTRIES
+	// — one per indexed (keyword, docid) pair, i.e. updateIndex adds len(keywords)
+	// per document, NOT one per document — across the in-memory write (and,
+	// separately, delete) caches. It is OPT-IN: the zero value (and any
+	// non-positive value) is UNBOUNDED — the caches grow until the periodic or
+	// closing flush drains them, the original behavior, so callers that do not
+	// set it are unaffected. Set a positive value to force a full flush once a
+	// cache reaches it, bounding build-phase peak RSS: a fast bulk index otherwise
+	// accumulates ~all postings in RAM (measured 1.7GiB peak, 83% of it this
+	// buffer, on a 41M-posting corpus). See RecommendedMaxPendingPostings for a
+	// measured-good setting. The bound counts entries, not bytes or documents.
+	MaxPendingPostings int
 }
 
 func (o *Options) flushTicker() time.Duration {
@@ -114,6 +127,17 @@ func (o *Options) maxInvertedIndexSize() int {
 	return MaxInvertedIndexSize
 }
 
+// maxPendingPostings returns the configured posting-entry budget for the
+// in-memory caches, or 0 when no bound is set. The bound is opt-in: any
+// non-positive MaxPendingPostings (including the zero value) means unbounded, so
+// callers that do not set it keep the original flush behavior.
+func (o *Options) maxPendingPostings() int {
+	if o.MaxPendingPostings > 0 {
+		return o.MaxPendingPostings
+	}
+	return 0
+}
+
 // Index is the instance-based inverted index.
 type Index struct {
 	db   kv.Store
@@ -128,6 +152,14 @@ type Index struct {
 	// pending writes/deletes — accessed only from the single-threaded mpsc queue
 	pendingWrites      map[int]*pendingTableWrites
 	lastFlushWriteTime time.Time
+
+	// pendingWritePostings / pendingDeletePostings track the number of buffered
+	// posting entries (one per (keyword, docid) append) in pendingWrites /
+	// pendingDeletes across all tables/keywords, so a forced flush can be
+	// triggered when either exceeds opts.maxPendingPostings(). Mutated only on the
+	// mpsc worker, alongside the maps they account for.
+	pendingWritePostings  int
+	pendingDeletePostings int
 
 	pendingDeletes      map[int]*pendingTableWrites
 	lastFlushDeleteTime time.Time

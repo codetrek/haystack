@@ -26,6 +26,8 @@ func (idx *Index) updateIndex(tableId int, docid int64, keywords []string) {
 			UpdatedAt: now,
 		}
 	}
+	idx.pendingWritePostings += len(keywords)
+	idx.maybeFlushOnPressure()
 }
 
 func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
@@ -38,6 +40,8 @@ func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 			UpdatedAt: now,
 		}
 	}
+	idx.pendingDeletePostings += len(keywords)
+	idx.maybeFlushOnPressure()
 }
 
 // writeInvertedIndex writes a keyword to the database.
