@@ -11,6 +11,16 @@ import (
 
 const MaxInvertedIndexSize = 1000
 
+// RecommendedMaxPendingPostings is a measured-good value for
+// Options.MaxPendingPostings, which is OFF by default. It caps the in-memory
+// caches at 2,000,000 buffered posting entries — (keyword, docid) pairs, not
+// documents; at typical code keyword density (~440 unique terms/file) that is a
+// few thousand files in flight. On a 41M-posting corpus, setting the bound to
+// this value cut build-phase peak RSS ~69% (1.7GiB -> ~0.5GiB) for ~12% more
+// build time — the knee of the RSS/cost curve; lower values barely reduce RSS
+// further while raising build cost.
+const RecommendedMaxPendingPostings = 2_000_000
+
 // SearchResult holds the set of document ids matched by a query. DocIds are
 // exact keyword matches; WildDocIds (populated by wildcard-aware callers) are
 // matches that came from wildcard expansion and may be filtered further by the

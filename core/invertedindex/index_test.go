@@ -16,8 +16,8 @@ import (
 func forceFlush(idx *Index) {
 	idx.lastFlushWriteTime = time.Time{} // epoch — always older than 1 s
 	idx.lastFlushDeleteTime = time.Time{}
-	idx.flushPendingWrites(true)
-	idx.flushPendingDeletes(true, MaxInvertedIndexSize)
+	idx.flushPendingWrites(true, true)
+	idx.flushPendingDeletes(true, true, MaxInvertedIndexSize)
 }
 
 // makeDocID maps a label to the int64 docid the index stores (its canonical

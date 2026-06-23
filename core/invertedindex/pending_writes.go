@@ -23,10 +23,29 @@ type flushPendingWritesTask struct {
 }
 
 func (t *flushPendingWritesTask) Run() error {
-	// Flush pending writes to the database
-	t.idx.flushPendingWrites(t.closing)
-	t.idx.flushPendingDeletes(t.closing, t.idx.opts.maxInvertedIndexSize())
+	// Flush pending writes to the database. A closing flush forces everything out
+	// (force = closing); the periodic ticker flush respects the per-keyword
+	// batch/age thresholds and the cooldown.
+	t.idx.flushPendingWrites(t.closing, t.closing)
+	t.idx.flushPendingDeletes(t.closing, t.closing, t.idx.opts.maxInvertedIndexSize())
 	return nil
+}
+
+// maybeFlushOnPressure forces a full flush of the write and/or delete caches when
+// either exceeds the configured doc-id budget, bounding build-phase RSS. It runs
+// on the mpsc worker (called from updateIndex/removeIndex), the same single
+// thread that owns the caches and runs flush*, so the inline flush is safe.
+func (idx *Index) maybeFlushOnPressure() {
+	max := idx.opts.maxPendingPostings()
+	if max <= 0 {
+		return
+	}
+	if idx.pendingWritePostings >= max {
+		idx.flushPendingWrites(false, true)
+	}
+	if idx.pendingDeletePostings >= max {
+		idx.flushPendingDeletes(false, true, idx.opts.maxInvertedIndexSize())
+	}
 }
 
 // getPendingWrite returns the pending write cache for the table.
@@ -44,9 +63,11 @@ func (idx *Index) getPendingWrite(tableId int) *pendingTableWrites {
 	return wp
 }
 
-// flushPendingWrites flushes the pending writes to the database.
-func (idx *Index) flushPendingWrites(closing bool) {
-	if !closing && time.Since(idx.lastFlushWriteTime) < idx.opts.flushCooldown() {
+// flushPendingWrites flushes the pending writes to the database. When force is
+// true (memory-pressure or closing flush) the cooldown and the per-keyword
+// batch/age thresholds are bypassed so the entire write cache is drained.
+func (idx *Index) flushPendingWrites(closing, force bool) {
+	if !closing && !force && time.Since(idx.lastFlushWriteTime) < idx.opts.flushCooldown() {
 		return
 	}
 	idx.lastFlushWriteTime = time.Now()
@@ -65,14 +86,15 @@ func (idx *Index) flushPendingWrites(closing bool) {
 
 	for _, wp := range idx.pendingWrites {
 		for kw, relatedDocs := range wp.InvertedIndex {
-			// Skip the keyword if it has been updated in the last 2 seconds
-			// and has less than 50 documents
-			if !closing && len(relatedDocs.DocIds) < flushWaitBatchSize &&
+			// Skip young, small keyword entries on a periodic flush; a forced or
+			// closing flush drains them regardless.
+			if !closing && !force && len(relatedDocs.DocIds) < flushWaitBatchSize &&
 				time.Since(relatedDocs.UpdatedAt) < flushWaitTimeout {
 				continue
 			}
 
 			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, idx.encodeInvertedKey(wp.TableId, kw, len(relatedDocs.DocIds)))
+			idx.pendingWritePostings -= len(relatedDocs.DocIds)
 			delete(wp.InvertedIndex, kw)
 
 			// delete empty table
@@ -100,8 +122,8 @@ func (idx *Index) getPendingDelete(tableId int) *pendingTableWrites {
 	return wp
 }
 
-func (idx *Index) flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
-	if !closing && time.Since(idx.lastFlushDeleteTime) < idx.opts.flushCooldown() {
+func (idx *Index) flushPendingDeletes(closing, force bool, maxKeywordIndexSize int) {
+	if !closing && !force && time.Since(idx.lastFlushDeleteTime) < idx.opts.flushCooldown() {
 		return
 	}
 	idx.lastFlushDeleteTime = time.Now()
@@ -117,9 +139,9 @@ func (idx *Index) flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 
 	for _, wp := range idx.pendingDeletes {
 		for kw, relatedDocs := range wp.InvertedIndex {
-			// Skip the keyword if it has not yet reached the delete-batch threshold
-			// and is younger than the delete-wait timeout.
-			if !closing && len(relatedDocs.DocIds) < idx.opts.flushDeleteWaitBatchSize() &&
+			// Skip young, small delete entries on a periodic flush; a forced or
+			// closing flush drains them regardless.
+			if !closing && !force && len(relatedDocs.DocIds) < idx.opts.flushDeleteWaitBatchSize() &&
 				time.Since(relatedDocs.UpdatedAt) < idx.opts.flushDeleteWaitTimeout() {
 				continue
 			}
@@ -128,6 +150,7 @@ func (idx *Index) flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 			if err != nil {
 				log.Printf("[Inverted] Error removing documents from inverted index: %v", err)
 			}
+			idx.pendingDeletePostings -= len(relatedDocs.DocIds)
 			delete(wp.InvertedIndex, kw)
 
 			// delete empty table
@@ -144,6 +167,18 @@ func (idx *Index) flushPendingDeletes(closing bool, maxKeywordIndexSize int) {
 // This function is not thread-safe and should be called in database mpsc queue.
 // It is used when the table is deleted.
 func (idx *Index) clearPendingWrites(tableId int) {
+	// Keep the global doc-id counters accurate: subtract whatever this table had
+	// buffered before dropping its caches (these docs are never flushed).
+	if wp := idx.pendingWrites[tableId]; wp != nil {
+		for _, rd := range wp.InvertedIndex {
+			idx.pendingWritePostings -= len(rd.DocIds)
+		}
+	}
+	if wp := idx.pendingDeletes[tableId]; wp != nil {
+		for _, rd := range wp.InvertedIndex {
+			idx.pendingDeletePostings -= len(rd.DocIds)
+		}
+	}
 	delete(idx.pendingWrites, tableId)
 	delete(idx.pendingDeletes, tableId)
 }
