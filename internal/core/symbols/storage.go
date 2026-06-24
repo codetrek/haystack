@@ -11,10 +11,10 @@ const Shards = 8
 var (
 	db      kv.Store
 	mpsc    *queue.Mpsc
-	idxInst *invertedindex.Index
+	idxInst invertedindex.Indexer
 )
 
-func Init(database kv.Store, q *queue.Mpsc, idx *invertedindex.Index) error {
+func Init(database kv.Store, q *queue.Mpsc, idx invertedindex.Indexer) error {
 	db = database
 	mpsc = q
 	idxInst = idx

@@ -24,7 +24,8 @@ func TestStoreIndexSeams_NilIdx(t *testing.T) {
 
 	// Must not panic / touch a nil index.
 	s.indexDeleteTable(1)
-	s.indexAddDocument(1, "doc", []string{"a"})
-	s.indexUpdateDocument(1, "doc", []string{"a"})
-	s.indexDeleteDocument(1, "doc")
+	s.indexDocument(1, "doc", []string{"a"})
+	// The batch seam must also no-op on a nil index (and on an empty doc slice).
+	s.indexDocuments(1, []*Document{{ID: "doc", Words: []string{"a"}}})
+	s.indexDocuments(1, nil)
 }

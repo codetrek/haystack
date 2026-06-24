@@ -41,33 +41,39 @@ func Create(workspaceId int, desc string) error {
 	return nil
 }
 
-// Delete deletes a symbols and all of its documents and keywords
+// Delete deletes a symbols and all of its documents and keywords.
+//
+// idxInst.DeleteTable runs OUTSIDE the mpsc.RunFunc task, exactly like
+// documents.Store.Delete hoists indexDeleteTable: invertedstore.DeleteTable does
+// its own q.RunFunc on the SHARED worker, so calling it from inside symbols' own
+// mpsc.RunFunc would nest RunFunc-in-RunFunc and deadlock the single worker. The
+// meta lookup (getTable) and the db doc-functions cleanup stay serialized on the
+// queue; only the index table-drop is hoisted out.
 func Delete(workspaceId int) error {
 	if !conf.Get().Symbols.EnableFeature {
 		return nil
 	}
 
-	return mpsc.RunFunc(func() error {
-		tableMetaKeys := [][]byte{
-			EncodeSymbolTableKey(workspaceId),
-			EncodeSymbolWordsTableKey(workspaceId),
+	tableMetaKeys := [][]byte{
+		EncodeSymbolTableKey(workspaceId),
+		EncodeSymbolWordsTableKey(workspaceId),
+	}
+
+	for _, key := range tableMetaKeys {
+		ft, err := getTable(key)
+		if err != nil {
+			return err
 		}
 
-		for _, key := range tableMetaKeys {
-			ft, err := getTable(key)
-			if err != nil {
-				return err
-			}
+		idxInst.DeleteTable(ft.InvertedId)
+	}
 
-			idxInst.DeleteTable(ft.InvertedId)
+	return mpsc.RunFunc(func() error {
+		batch := db.NewBatch(0)
+		batch.DeletePrefix(EncodeDocFunctionsKey(workspaceId, ""))
 
-			batch := db.NewBatch(0)
-			batch.DeletePrefix(EncodeDocFunctionsKey(workspaceId, ""))
-
-			err = batch.Commit()
-			if err != nil {
-				return fmt.Errorf("failed to delete symbol table, key: %s, error: %w", key, err)
-			}
+		if err := batch.Commit(); err != nil {
+			return fmt.Errorf("failed to delete symbol doc-functions, workspace: %d, error: %w", workspaceId, err)
 		}
 		return nil
 	})

@@ -17,7 +17,9 @@ import (
 	"github.com/codetrek/haystack/core/engine"
 	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
@@ -462,11 +464,9 @@ func TestFullIntegration(t *testing.T) {
 	indexer.SymbolParserFlushInterval = 50 * time.Millisecond
 	defer func() { indexer.SymbolParserFlushInterval = origFlushInterval }()
 
-	// Speed up inverted index flush: reduce the "entry must be N seconds old"
-	// timeout so pending writes are flushed quickly.
-	iiOpts := invertedindex.Options{
-		FlushWaitTimeout: 200 * time.Millisecond,
-	}
+	// Production-equivalent invertedstore options (AutoMerge keeps the segment
+	// count bounded). Search reads the in-memory head directly, so no flush wait.
+	iiOpts := invertedstore.Options{AutoMerge: true}
 
 	var shutdownWg sync.WaitGroup
 	running.InitShutdown(&shutdownWg)
@@ -476,9 +476,9 @@ func TestFullIntegration(t *testing.T) {
 		t.Fatalf("idtable.Open: %v", err)
 	}
 	indexer.SetIdAllocator(alloc)
-	idx, err := invertedindex.New(env.DB, env.Mpsc, iiOpts)
+	idx, err := invertedstore.Open(filepath.Join(env.TempDir, "index", storage.StorageVersion, "invertedstore"), env.Mpsc, iiOpts)
 	if err != nil {
-		t.Fatalf("invertedindex.New: %v", err)
+		t.Fatalf("invertedstore.Open: %v", err)
 	}
 	idxInst = idx
 	docSt, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
@@ -605,10 +605,10 @@ func TestFullIntegration(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	// Wait for the inverted-index to flush pending writes from both
-	// content indexing and symbol indexing.
-	// We reduced FlushWaitTimeout to 200ms; wait for that plus a ticker cycle
-	// (default ticker is 1s).
+	// Wait for the async indexing pipeline (parser + symbol parser) to push its
+	// writes into the invertedstore. The invertedstore serves Search from its
+	// in-memory head, so no index flush is required — this wait only covers the
+	// content/symbol parser hand-off (symbol parser flush set to 50ms above).
 	time.Sleep(200*time.Millisecond + 1*time.Second + 200*time.Millisecond)
 
 	// makeWS creates a NEW workspace for tests that need isolated files.

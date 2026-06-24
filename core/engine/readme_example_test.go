@@ -53,8 +53,9 @@ func TestReadmeExample(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invertedindex.New: %v", err)
 	}
+	indexer := invertedindex.NewIndexerAdapter(idx)
 
-	docs, err := documents.New(store, q, idx, documents.Options{})
+	docs, err := documents.New(store, q, indexer, documents.Options{})
 	if err != nil {
 		t.Fatalf("documents.New: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestReadmeExample(t *testing.T) {
 	idx.CloseAndWait()
 
 	// 5. Query its content.
-	eng := engine.New(idx, docs, col.ID(), engine.Options{
+	eng := engine.New(indexer, docs, col.ID(), engine.Options{
 		MaxWildcardLength:  24,
 		MaxKeywordDistance: 32,
 	})

@@ -27,12 +27,12 @@ import (
 
 // idxInst is the inverted index instance injected via Run. It backs the
 // content and symbol search lookups.
-var idxInst *invertedindex.Index
+var idxInst invertedindex.Indexer
 
 // stInst is the documents.Store instance injected via Run.
 var stInst *documents.Store
 
-func Run(wg *sync.WaitGroup, idx *invertedindex.Index, st *documents.Store) {
+func Run(wg *sync.WaitGroup, idx invertedindex.Indexer, st *documents.Store) {
 	log.Println("[Searcher] Starting...")
 
 	idxInst = idx

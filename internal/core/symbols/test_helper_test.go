@@ -5,10 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/kv/pebblekv"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/testutil"
 )
 
@@ -16,11 +17,11 @@ import (
 // be torn down cleanly in reverse order.
 type testEnv struct {
 	*testutil.Env
-	idx *invertedindex.Index
+	idx *invertedstore.Store
 }
 
 // setupTestEnv creates a temporary Pebble database, starts an MPSC queue,
-// and initialises both invertedindex and symbols packages.
+// and initialises both invertedstore and symbols packages.
 // Call env.teardown() in a defer.
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -31,7 +32,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	conf.Get().Symbols.EnableFeature = true
 
 	// Init inverted index first (symbols.Create depends on it).
-	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{})
+	idx, err := invertedstore.Open(filepath.Join(env.TempDir, "index", storage.StorageVersion, "invertedstore"), env.Mpsc, invertedstore.Options{})
 	if err != nil {
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)
@@ -49,7 +50,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 
 // teardown shuts down everything in reverse init order:
 //
-//	symbols -> invertedindex -> mpsc queue -> pebble db -> temp dir
+//	symbols -> invertedstore -> mpsc queue -> pebble db -> temp dir
 func (e *testEnv) teardown() {
 	e.T.Helper()
 

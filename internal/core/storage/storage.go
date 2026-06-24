@@ -11,12 +11,21 @@ import (
 
 // StorageVersion names the on-disk KV directory. Bump it on any breaking
 // on-disk format change to force a clean reindex into a fresh directory; add the
-// previous version to cleanup's list so the stale DB is removed. 1.5 switches the
+// previous version to cleanup's list so the stale DB is removed. 1.5 switched the
 // inverted-index posting-row values from fixed 8-byte big-endian docids to a
-// delta-varint encoding, which the 1.4 decoder cannot read.
-const StorageVersion = "1.5"
+// delta-varint encoding, which the 1.4 decoder cannot read. 1.6 replaces the
+// pebble-backed inverted index with the segment-based invertedstore (a breaking
+// change to the `index` store) and drops the documents doc-words keyspace (a
+// breaking change to the `data` store) — both require a fresh reindex.
+const StorageVersion = "1.6"
 
-func cleanup(storagePath string) {
+// Cleanup removes the stale on-disk DB directories (previous StorageVersions and
+// the first-gen un-versioned `index` dir) under storagePath. storage.Open runs it
+// for the `data` store; the index root needs it run explicitly now that the
+// pebble `index` store is gone (the invertedstore is NOT opened via storage.Open,
+// so its caller invokes Cleanup on the index root to reclaim the dead pebble
+// inverted-index version dirs — including the just-superseded "1.5" pebble index).
+func Cleanup(storagePath string) {
 	// Perform cleanup tasks here, such as removing old files or directories
 	log.Printf("[Storage] Cleaning up storage path: %s", storagePath)
 	cleanupList := []string{
@@ -26,6 +35,7 @@ func cleanup(storagePath string) {
 		"1.2",
 		"1.3",
 		"1.4", // pre-delta-varint posting-value format; superseded by 1.5
+		"1.5", // pebble-backed inverted index / doc-words keyspace; superseded by 1.6 (invertedstore)
 	}
 
 	for _, item := range cleanupList {
@@ -66,3 +76,7 @@ func Open(storagePath string, cacheSize int64) (kv.Store, error) {
 	go cleanup(storagePath)
 	return db, nil
 }
+
+// cleanup is the unexported alias kept so the post-Open goroutine reads naturally;
+// it forwards to the exported Cleanup used by the index-root caller.
+func cleanup(storagePath string) { Cleanup(storagePath) }

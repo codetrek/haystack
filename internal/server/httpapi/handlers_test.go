@@ -16,7 +16,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
@@ -61,7 +61,7 @@ func TestMain(m *testing.M) {
 	mpsc := queue.NewMpsc("test-handler-queue")
 	mpsc.Start()
 
-	idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
+	idx, err := invertedstore.Open(filepath.Join(tempDir, "index", storage.StorageVersion, "invertedstore"), mpsc, invertedstore.Options{})
 	if err != nil {
 		panic("Failed to init inverted index: " + err.Error())
 	}

@@ -9,8 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/codetrek/haystack/core/invertedindex"
-	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/shared/running"
@@ -87,7 +86,10 @@ func TestRun_DataStorageError(t *testing.T) {
 	assert.Contains(t, err.Error(), "error initializing data storage")
 }
 
-// TestRun_IndexStorageError tests the run() error path when index storage fails to open.
+// TestRun_IndexStorageError tests the run() error path when the invertedstore
+// fails to open. A FILE planted where the `index` root dir is expected makes the
+// invertedstore.Open MkdirAll of its versioned subdir fail with ENOTDIR, which
+// run() wraps as "error initializing inverted index".
 func TestRun_IndexStorageError(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -99,7 +101,7 @@ func TestRun_IndexStorageError(t *testing.T) {
 
 	err := run()
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "error initializing index storage")
+	assert.Contains(t, err.Error(), "error initializing inverted index")
 }
 
 // TestRun_LockError tests Run() when CheckAndLockServer fails (line 36-38).
@@ -124,7 +126,7 @@ func TestRun_RunError(t *testing.T) {
 	defer restore()
 
 	// Make invertedindexInit fail so run() returns an error.
-	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) {
+	invertedindexInit = func(_ string, _ *queue.Mpsc) (*invertedstore.Store, error) {
 		return nil, errFake
 	}
 

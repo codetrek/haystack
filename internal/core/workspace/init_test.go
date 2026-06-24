@@ -11,7 +11,7 @@ import (
 
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
-	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
@@ -21,17 +21,17 @@ import (
 
 // setupCatalog is a test helper: runs migration, creates collection.Catalog + documents.Store.
 // Returns the catalog, documents store, queue, and a cleanup func.
-func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *documents.Store, mpsc *queue.Mpsc, idx *invertedindex.Index, cleanup func()) {
+func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *documents.Store, mpsc *queue.Mpsc, idx *invertedstore.Store, cleanup func()) {
 	t.Helper()
 
 	mpsc = queue.NewMpsc("test-catalog-q")
 	mpsc.Start()
 
 	var err error
-	idx, err = invertedindex.New(db, mpsc, invertedindex.Options{})
+	idx, err = invertedstore.Open(filepath.Join(conf.Get().Global.DataPath, "index", storage.StorageVersion, "invertedstore"), mpsc, invertedstore.Options{})
 	if err != nil {
 		mpsc.Stop()
-		t.Fatalf("invertedindex.New: %v", err)
+		t.Fatalf("invertedstore.Open: %v", err)
 	}
 
 	st, err = documents.New(db, mpsc, idx, documents.Options{})

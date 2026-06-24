@@ -1,5 +1,9 @@
 package invertedstore
 
+import (
+	"github.com/codetrek/haystack/core/invertedindex"
+)
+
 // update.go — P7 (design §6 write path, §8 full re-post; task T5).
 //
 // The write side of the store. All public writes are thread-safe and ASYNCHRONOUS: each enqueues
@@ -31,12 +35,24 @@ type Batch struct {
 	ops []updateOp
 }
 
-// NewBatch starts an empty Batch bound to this store.
-func (s *Store) NewBatch() *Batch { return &Batch{s: s} }
+// Compile-time assertions that *Store and *Batch satisfy the storage-agnostic seam (design §4
+// "Drop-in seam"): documents.Store, engine, and the root searcher/symbols depend on
+// invertedindex.Indexer, and *Store is the go-forward production implementation behind it.
+var (
+	_ invertedindex.Indexer = (*Store)(nil)
+	_ invertedindex.Batch   = (*Batch)(nil)
+)
+
+// NewBatch starts an empty Batch bound to this store. It returns the
+// invertedindex.Batch interface (not the concrete *Batch) so *Store satisfies
+// invertedindex.Indexer's NewBatch() Batch — the drop-in seam both
+// implementations share (design §4). The concrete value is still *Batch.
+func (s *Store) NewBatch() invertedindex.Batch { return &Batch{s: s} }
 
 // Update appends a (tableId, docid, keywords) op to the batch. keywords is the doc's CURRENT full
-// keyword set; empty ⇒ delete. Returns the batch for chaining.
-func (b *Batch) Update(tableId int, docid int64, keywords []string) *Batch {
+// keyword set; empty ⇒ delete. Returns the batch (as the invertedindex.Batch interface, satisfying
+// that interface's Update) for chaining.
+func (b *Batch) Update(tableId int, docid int64, keywords []string) invertedindex.Batch {
 	// Defensive copy: the caller's slice may be mutated/reused after Update returns, but the op is
 	// applied LATER on the worker. nil keywords stays nil (a delete).
 	var kw []string

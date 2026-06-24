@@ -52,8 +52,11 @@ func setupTestEnv(t *testing.T) *testEnv {
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
 
-	// Create documents Store instance.
-	st, err := New(database, q, idx, Options{})
+	// Create documents Store instance. The documents store depends on the
+	// storage-agnostic invertedindex.Indexer seam, so we wrap the pebble-backed
+	// *Index in its adapter. (The production path uses invertedstore.Store; these
+	// tests only exercise the document keyspace, not index search semantics.)
+	st, err := New(database, q, invertedindex.NewIndexerAdapter(idx), Options{})
 	if err != nil {
 		idx.CloseAndWait()
 		q.Stop()

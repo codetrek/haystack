@@ -2,6 +2,7 @@ package invertedstore
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -132,7 +133,16 @@ func segFileName(id uint64) string { return fmt.Sprintf("seg-%06d.dat", id) }
 
 // Open reads (or bootstraps) the MANIFEST under path and opens each live segment file. A
 // missing MANIFEST yields a fresh empty store. The queue must already be started.
+//
+// Open creates path (and any missing parents) before reading the MANIFEST, matching the
+// idtable/vectorstore Open ergonomics: the production wiring is
+// Open(filepath.Join(storagePath, StorageVersion, "invertedstore"), ...) — a versioned
+// subdir that does NOT exist on first boot — and readManifest/writeManifest would otherwise
+// fail with "no such file or directory" on the MANIFEST(.tmp) path.
 func Open(path string, q queue.Queue, opts Options) (*Store, error) {
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		return nil, fmt.Errorf("invertedstore: create dir %q: %w", path, err)
+	}
 	man, err := readManifest(path)
 	if err != nil {
 		return nil, err

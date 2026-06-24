@@ -751,15 +751,17 @@ func TestDeleteDocument_GetSymbolTableError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// updateSymbolWordsInverseIndex – table-fetch error branch
+// collectSymbolIndexUpdates – table-fetch error branch
 // ---------------------------------------------------------------------------
 
-// TestUpdateSymbolWordsInverseIndex_TableError covers the error branch when the
-// symbol-words table can't be fetched (closed db): it must log and return
-// without panicking (it never reaches idxInst).
-func TestUpdateSymbolWordsInverseIndex_TableError(t *testing.T) {
+// TestCollectSymbolIndexUpdates_TableError covers the error branch when the
+// symbol-words table can't be fetched (closed db): collectSymbolIndexUpdates must
+// log and return the (partial/empty) update slice without panicking, and replaying
+// it must be a safe no-op (it never reaches idxInst with a real op).
+func TestCollectSymbolIndexUpdates_TableError(t *testing.T) {
 	cleanup := setupClosedDbEnv(t)
 	defer cleanup()
 
-	updateSymbolWordsInverseIndex(1, "doc1", []string{"foo", "bar"})
+	updates := collectSymbolIndexUpdates(1, "doc1", []string{"foo", "bar"})
+	replayIndexUpdates(updates)
 }

@@ -176,11 +176,37 @@ func SplitCamelCase(name string) []string {
 	return result
 }
 
-func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames []string) {
+// symbolIndexUpdate is one doc's worth of inverted-index notifications, collected
+// INSIDE a worker task and replayed via idxInst.NewBatch()/Update/Commit AFTER the
+// task returns. A symbol doc touches BOTH the symbol table (function names) and the
+// symbol-words table (tokenized words of those names), so each carries two ops.
+//
+// docid is the int64-decoded form the inverted index keys postings by; keywords is
+// the doc's CURRENT full keyword set (empty/nil ⇒ delete — the store diffs it
+// against its own forward map, design §4/§8). The names/words variants share this
+// shape, so they collapse into one slice of (InvertedId, docid, keywords) tuples.
+type symbolIndexUpdate struct {
+	tableID int
+	docid   int64
+	words   []string
+}
+
+// collectSymbolIndexUpdates builds the (symbol-words + symbol) index notifications
+// for one doc WITHOUT touching the inverted index. The table-meta lookups read the
+// kv store (db.Get), so this must run on the worker, but it issues NO idxInst.Update
+// — the actual async apply is hoisted outside the worker by replayIndexUpdates.
+//
+// The inverted index owns the forward map keyed by (InvertedId, docid) and diffs the
+// CURRENT keyword set against the stored one internally, so we pass only the new
+// words/names — no stale old set. A removed word is retracted by the store on its own.
+func collectSymbolIndexUpdates(workspaceid int, docId string, newFuncNames []string) []symbolIndexUpdate {
+	updates := make([]symbolIndexUpdate, 0, 2)
+	docid := idtable.DecodeId(docId)
+
 	sw, err := GetSymbolWordsTable(workspaceid)
 	if err != nil {
 		log.Println("[Symbols] Error: failed to get symbol words table:", err)
-		return
+		return updates
 	}
 
 	wordsInNewFuncNames := []string{}
@@ -190,14 +216,34 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames [
 			wordsInNewFuncNames = append(wordsInNewFuncNames, strings.ToLower(word))
 		}
 	}
-	idxInst.Update(sw.InvertedId, idtable.DecodeId(docId), wordsInNewFuncNames)
+	updates = append(updates, symbolIndexUpdate{tableID: sw.InvertedId, docid: docid, words: wordsInNewFuncNames})
 
 	s, err := GetSymbolTable(workspaceid)
 	if err != nil {
 		log.Println("[Symbols] Error: failed to get symbol table:", err)
+		return updates
+	}
+	updates = append(updates, symbolIndexUpdate{tableID: s.InvertedId, docid: docid, words: newFuncNames})
+
+	return updates
+}
+
+// replayIndexUpdates applies the collected index notifications in ONE inverted-index
+// batch. It MUST be called OUTSIDE any mpsc.RunFunc worker task: a Batch.Commit (and
+// Update) enqueues onto the SAME single-worker shared queue (q.AddFunc, a blocking
+// channel send). Calling it from inside the worker would block forever once the
+// channel buffer fills — the worker cannot drain what it is itself trying to send.
+// This mirrors documents.Store.indexDocuments and is guarded by
+// save_no_deadlock_test.go in this package.
+func replayIndexUpdates(updates []symbolIndexUpdate) {
+	if idxInst == nil || len(updates) == 0 {
 		return
 	}
-	idxInst.Update(s.InvertedId, idtable.DecodeId(docId), newFuncNames)
+	b := idxInst.NewBatch()
+	for _, u := range updates {
+		b.Update(u.tableID, u.docid, u.words)
+	}
+	b.Commit()
 }
 
 func DeleteDocument(workspaceId int, docId string) error {
@@ -205,7 +251,11 @@ func DeleteDocument(workspaceId int, docId string) error {
 		return nil
 	}
 
-	return mpsc.RunFunc(func() error {
+	var (
+		invertedId int
+		doIndex    bool
+	)
+	err := mpsc.RunFunc(func() error {
 		if db.IsClosed() {
 			log.Println("[Symbols] Database is closed, skip deleting document")
 			return nil
@@ -216,21 +266,35 @@ func DeleteDocument(workspaceId int, docId string) error {
 			return err
 		}
 
-		idxInst.Delete(s.InvertedId, idtable.DecodeId(docId))
-
 		batch := NewBatch(db)
 		batch.Delete(EncodeDocFunctionsKey(workspaceId, docId))
 		err = batch.Commit()
 		if err != nil {
 			log.Println("[Symbols] Failed to delete document:", err)
+			return err
 		}
 
-		return err
+		invertedId = s.InvertedId
+		doIndex = true
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+
+	// Notify the index OUTSIDE the worker task: empty keyword set ⇒ delete. The store
+	// diffs against its forward map and retracts every posting this doc held under the
+	// symbol table (no oldWords arg). Hoisting it out of the worker avoids the
+	// AddFunc-from-the-worker self-send deadlock.
+	if doIndex {
+		replayIndexUpdates([]symbolIndexUpdate{{tableID: invertedId, docid: idtable.DecodeId(docId), words: []string{}}})
+	}
+	return nil
 }
 
 func AddFunctions(workspaceid int, functions []DocFunction) error {
-	return mpsc.RunFunc(func() error {
+	var indexUpdates []symbolIndexUpdate
+	err := mpsc.RunFunc(func() error {
 		if db.IsClosed() {
 			log.Println("[Symbols] Database is closed, skip saving new functions")
 			return nil
@@ -239,8 +303,13 @@ func AddFunctions(workspaceid int, functions []DocFunction) error {
 		batch := NewBatch(db)
 
 		for _, df := range functions {
+			// COLLECT the index notifications inside the worker (the table-meta lookups
+			// read db), but DEFER the actual idxInst apply until after RunFunc returns:
+			// idxInst.Update/Batch.Commit enqueues onto the SAME shared mpsc worker, so
+			// applying here would self-deadlock once the channel buffer fills on a real
+			// batch (MaxBatchSize up to ~2000 sends). See replayIndexUpdates.
 			newFuncNames := getUniqueFunctionNames(df.Functions)
-			updateSymbolWordsInverseIndex(workspaceid, df.ID, newFuncNames)
+			indexUpdates = append(indexUpdates, collectSymbolIndexUpdates(workspaceid, df.ID, newFuncNames)...)
 
 			saveDocFunctions(batch, workspaceid, &df)
 		}
@@ -252,4 +321,11 @@ func AddFunctions(workspaceid int, functions []DocFunction) error {
 
 		return err
 	})
+	if err != nil {
+		return err
+	}
+
+	// Apply all per-doc index notifications in ONE batch OUTSIDE the worker task.
+	replayIndexUpdates(indexUpdates)
+	return nil
 }

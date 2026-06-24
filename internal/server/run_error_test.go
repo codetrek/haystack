@@ -9,6 +9,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
@@ -16,11 +17,11 @@ import (
 
 var errFake = errors.New("fake init error")
 
-// noopInitII is a no-op invertedindexInit replacement: returns a nil Index with no error.
-func noopInitII(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) { return nil, nil }
+// noopInitII is a no-op invertedindexInit replacement: returns a nil Store with no error.
+func noopInitII(_ string, _ *queue.Mpsc) (*invertedstore.Store, error) { return nil, nil }
 
 // noopDocNew is a no-op documentsNew replacement.
-func noopDocNew(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.Store, error) {
+func noopDocNew(_ kv.Store, _ *queue.Mpsc, _ invertedindex.Indexer) (*documents.Store, error) {
 	return nil, nil
 }
 
@@ -38,7 +39,7 @@ func saveAndMockInits() func() {
 	invertedindexInit = noopInitII
 	documentsNew = noopDocNew
 	workspaceInit = noopInitCat
-	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error { return nil }
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ invertedindex.Indexer) error { return nil }
 
 	return func() {
 		invertedindexInit = origII
@@ -60,7 +61,7 @@ func TestRun_InvertedIndexInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) {
+	invertedindexInit = func(_ string, _ *queue.Mpsc) (*invertedstore.Store, error) {
 		return nil, errFake
 	}
 
@@ -75,7 +76,7 @@ func TestRun_DocumentsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	documentsNew = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) (*documents.Store, error) {
+	documentsNew = func(_ kv.Store, _ *queue.Mpsc, _ invertedindex.Indexer) (*documents.Store, error) {
 		return nil, errFake
 	}
 
@@ -105,7 +106,7 @@ func TestRun_SymbolsInitError(t *testing.T) {
 	restore := saveAndMockInits()
 	defer restore()
 
-	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ *invertedindex.Index) error {
+	symbolsInit = func(_ kv.Store, _ *queue.Mpsc, _ invertedindex.Indexer) error {
 		return errFake
 	}
 

@@ -10,8 +10,9 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/internal/conf"
+	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
@@ -33,9 +34,9 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 		t.Fatalf("idtable.Open: %v", err)
 	}
 	SetIdAllocator(alloc)
-	idx, err := invertedindex.New(env.DB, env.Mpsc, invertedindex.Options{})
+	idx, err := invertedstore.Open(filepath.Join(env.TempDir, "index", storage.StorageVersion, "invertedstore"), env.Mpsc, invertedstore.Options{})
 	if err != nil {
-		t.Fatalf("invertedindex.New: %v", err)
+		t.Fatalf("invertedstore.Open: %v", err)
 	}
 	st, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
 	if err != nil {

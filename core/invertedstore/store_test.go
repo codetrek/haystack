@@ -1,6 +1,7 @@
 package invertedstore
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/codetrek/haystack/core/queue"
@@ -15,6 +16,34 @@ func openTestStore(t *testing.T, dir string) *Store {
 		t.Fatal(err)
 	}
 	return s
+}
+
+// TestOpenCreatesMissingDir guards the production wiring ergonomic: Open is called
+// on a versioned subdir (storagePath/<version>/invertedstore) that does NOT exist
+// on first boot, so Open must MkdirAll it before reading the MANIFEST rather than
+// failing with "no such file or directory" on MANIFEST.tmp.
+func TestOpenCreatesMissingDir(t *testing.T) {
+	// A nested path none of whose components exist yet.
+	dir := filepath.Join(t.TempDir(), "v1.6", "invertedstore")
+	q := queue.NewMpsc("invtest-mkdir")
+	q.Start()
+	s, err := Open(dir, q, Options{})
+	if err != nil {
+		t.Fatalf("Open on non-existent dir: %v", err)
+	}
+	// A fresh store must be usable: create a table and reopen to confirm the
+	// MANIFEST was written into the just-created dir.
+	id, err := s.CreateTable("files")
+	if err != nil {
+		t.Fatalf("CreateTable: %v", err)
+	}
+	s.CloseAndWait()
+
+	s2 := openTestStore(t, dir)
+	defer s2.CloseAndWait()
+	if _, ok := s2.tableInfo(id); !ok {
+		t.Fatalf("table %d not persisted after Open created the dir", id)
+	}
 }
 
 func TestCreateDeleteTablePersist(t *testing.T) {

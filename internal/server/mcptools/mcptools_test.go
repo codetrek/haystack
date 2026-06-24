@@ -12,7 +12,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
@@ -46,12 +46,7 @@ func setupMCPTestEnv(t *testing.T) {
 		// Configure
 		conf.Get().Global.DataPath = filepath.Join(tempDir, "mcp_test_data")
 		conf.Get().Server.CacheSize = 8 * 1024 * 1024
-		iiOpts := invertedindex.Options{
-			FlushTicker:        50 * time.Millisecond,
-			FlushWaitTimeout:   1 * time.Microsecond,
-			FlushWaitBatchSize: 10,
-			FlushCooldown:      50 * time.Millisecond,
-		}
+		iiOpts := invertedstore.Options{AutoMerge: true}
 
 		// Create test files
 		testFiles := map[string]string{
@@ -96,15 +91,11 @@ This is a test project.`,
 		if !assert.NoError(t, err) {
 			return
 		}
-		indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
-		if !assert.NoError(t, err) {
-			return
-		}
 
 		mpsc := queue.NewMpsc("MCPTestDBQueue")
 		mpsc.Start()
 
-		idx, err := invertedindex.New(indexdb, mpsc, iiOpts)
+		idx, err := invertedstore.Open(filepath.Join(conf.Get().Global.DataPath, "index", storage.StorageVersion, "invertedstore"), mpsc, iiOpts)
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -163,7 +154,6 @@ This is a test project.`,
 			mpsc.Stop()
 			alloc.Close()
 			db.Close()
-			indexdb.Close()
 		}
 	})
 

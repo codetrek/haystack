@@ -2,15 +2,22 @@ package invertedstore
 
 import (
 	"strings"
+
+	"github.com/codetrek/haystack/core/invertedindex"
 )
 
 // SearchResult is the membership result of a Search/GetDocs: the live docids whose keyword(s)
 // matched. WildDocIds is preserved for compatibility with invertedindex's SearchResult (the
 // suffix/wildcard path) — the store does NOT populate it; it is caller-populated per design §4.
-type SearchResult struct {
-	DocIds     map[int64]struct{} `json:"docIds"`
-	WildDocIds map[int64]struct{} `json:"wildDocIds,omitempty"`
-}
+//
+// It is a type ALIAS of invertedindex.SearchResult (NOT a separate definition), so both
+// implementations return the IDENTICAL named type and therefore satisfy the one
+// invertedindex.Indexer interface (design §4 "Drop-in seam"); engine and the root searcher keep
+// referring to invertedindex.SearchResult unchanged. invertedstore importing invertedindex is
+// cycle-free: invertedindex does not import invertedstore. The shape is byte-identical
+// (DocIds/WildDocIds map[int64]struct{} with the same json tags), so every existing
+// SearchResult{...} literal and field access in this package compiles unchanged.
+type SearchResult = invertedindex.SearchResult
 
 // Search returns the live docids of every keyword that has the lowercased query as a PREFIX,
 // in the given table. It is the prefix scan of design §4/§6:
