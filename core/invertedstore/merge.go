@@ -616,6 +616,38 @@ func (s *Store) coveringMerge() error {
 	return s.installMerge(inputIds, res)
 }
 
+// reclaimOrphanTables runs ONE synchronous covering merge on the worker if any non-empty live
+// segment covers a tableId that is ABSENT from the catalog — orphan dead-table bytes left when a
+// DeleteTable removed a table from the catalog (durably) but a crash dropped the volatile covering
+// merge it scheduled before it installed (spec §6). It is AutoMerge-INDEPENDENT: it calls
+// coveringMerge directly via q.RunFunc (the covering merge needs no merge loop), unlike triggerMerge
+// which no-ops when AutoMerge is off (the default). The [MinTable,MaxTable] test is a range, not a
+// set, so it can only OVER-detect → at worst one extra covering merge that is a near-no-op on an
+// already-clean index, never a miss. Empty (Postings==0) segments are skipped: they have nothing to
+// reclaim and their MinTable==0 (no key ever set the range) would false-positive forever.
+func (s *Store) reclaimOrphanTables() {
+	s.mu.RLock()
+	orphan := false
+	for _, sm := range s.man.Segments {
+		if sm.Postings == 0 {
+			continue
+		}
+		for t := sm.MinTable; t <= sm.MaxTable; t++ {
+			if _, ok := s.man.Tables[int(t)]; !ok {
+				orphan = true
+				break
+			}
+		}
+		if orphan {
+			break
+		}
+	}
+	s.mu.RUnlock()
+	if orphan {
+		_ = s.q.RunFunc(func() error { return s.coveringMerge() })
+	}
+}
+
 // segsByIds returns the open segment handles whose ids are in ids, in OLDEST -> NEWEST (ascending
 // id) order — the order mergeSegments needs for newest-wins reconciliation. Read under the lock.
 func (s *Store) segsByIds(ids map[uint64]bool) []*segment {
