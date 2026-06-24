@@ -217,3 +217,39 @@ func TestForward_ReadForwardKnownEmpty(t *testing.T) {
 		t.Errorf("expected zero-length keyword set, got %v", got)
 	}
 }
+
+func TestForward_AddEmptyIsNoOp(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	tid, _ := env.idx.CreateTable("add-empty")
+	d := makeDocID("doc1")
+
+	// An empty keyword set indexes nothing and writes no forward entry.
+	env.idx.Add(tid, d, nil)
+	env.idx.Add(tid, d, []string{})
+
+	if _, known := env.idx.readForward(tid, d); known {
+		t.Error("empty Add must not write a forward entry")
+	}
+}
+
+func TestForward_DbErrorsAreLoggedNotPanicked(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	tid, _ := env.idx.CreateTable("db-err")
+	d := makeDocID("doc1")
+
+	// Swap in a store whose every op errors. Each forward method must log and
+	// continue without panicking — covering the db.Get/Put/Delete error branches.
+	restore := simulateClosedDB(env.idx)
+	defer restore()
+
+	if _, known := env.idx.readForward(tid, d); known {
+		t.Error("readForward on a db error should report the doc as unknown")
+	}
+	env.idx.Add(tid, d, []string{"a"})    // db.Put(forward) errors
+	env.idx.Update(tid, d, []string{"b"}) // readForward errors -> Add -> db.Put errors
+	env.idx.Delete(tid, d)                // readForward errors -> db.Delete errors
+}
