@@ -52,6 +52,18 @@ func (s *Store) LiveByTableForTest() map[int]int64 {
 	return out
 }
 
+// RecomputeLiveForTest re-runs the Open-time live recompute on the worker (zeroes liveByTable first
+// so the test verifies the recompute reproduces the value, not that it merely left it alone).
+func (s *Store) RecomputeLiveForTest() {
+	s.q.RunFunc(func() error {
+		s.mu.Lock()
+		s.liveByTable = map[int]int64{}
+		s.recomputeLive()
+		s.mu.Unlock()
+		return nil
+	})
+}
+
 // dropHeadCloseSegmentsForTest simulates a process crash for the recovery tests (T11/§9): it discards
 // the volatile in-memory head (every apply that has NOT yet spilled to a sealed segment is LOST) and
 // closes the open segment fds WITHOUT spilling the head, keeping the on-disk files so the next Open

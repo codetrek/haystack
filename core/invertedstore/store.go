@@ -172,6 +172,7 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 	}
 	s.snap.Store(emptySnapshot)
 	s.publishSnapshotLocked() // seed the atomic pointer with the opened set (no concurrent readers yet)
+	s.recomputeLive()         // rebuild the live counter from the opened segments (catalog-gated, §4.2.1)
 	s.startMergeLoop()        // P9: background merger on its own goroutine (no-op unless AutoMerge)
 	return s, nil
 }

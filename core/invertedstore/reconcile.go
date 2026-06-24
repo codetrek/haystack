@@ -140,3 +140,26 @@ func forwardKeyPrefix(tableId uint32) []byte {
 	binary.BigEndian.PutUint32(b[1:5], tableId)
 	return b
 }
+
+// recomputeLive rebuilds s.liveByTable from the segments' forward records, catalog-gated. It is the
+// authoritative anchor for the live counter (spec §4.2.1): called on Open, it is consistent with
+// `written` (Σ segMeta.Postings) by construction, so a crash that dropped unspilled head writes
+// drops them from `live` too — no persisted scalar to go stale, no double-count on indexer replay.
+//
+// It iterates ONLY catalog tables (s.man.Tables), so a table dropped by DeleteTable whose segments
+// are not yet covering-merged away is NOT resurrected into `live`. The head is empty on Open, so it
+// runs segments-only (decided starts empty) over s.segs directly — safe lock-free here because Open
+// has no concurrent readers/writers yet (it runs after publishSnapshotLocked, before startMergeLoop).
+// MUST NOT be called once the store is serving (it reads s.segs without the snapshot refcount).
+func (s *Store) recomputeLive() {
+	s.liveByTable = make(map[int]int64, len(s.man.Tables))
+	for tid := range s.man.Tables {
+		s.forEachLiveSegmentForward(tid, map[int64]struct{}{}, s.segs,
+			func(_ int64, ords []uint32, deleted bool) bool {
+				if !deleted {
+					s.liveByTable[tid] += int64(len(distinctOrds(ords)))
+				}
+				return true
+			})
+	}
+}
