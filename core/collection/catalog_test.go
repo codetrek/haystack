@@ -512,7 +512,7 @@ func TestCollection_DocumentDelegation(t *testing.T) {
 	assert.Equal(t, 2, col.Count())
 
 	// GetDocument
-	d, err := col.GetDocument("file1.go", false)
+	d, err := col.GetDocument("file1.go")
 	require.NoError(t, err)
 	require.NotNil(t, d)
 	assert.Equal(t, "file1.go", d.RelPath)
@@ -531,7 +531,10 @@ func TestCollection_DocumentDelegation(t *testing.T) {
 	assert.Equal(t, []string{"file2.go"}, found)
 }
 
-// TestCollection_Update verifies Collection.Update delegates to documents.UpdateDocuments.
+// TestCollection_Update verifies Collection.Update delegates to
+// documents.UpdateDocuments and persists the new document (metadata). The
+// keyword re-index on Update is covered deterministically in
+// invertedindex/forward_test.go (TestForward_UpdateDiffsAgainstStoredSet).
 func TestCollection_Update(t *testing.T) {
 	env := setupFull(t)
 	defer env.teardown()
@@ -540,21 +543,21 @@ func TestCollection_Update(t *testing.T) {
 	require.NoError(t, err)
 
 	initial := []*documents.Document{
-		{ID: "doc1.go", RelPath: "doc1.go", Words: []string{"alpha", "beta"}},
+		{ID: "doc1.go", RelPath: "doc1.go", Size: 10, Hash: "h1", Words: []string{"alpha", "beta"}},
 	}
-	err = col.Save(initial)
-	require.NoError(t, err)
+	require.NoError(t, col.Save(initial))
 
 	updated := []*documents.Document{
-		{ID: "doc1.go", RelPath: "doc1.go", Words: []string{"gamma", "delta"}},
+		{ID: "doc1.go", RelPath: "doc1_renamed.go", Size: 20, Hash: "h2", Words: []string{"gamma", "delta"}},
 	}
-	err = col.Update(updated)
-	require.NoError(t, err)
+	require.NoError(t, col.Update(updated))
 
-	d, err := col.GetDocument("doc1.go", true)
+	d, err := col.GetDocument("doc1.go")
 	require.NoError(t, err)
 	require.NotNil(t, d)
-	assert.Equal(t, []string{"gamma", "delta"}, d.Words)
+	assert.Equal(t, "doc1_renamed.go", d.RelPath)
+	assert.Equal(t, int64(20), d.Size)
+	assert.Equal(t, "h2", d.Hash)
 }
 
 // TestMeta_SnapshotCopy verifies Meta() returns a snapshot (copy) not a live pointer.

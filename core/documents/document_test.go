@@ -16,7 +16,7 @@ func TestGetDocument_Missing(t *testing.T) {
 
 	mustCreateWorkspace(t, env.St, 1)
 
-	doc, err := env.St.GetDocument(1, "nonexistent", false)
+	doc, err := env.St.GetDocument(1, "nonexistent")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -33,7 +33,7 @@ func TestGetDocument_DbGetError(t *testing.T) {
 	restore := simulateClosedDB(env.St)
 	defer restore()
 
-	doc, err := env.St.GetDocument(1, "any-doc", false)
+	doc, err := env.St.GetDocument(1, "any-doc")
 	assert.Error(t, err, "GetDocument should propagate db.Get error")
 	assert.Nil(t, doc)
 }
@@ -53,7 +53,7 @@ func TestGetDocument_DecodeError(t *testing.T) {
 		return
 	}
 
-	doc, err := env.St.GetDocument(1, docid, false)
+	doc, err := env.St.GetDocument(1, docid)
 	assert.Error(t, err, "GetDocument should propagate decode error")
 	assert.Nil(t, doc)
 }
@@ -79,7 +79,7 @@ func TestGetDocument_RoundTrip_WithoutWords(t *testing.T) {
 		return
 	}
 
-	doc, err := env.St.GetDocument(1, "doc1", false)
+	doc, err := env.St.GetDocument(1, "doc1")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -92,81 +92,8 @@ func TestGetDocument_RoundTrip_WithoutWords(t *testing.T) {
 	assert.Equal(t, int64(1234), doc.Size)
 	assert.Equal(t, "abc123", doc.Hash)
 	assert.Equal(t, int64(100), doc.ModifiedTime)
-	// Words should be empty when includeWords=false
+	// GetDocument no longer returns keywords
 	assert.Empty(t, doc.Words)
-}
-
-func TestGetDocument_RoundTrip_WithWords(t *testing.T) {
-	env := setupTestEnv(t)
-	defer env.teardown()
-
-	mustCreateWorkspace(t, env.St, 1)
-
-	orig := &Document{
-		ID:           "doc1",
-		RelPath:      "src/main.go",
-		Size:         1234,
-		Hash:         "abc123",
-		ModifiedTime: 100,
-		Words:        []string{"hello", "world"},
-	}
-
-	err := env.St.SaveNewDocuments(1, []*Document{orig})
-	if !assert.NoError(t, err) {
-		return
-	}
-
-	doc, err := env.St.GetDocument(1, "doc1", true)
-	if !assert.NoError(t, err) {
-		return
-	}
-	if !assert.NotNil(t, doc) {
-		return
-	}
-
-	assert.Equal(t, "doc1", doc.ID)
-	assert.Equal(t, []string{"hello", "world"}, doc.Words)
-}
-
-// ---------------------------------------------------------------------------
-// GetDocumentWords
-// ---------------------------------------------------------------------------
-
-func TestGetDocumentWords_Missing(t *testing.T) {
-	env := setupTestEnv(t)
-	defer env.teardown()
-
-	mustCreateWorkspace(t, env.St, 1)
-
-	words, err := env.St.getDocumentWords(1, "nonexistent")
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Empty(t, words)
-}
-
-func TestGetDocumentWords_RoundTrip(t *testing.T) {
-	env := setupTestEnv(t)
-	defer env.teardown()
-
-	mustCreateWorkspace(t, env.St, 1)
-
-	doc := &Document{
-		ID:      "doc1",
-		RelPath: "foo.go",
-		Words:   []string{"alpha", "beta", "gamma"},
-	}
-
-	err := env.St.SaveNewDocuments(1, []*Document{doc})
-	if !assert.NoError(t, err) {
-		return
-	}
-
-	words, err := env.St.getDocumentWords(1, "doc1")
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, []string{"alpha", "beta", "gamma"}, words)
 }
 
 // ---------------------------------------------------------------------------
@@ -193,7 +120,7 @@ func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
 	}
 
 	// Verify meta
-	got, err := env.St.GetDocument(1, "d1", false)
+	got, err := env.St.GetDocument(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -206,13 +133,6 @@ func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
 
 	// Verify LastSyncTime was set
 	assert.NotZero(t, got.LastSyncTime, "LastSyncTime should be set by saveDocument")
-
-	// Verify words
-	words, err := env.St.getDocumentWords(1, "d1")
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Equal(t, []string{"func", "util"}, words)
 
 	// Verify path
 	path := env.St.GetDocumentPath(1, "d1")
@@ -237,7 +157,7 @@ func TestSaveNewDocuments_MultipleDocuments(t *testing.T) {
 	}
 
 	for _, d := range docs {
-		got, err := env.St.GetDocument(1, d.ID, true)
+		got, err := env.St.GetDocument(1, d.ID)
 		if !assert.NoError(t, err) {
 			return
 		}
@@ -245,7 +165,6 @@ func TestSaveNewDocuments_MultipleDocuments(t *testing.T) {
 			return
 		}
 		assert.Equal(t, d.RelPath, got.RelPath)
-		assert.Equal(t, d.Words, got.Words)
 	}
 }
 
@@ -313,7 +232,7 @@ func TestUpdateDocuments_OverwriteExisting(t *testing.T) {
 		return
 	}
 
-	got, err := env.St.GetDocument(1, "d1", true)
+	got, err := env.St.GetDocument(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -323,7 +242,6 @@ func TestUpdateDocuments_OverwriteExisting(t *testing.T) {
 	assert.Equal(t, "new.go", got.RelPath)
 	assert.Equal(t, int64(20), got.Size)
 	assert.Equal(t, "newhash", got.Hash)
-	assert.Equal(t, []string{"new", "updated"}, got.Words)
 }
 
 func TestUpdateDocuments_ClosedDB(t *testing.T) {
@@ -374,7 +292,7 @@ func TestUpdateDocuments_NonExistentDocGraceful(t *testing.T) {
 	}
 
 	// The document should now exist (saveDocument is called regardless).
-	got, err := env.St.GetDocument(1, "ghost", true)
+	got, err := env.St.GetDocument(1, "ghost")
 	if !assert.NoError(t, err) {
 		return
 	}
@@ -382,7 +300,6 @@ func TestUpdateDocuments_NonExistentDocGraceful(t *testing.T) {
 		return
 	}
 	assert.Equal(t, "ghost.go", got.RelPath)
-	assert.Equal(t, []string{"phantom"}, got.Words)
 }
 
 // ---------------------------------------------------------------------------
@@ -410,17 +327,11 @@ func TestDeleteDocument_ExistingDoc(t *testing.T) {
 		return
 	}
 
-	got, err := env.St.GetDocument(1, "d1", false)
+	got, err := env.St.GetDocument(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}
 	assert.Nil(t, got, "document should be deleted")
-
-	words, err := env.St.getDocumentWords(1, "d1")
-	if !assert.NoError(t, err) {
-		return
-	}
-	assert.Empty(t, words, "words should be deleted")
 
 	path := env.St.GetDocumentPath(1, "d1")
 	assert.Empty(t, path, "path should be deleted")

@@ -72,7 +72,7 @@ func TestMaxPendingPostingsForcesFlush(t *testing.T) {
 	bounded, cleanup := newBoundedIndex(t, Options{MaxPendingPostings: 4})
 	defer cleanup()
 	for i := 0; i < n; i++ {
-		bounded.Update(1, int64(i), []string{"kw"}, nil)
+		bounded.Add(1, int64(i), []string{"kw"})
 	}
 	// The bound guarantees the buffer never holds more than (bound + one update's
 	// worth) docids; with single-keyword updates that is < bound+1.
@@ -87,7 +87,7 @@ func TestMaxPendingPostingsForcesFlush(t *testing.T) {
 	unbounded, cleanup2 := newBoundedIndex(t, Options{} /* zero value: unbounded (opt-in default) */)
 	defer cleanup2()
 	for i := 0; i < n; i++ {
-		unbounded.Update(1, int64(i), []string{"kw"}, nil)
+		unbounded.Add(1, int64(i), []string{"kw"})
 	}
 	if unbounded.pendingWritePostings != n {
 		t.Fatalf("unbounded: pendingWritePostings=%d, want %d (no forced flush)", unbounded.pendingWritePostings, n)
@@ -151,7 +151,7 @@ func TestMaxPendingPostingsForcesDeleteFlush(t *testing.T) {
 
 	// Seed and flush n docs under "kw".
 	for i := 0; i < n; i++ {
-		idx.Update(1, int64(i), []string{"kw"}, nil)
+		idx.Add(1, int64(i), []string{"kw"})
 	}
 	forceFlush(idx)
 	if got := searchDocCount(idx, 1, "kw"); got != n {
@@ -162,7 +162,7 @@ func TestMaxPendingPostingsForcesDeleteFlush(t *testing.T) {
 	// the bound must force a delete flush, so the buffered deletes stay bounded
 	// and removals reach the store without an explicit flush.
 	for i := 0; i < n; i++ {
-		idx.Update(1, int64(i), nil, []string{"kw"})
+		idx.Delete(1, int64(i))
 	}
 	if idx.pendingDeletePostings > 4 {
 		t.Fatalf("pendingDeletePostings=%d exceeded the bound 4", idx.pendingDeletePostings)

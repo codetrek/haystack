@@ -10,7 +10,6 @@ import (
 func newTestStore() *Store {
 	return &Store{
 		keyTypeDocCollection: DefaultKeyTypeDocCollection,
-		keyTypeDocWords:      DefaultKeyTypeDocWords,
 		keyTypeDocMeta:       DefaultKeyTypeDocMeta,
 		keyTypeDocPath:       DefaultKeyTypeDocPath,
 	}
@@ -118,57 +117,6 @@ func TestDocumentMetaValue_RoundTrip(t *testing.T) {
 func TestDecodeDocumentMetaValue_InvalidJSON(t *testing.T) {
 	_, err := decodeDocumentMetaValue([]byte("{invalid"))
 	assert.Error(t, err)
-}
-
-// ---------------------------------------------------------------------------
-// encodeDocumentWordsKey / decodeDocumentWordsKey
-// ---------------------------------------------------------------------------
-
-func TestDocumentWordsKey_RoundTrip(t *testing.T) {
-	s := newTestStore()
-	key := s.encodeDocumentWordsKey(7, "wdoc")
-	wsid, docid := s.decodeDocumentWordsKey(string(key))
-	assert.Equal(t, 7, wsid)
-	assert.Equal(t, "wdoc", docid)
-}
-
-func TestDecodeDocumentWordsKey_WrongType(t *testing.T) {
-	s := newTestStore()
-	wsid, docid := s.decodeDocumentWordsKey("Q7|wdoc")
-	assert.Equal(t, invalidCollectionID, wsid)
-	assert.Empty(t, docid)
-}
-
-func TestDecodeDocumentWordsKey_NoPipe(t *testing.T) {
-	s := newTestStore()
-	key := []byte{DefaultKeyTypeDocWords}
-	key = append(key, []byte("nopipe")...)
-	wsid, docid := s.decodeDocumentWordsKey(string(key))
-	assert.Equal(t, invalidCollectionID, wsid)
-	assert.Empty(t, docid)
-}
-
-// ---------------------------------------------------------------------------
-// encodeDocumentWordsValue / decodeDocumentWordsValue
-// ---------------------------------------------------------------------------
-
-func TestDocumentWordsValue_RoundTrip(t *testing.T) {
-	words := []string{"alpha", "beta", "gamma"}
-	encoded := encodeDocumentWordsValue(words)
-	decoded := decodeDocumentWordsValue(string(encoded))
-	assert.Equal(t, words, decoded)
-}
-
-func TestDecodeDocumentWordsValue_Empty(t *testing.T) {
-	decoded := decodeDocumentWordsValue("")
-	assert.Empty(t, decoded)
-}
-
-func TestDocumentWordsValue_SingleWord(t *testing.T) {
-	words := []string{"single"}
-	encoded := encodeDocumentWordsValue(words)
-	decoded := decodeDocumentWordsValue(string(encoded))
-	assert.Equal(t, words, decoded)
 }
 
 // ---------------------------------------------------------------------------

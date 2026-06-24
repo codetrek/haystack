@@ -79,7 +79,7 @@ func TestDeleteTable(t *testing.T) {
 	}
 
 	docid := makeDocID("doc1")
-	env.idx.Update(tableId, docid, []string{"hello", "world"}, nil)
+	env.idx.Add(tableId, docid, []string{"hello", "world"})
 	forceFlush(env.idx)
 
 	// Verify data exists
@@ -111,7 +111,7 @@ func TestUpdateAddKeywords(t *testing.T) {
 	tableId, _ := env.idx.CreateTable("update-test")
 	docid := makeDocID("doc1")
 
-	env.idx.Update(tableId, docid, []string{"alpha", "beta"}, nil)
+	env.idx.Add(tableId, docid, []string{"alpha", "beta"})
 	forceFlush(env.idx)
 
 	res := env.idx.Search(tableId, "alpha", 0, nil)
@@ -137,11 +137,11 @@ func TestUpdateRemoveAllKeywords(t *testing.T) {
 	docid := makeDocID("doc1")
 
 	// Add first
-	env.idx.Update(tableId, docid, []string{"gamma"}, nil)
+	env.idx.Add(tableId, docid, []string{"gamma"})
 	forceFlush(env.idx)
 
 	// Remove
-	env.idx.Update(tableId, docid, nil, []string{"gamma"})
+	env.idx.Delete(tableId, docid)
 	forceFlush(env.idx)
 
 	res := env.idx.Search(tableId, "gamma", 0, nil)
@@ -162,11 +162,11 @@ func TestUpdateDiffKeywords(t *testing.T) {
 	docid := makeDocID("doc1")
 
 	// Add initial keywords
-	env.idx.Update(tableId, docid, []string{"keep", "remove"}, nil)
+	env.idx.Add(tableId, docid, []string{"keep", "remove"})
 	forceFlush(env.idx)
 
 	// Update: keep stays, remove goes, addnew is added
-	env.idx.Update(tableId, docid, []string{"keep", "addnew"}, []string{"keep", "remove"})
+	env.idx.Update(tableId, docid, []string{"keep", "addnew"})
 	forceFlush(env.idx)
 
 	// "keep" should still have the doc
@@ -199,7 +199,7 @@ func TestUpdateIgnoresEmptyKeywords(t *testing.T) {
 	tableId, _ := env.idx.CreateTable("empty-kw-test")
 	docid := makeDocID("doc1")
 
-	env.idx.Update(tableId, docid, []string{"real", "", "word"}, []string{"", "old"})
+	env.idx.Add(tableId, docid, []string{"real", "", "word"})
 	forceFlush(env.idx)
 
 	res := env.idx.Search(tableId, "real", 0, nil)
@@ -220,8 +220,8 @@ func TestSearchBasic(t *testing.T) {
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	env.idx.Update(tableId, doc1, []string{"common", "unique1"}, nil)
-	env.idx.Update(tableId, doc2, []string{"common", "unique2"}, nil)
+	env.idx.Add(tableId, doc1, []string{"common", "unique1"})
+	env.idx.Add(tableId, doc2, []string{"common", "unique2"})
 	forceFlush(env.idx)
 
 	// "common" should return both
@@ -253,7 +253,7 @@ func TestSearchWithLimit(t *testing.T) {
 		// Each doc gets a unique keyword like "shared0", "shared1", etc.
 		// so they are stored in separate DB rows.
 		kw := "shared" + string(rune('0'+i))
-		env.idx.Update(tableId, docid, []string{kw}, nil)
+		env.idx.Add(tableId, docid, []string{kw})
 	}
 	forceFlush(env.idx)
 
@@ -278,7 +278,7 @@ func TestSearchCaseInsensitive(t *testing.T) {
 	tableId, _ := env.idx.CreateTable("case-test")
 	docid := makeDocID("doc1")
 	// Keywords are stored as-is; search lowercases the query
-	env.idx.Update(tableId, docid, []string{"hello"}, nil)
+	env.idx.Add(tableId, docid, []string{"hello"})
 	forceFlush(env.idx)
 
 	res := env.idx.Search(tableId, "HELLO", 0, nil)
@@ -295,8 +295,8 @@ func TestSearchWithFilter(t *testing.T) {
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	env.idx.Update(tableId, doc1, []string{"apple"}, nil)
-	env.idx.Update(tableId, doc2, []string{"applesauce"}, nil)
+	env.idx.Add(tableId, doc1, []string{"apple"})
+	env.idx.Add(tableId, doc2, []string{"applesauce"})
 	forceFlush(env.idx)
 
 	// Filter that rejects all keys
@@ -337,8 +337,8 @@ func TestGetDocs(t *testing.T) {
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	env.idx.Update(tableId, doc1, []string{"keyword"}, nil)
-	env.idx.Update(tableId, doc2, []string{"keyword"}, nil)
+	env.idx.Add(tableId, doc1, []string{"keyword"})
+	env.idx.Add(tableId, doc2, []string{"keyword"})
 	forceFlush(env.idx)
 
 	res := env.idx.GetDocs(tableId, "keyword")
@@ -378,9 +378,9 @@ func TestRemoveDocumentsFromInvertedIndex(t *testing.T) {
 	doc3 := makeDocID("doc3")
 
 	// Add all three docs to same keyword
-	env.idx.Update(tableId, doc1, []string{"target"}, nil)
-	env.idx.Update(tableId, doc2, []string{"target"}, nil)
-	env.idx.Update(tableId, doc3, []string{"target"}, nil)
+	env.idx.Add(tableId, doc1, []string{"target"})
+	env.idx.Add(tableId, doc2, []string{"target"})
+	env.idx.Add(tableId, doc3, []string{"target"})
 	forceFlush(env.idx)
 
 	// Remove doc2 via removeDocumentsFromInvertedIndex
@@ -443,7 +443,7 @@ func TestMultipleTablesIsolated(t *testing.T) {
 
 	doc := makeDocID("doc1")
 
-	env.idx.Update(t1, doc, []string{"word"}, nil)
+	env.idx.Add(t1, doc, []string{"word"})
 	forceFlush(env.idx)
 
 	// Table 1 should find the doc
@@ -622,7 +622,7 @@ func TestFlushPendingWritesTaskRun(t *testing.T) {
 	tableId, _ := env.idx.CreateTable("flush-task-test")
 	docid := makeDocID("doc1")
 
-	env.idx.Update(tableId, docid, []string{"taskword"}, nil)
+	env.idx.Add(tableId, docid, []string{"taskword"})
 
 	// Run the task directly
 	task := &flushPendingWritesTask{idx: env.idx, closing: true}
@@ -649,9 +649,9 @@ func TestUpdateBothEmpty(t *testing.T) {
 	tableId, _ := env.idx.CreateTable("both-empty-test")
 	docid := makeDocID("doc1")
 
-	// Both empty — should not panic or error
-	env.idx.Update(tableId, docid, nil, nil)
-	env.idx.Update(tableId, docid, []string{}, []string{})
+	// Both no-ops on an unknown doc — must not panic or error.
+	env.idx.Update(tableId, docid, nil)
+	env.idx.Delete(tableId, docid)
 	forceFlush(env.idx)
 }
 
@@ -667,8 +667,8 @@ func TestSearchMultipleKeywordsPrefix(t *testing.T) {
 	doc1 := makeDocID("doc1")
 	doc2 := makeDocID("doc2")
 
-	env.idx.Update(tableId, doc1, []string{"test"}, nil)
-	env.idx.Update(tableId, doc2, []string{"testing"}, nil)
+	env.idx.Add(tableId, doc1, []string{"test"})
+	env.idx.Add(tableId, doc2, []string{"testing"})
 	forceFlush(env.idx)
 
 	// Search for "test" — since Scan uses prefix scanning, this might
@@ -706,7 +706,7 @@ func TestUpdateManyDocuments(t *testing.T) {
 	docids := make([]int64, 20)
 	for i := 0; i < 20; i++ {
 		docids[i] = makeDocID("d" + string(rune('A'+i)))
-		env.idx.Update(tableId, docids[i], []string{"popular"}, nil)
+		env.idx.Add(tableId, docids[i], []string{"popular"})
 	}
 	forceFlush(env.idx)
 
@@ -769,7 +769,7 @@ func TestRemoveDocumentsPartial(t *testing.T) {
 	docs := make([]int64, 5)
 	for i := 0; i < 5; i++ {
 		docs[i] = makeDocID("p" + string(rune('1'+i)))
-		env.idx.Update(tableId, docs[i], []string{"partkey"}, nil)
+		env.idx.Add(tableId, docs[i], []string{"partkey"})
 	}
 	forceFlush(env.idx)
 

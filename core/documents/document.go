@@ -23,8 +23,7 @@ type Document struct {
 
 // GetDocument returns a document from the store.
 // Returns nil, nil if the document does not exist.
-// If includeWords is true, the document's Words field is populated.
-func (s *Store) GetDocument(collectionID int, docid string, includeWords bool) (*Document, error) {
+func (s *Store) GetDocument(collectionID int, docid string) (*Document, error) {
 	data, err := s.db.Get(s.encodeDocumentMetaKey(collectionID, docid))
 	if err != nil {
 		return nil, err
@@ -40,32 +39,7 @@ func (s *Store) GetDocument(collectionID int, docid string, includeWords bool) (
 	}
 
 	doc.ID = docid
-
-	if includeWords {
-		words, err := s.getDocumentWords(collectionID, docid)
-		if err != nil {
-			return nil, err
-		}
-
-		doc.Words = words
-	}
-
 	return doc, nil
-}
-
-// getDocumentWords returns the words of a document.
-// Returns an empty slice if the document does not exist.
-func (s *Store) getDocumentWords(collectionID int, docid string) ([]string, error) {
-	words, err := s.db.Get(s.encodeDocumentWordsKey(collectionID, docid))
-	if err != nil {
-		return nil, err
-	}
-
-	if len(words) == 0 {
-		return []string{}, nil
-	}
-
-	return decodeDocumentWordsValue(string(words)), nil
 }
 
 // SaveNewDocuments persists a batch of new documents and updates the
@@ -90,7 +64,7 @@ func (s *Store) SaveNewDocuments(collectionID int, docs []*Document) error {
 
 		batch := newBatch(s.db)
 		for _, doc := range docs {
-			s.indexDocument(ft.InvertedId, doc.ID, doc.Words, nil)
+			s.indexAddDocument(ft.InvertedId, doc.ID, doc.Words)
 			s.saveDocument(batch, collectionID, doc)
 		}
 		err = batch.Commit()
@@ -129,15 +103,7 @@ func (s *Store) UpdateDocuments(collectionID int, updatedDocs []*Document) error
 
 		batch := newBatch(s.db)
 		for _, updatedDoc := range updatedDocs {
-			// Get the current document words from the database
-			oldWords, err := s.getDocumentWords(collectionID, updatedDoc.ID)
-			if err != nil {
-				continue
-			}
-
-			s.indexDocument(ft.InvertedId, updatedDoc.ID, updatedDoc.Words, oldWords)
-
-			// Save the updated document
+			s.indexUpdateDocument(ft.InvertedId, updatedDoc.ID, updatedDoc.Words)
 			s.saveDocument(batch, collectionID, updatedDoc)
 		}
 		err = batch.Commit()
@@ -149,8 +115,8 @@ func (s *Store) UpdateDocuments(collectionID int, updatedDocs []*Document) error
 	})
 }
 
-// DeleteDocument removes a document, its words, and its path entry from the
-// store, and notifies the inverted index of the removal.
+// DeleteDocument removes a document and its path entry from the store, and
+// notifies the inverted index of the removal.
 func (s *Store) DeleteDocument(collectionID int, docId string) error {
 	return s.q.RunFunc(func() error {
 		if s.db.IsClosed() {
@@ -164,7 +130,7 @@ func (s *Store) DeleteDocument(collectionID int, docId string) error {
 			return err
 		}
 
-		doc, err := s.GetDocument(collectionID, docId, true)
+		doc, err := s.GetDocument(collectionID, docId)
 		if err != nil {
 			log.Println("[Documents] Error: failed to get document:", err)
 			return err
@@ -176,12 +142,11 @@ func (s *Store) DeleteDocument(collectionID int, docId string) error {
 
 		defer log.Printf("[Documents] Document `%s` deleted from collection `%d`", doc.RelPath, collectionID)
 
-		s.indexDocument(ft.InvertedId, docId, []string{}, doc.Words)
+		s.indexDeleteDocument(ft.InvertedId, docId)
 
-		// delete the document meta and words
+		// delete the document meta and path
 		batch := newBatch(s.db)
 		batch.Delete(s.encodeDocumentMetaKey(collectionID, docId))
-		batch.Delete(s.encodeDocumentWordsKey(collectionID, docId))
 		batch.Delete(s.encodeDocumentPathKey(collectionID, docId))
 		err = batch.Commit()
 		if err != nil {

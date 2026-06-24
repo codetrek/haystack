@@ -59,7 +59,7 @@ func TestMerge_KeywordWithDelimiter_NoOrphan(t *testing.T) {
 	for round := 0; round < 3; round++ {
 		for ki, kw := range keywords {
 			doc := makeDocID(fmt.Sprintf("d%d-%d", ki, round))
-			env.idx.Update(tableId, doc, []string{kw}, nil)
+			env.idx.Add(tableId, doc, []string{kw})
 			docsByKw[kw] = append(docsByKw[kw], doc)
 		}
 		forceFlush(env.idx)
@@ -102,7 +102,7 @@ func TestSearch_KeywordWithFF_Found(t *testing.T) {
 	const tableId = 1
 	doc := makeDocID("ffdoc")
 	// Keyword "x\xffy": the search prefix "x" is immediately followed by 0xff.
-	env.idx.Update(tableId, doc, []string{"x\xffy"}, nil)
+	env.idx.Add(tableId, doc, []string{"x\xffy"})
 	forceFlush(env.idx)
 
 	res := env.idx.Search(tableId, "x", 0, nil)

@@ -11,8 +11,8 @@ import (
 func TestGetDocs_NoPipePrefixLeak(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
-	env.idx.Update(1, makeDocID("d1"), []string{"a"}, nil)
-	env.idx.Update(1, makeDocID("d2"), []string{"a|x"}, nil)
+	env.idx.Add(1, makeDocID("d1"), []string{"a"})
+	env.idx.Add(1, makeDocID("d2"), []string{"a|x"})
 	forceFlush(env.idx)
 
 	a := env.idx.GetDocs(1, "a")
@@ -31,11 +31,11 @@ func TestGetDocs_NoPipePrefixLeak(t *testing.T) {
 func TestRemoveDocuments_NoPipeCrossDelete(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
-	env.idx.Update(1, makeDocID("d1"), []string{"a"}, nil)
-	env.idx.Update(1, makeDocID("d2"), []string{"a|x"}, nil)
+	env.idx.Add(1, makeDocID("d1"), []string{"a"})
+	env.idx.Add(1, makeDocID("d2"), []string{"a|x"})
 	forceFlush(env.idx)
 
-	env.idx.Update(1, makeDocID("d1"), nil, []string{"a"}) // delete d1 from "a"
+	env.idx.Delete(1, makeDocID("d1")) // delete d1 from "a"
 	forceFlush(env.idx)
 
 	if _, ok := env.idx.GetDocs(1, "a|x").DocIds[makeDocID("d2")]; !ok {
@@ -68,7 +68,7 @@ func TestUpdate_Int64DocidRoundTrip(t *testing.T) {
 
 	docids := []int64{0, 1, -1, 1 << 40, 9223372036854775807 /* max int64 */}
 	for _, id := range docids {
-		env.idx.Update(1, id, []string{"kw"}, nil)
+		env.idx.Add(1, id, []string{"kw"})
 	}
 	forceFlush(env.idx)
 
@@ -97,7 +97,7 @@ func TestMerge_SkipsInvalidIdGarbageRow(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 	for r := 0; r < 3; r++ {
-		env.idx.Update(1, makeDocID(fmt.Sprintf("d%d", r)), []string{"kw"}, nil)
+		env.idx.Add(1, makeDocID(fmt.Sprintf("d%d", r)), []string{"kw"})
 		forceFlush(env.idx)
 	}
 	// Garbage key with a non-numeric tableId ("\x01") -> decodes to InvalidId, and
@@ -130,7 +130,7 @@ func TestMerge_CompactsEmptyKeyword(t *testing.T) {
 	// "" is below docIDSize? No: keyword may be empty; docids are 8 bytes. Index
 	// several rows under the empty keyword across flushes.
 	for r := 0; r < 6; r++ {
-		env.idx.Update(1, makeDocID(fmt.Sprintf("e%d", r)), []string{""}, nil)
+		env.idx.Add(1, makeDocID(fmt.Sprintf("e%d", r)), []string{""})
 		forceFlush(env.idx)
 	}
 	rowsBefore := countRows(env, "")
@@ -154,11 +154,11 @@ func TestRemoveDocuments_RewritesTrueDoccount(t *testing.T) {
 	defer env.teardown()
 	// One row with a large doccount, then delete all but two docs.
 	for i := 0; i < 10; i++ {
-		env.idx.Update(1, makeDocID(fmt.Sprintf("d%02d", i)), []string{"kw"}, nil)
+		env.idx.Add(1, makeDocID(fmt.Sprintf("d%02d", i)), []string{"kw"})
 	}
 	forceFlush(env.idx)
 	for i := 0; i < 8; i++ {
-		env.idx.Update(1, makeDocID(fmt.Sprintf("d%02d", i)), nil, []string{"kw"})
+		env.idx.Delete(1, makeDocID(fmt.Sprintf("d%02d", i)))
 	}
 	forceFlush(env.idx)
 
