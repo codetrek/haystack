@@ -355,9 +355,10 @@ scan in `Open`, a per-table `liveByTable` counter updated in-lock in `applyBatch
 
 ## 8. Test plan (TDD)
 
-1. **`deadFraction` unit.** Build directly: all-add (cold) → `0`; delete half → ≈ `0.33`
-   (`live = N/2·k`, `written = N·k + N/2·k`); delete all → `1`. Pure metadata math, no
-   decompression.
+1. **`deadFraction` unit.** Build directly: all-add (cold) → `0`; delete half → `0.667`
+   (`live = N/2·k`, `written = N·k + N/2·k` ⇒ `1 − (N/2)/(3N/2) = 1 − 1/3 = 0.667`, the *dead*
+   fraction); delete all → `1`. Pure metadata math, no decompression. Run `AutoMerge:false` so the
+   trigger does not collapse the segments mid-assertion.
 2. **No false trigger (the regression guard).** Bulk-add to spill **N ≥ 3 segments, zero
    deletes**; assert (covering-merge counter hook) **no covering merge fires** and
    `deadFraction()` stays `< threshold` throughout. The test that would have caught the bug.

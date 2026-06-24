@@ -522,11 +522,11 @@ func (s *Store) mergeOneLevel() (bool, error) {
 	return true, s.installMerge(inputIds, res)
 }
 
-// maybeCoveringMerge fires a full bottom-up covering merge when the bottom level's dead fraction
-// (tombstoned + superseded postings / total postings) crosses the threshold (design §6 default
-// ~25%). It compacts the bottom level together with EVERYTHING above it (all live segments), so it
-// can reclaim dangling tombstones, fully-tombstoned keys, forward-tombstones and dead-tableId keys.
-// Returns nil (no-op) when the index is small or clean. MUST run on the worker.
+// maybeCoveringMerge fires a full bottom-up covering merge when the dead fraction (tombstoned +
+// superseded postings / total written postings) crosses the threshold (design §6 default ~25%). It
+// compacts all live segments, reclaiming dangling tombstones, fully-tombstoned keys,
+// forward-tombstones and dead-tableId keys. Returns nil (no-op) when the index is small or clean.
+// MUST run on the worker.
 func (s *Store) maybeCoveringMerge() error {
 	s.mu.RLock()
 	nseg := len(s.man.Segments)
@@ -534,21 +534,59 @@ func (s *Store) maybeCoveringMerge() error {
 	if nseg < 2 {
 		return nil // nothing to reclaim across (a single segment is already compact)
 	}
-	frac := s.bottomDeadFraction()
-	if frac < coveringDeadThreshold {
+	if s.deadFraction() < coveringDeadThreshold {
 		return nil
 	}
 	return s.coveringMerge()
 }
 
-// coveringDeadThreshold is the bottom-level dead-fraction trigger for a covering merge (design §6).
+// deadFraction is the covering-merge trigger: the fraction of WRITTEN inverted postings a covering
+// merge would reclaim, computed from metadata only (no decompression — this replaces the old
+// bottomDeadFraction full-scan that cost 73% of build CPU). written = Σ segMeta.Postings over all
+// live segments; live = Σ liveByTable over CATALOG tables only (a stale post-DeleteTable partition
+// for a non-catalog table is excluded, matching the catalog-gated Open recompute). The head-resident
+// live pairs (≤ CapBytes) can make live slightly exceed sealed written → clamp the negative to 0
+// (a safe under-trigger). MUST be called under the worker (reads under RLock; liveByTable is mutated
+// under the write lock in applyBatch). Spec §4.3.
+func (s *Store) deadFraction() float64 {
+	s.mu.RLock()
+	var written int64
+	for _, sm := range s.man.Segments {
+		written += sm.Postings
+	}
+	var live int64
+	for t, n := range s.liveByTable {
+		if _, ok := s.man.Tables[t]; ok {
+			live += n
+		}
+	}
+	s.mu.RUnlock()
+	if written <= 0 {
+		return 0
+	}
+	d := 1 - float64(live)/float64(written)
+	if d < 0 {
+		d = 0
+	}
+	return d
+}
+
+// coveringDeadThreshold is the dead-fraction trigger for a covering merge (design §6).
 const coveringDeadThreshold = 0.25
+
+// coveringMergeHook, when non-nil, is invoked at the top of every coveringMerge — covering BOTH the
+// dead-fraction-triggered path (maybeCoveringMerge) AND the DeleteTable/Open-orphan forced path. A
+// test installs it to count covering merges; nil in production.
+var coveringMergeHook func()
 
 // coveringMerge compacts ALL live segments (the bottom level + everything above) into one segment
 // at the max level + 0 (it stays the bottom), reclaiming everything a covering merge can. It is
 // also what DeleteTable schedules so a dropped table's bytes go even if its segments sit at the
 // bottom with no further writes. MUST run on the worker.
 func (s *Store) coveringMerge() error {
+	if coveringMergeHook != nil {
+		coveringMergeHook()
+	}
 	s.mu.RLock()
 	if len(s.man.Segments) == 0 {
 		s.mu.RUnlock()
@@ -576,111 +614,6 @@ func (s *Store) coveringMerge() error {
 	outId := s.nextSegId()
 	res := s.mergeSegments(segs, outId, level, s.opts.DataCodecMerged, true, liveTables)
 	return s.installMerge(inputIds, res)
-}
-
-// bottomDeadFraction estimates the bottom (max) level's dead fraction = (tombstoned + superseded
-// postings) / total postings across that level's segments. It is a STREAMING k-way pass over the
-// already-sorted bottom segments (one decompressed block per cursor + a per-keyword running map),
-// so its resident memory is O(K cursors + the docids of ONE keyword), NEVER a global map over every
-// posting in the level — bounded regardless of how large the bottom level grows (design §3). For
-// each (tableId,keyword,docid) it counts a docid as DEAD if its newest action across the bottom
-// level is a tombstone OR if an older appearance is superseded by a newer add/del (a duplicate).
-// Forward records are skipped (the fraction is about inverted-posting reclamation). The full [I]
-// key carries the 4-byte tableId, so postings of distinct tables are counted independently (two
-// tables sharing a keyword+docid never collide).
-func (s *Store) bottomDeadFraction() float64 {
-	s.mu.RLock()
-	maxL := 0
-	for _, sm := range s.man.Segments {
-		if sm.Level > maxL {
-			maxL = sm.Level
-		}
-	}
-	inputIds := map[uint64]bool{}
-	for _, sm := range s.man.Segments {
-		if sm.Level == maxL {
-			inputIds[sm.Id] = true
-		}
-	}
-	s.mu.RUnlock()
-	segs := s.segsByIds(inputIds) // oldest->newest
-	if len(segs) == 0 {
-		return 0
-	}
-
-	curs := make([]*mergeCursor, len(segs))
-	for i, seg := range segs {
-		curs[i] = newMergeCursor(seg)
-	}
-
-	// latest[docid] = newest action for this ONE [I] key (true=add,false=del); count[docid] = how
-	// many appearances. Reused (cleared) per keyword key, so resident size is bounded by a single
-	// keyword's distinct docids — never the whole level. total/dead accumulate across all keys.
-	latest := map[int64]bool{}
-	count := map[int64]int{}
-	var total, dead int64
-
-	flushKey := func() {
-		for d, c := range count {
-			// The surviving posting is one live add (if the newest action for the pair is an add);
-			// every other appearance — a superseded add, a dangling tombstone, or a tombstone over an
-			// add — is dead. If the newest action is a del, ALL appearances of the pair are dead.
-			survivors := int64(0)
-			if latest[d] {
-				survivors = 1
-			}
-			dead += int64(c) - survivors
-		}
-		// Clear in place (cheap; Go reuses the backing buckets) for the next keyword key.
-		for d := range count {
-			delete(count, d)
-			delete(latest, d)
-		}
-	}
-
-	for {
-		// Minimum key across live cursors (== the next [I] key in sort order). [F] keys sort AFTER
-		// every [I] key (ktForward > ktInverted), so once we hit a forward we are done with inverted.
-		var min []byte
-		first := true
-		for _, cu := range curs {
-			if cu.done {
-				continue
-			}
-			if first || compareKeys(cu.key, min) < 0 {
-				min, first = cu.key, false
-			}
-		}
-		if first {
-			break // all cursors drained
-		}
-		if keyType(min) != ktInverted {
-			break // reached the forward region; nothing left to count
-		}
-		// Tally every source whose current key == min (this exact tableId+keyword), oldest->newest.
-		for _, cu := range curs {
-			if cu.done || !equalKeys(cu.key, min) {
-				continue
-			}
-			ab, db := splitInvertedValue(cu.val)
-			decodeDocs(ab, func(d int64) {
-				latest[d] = true
-				count[d]++
-				total++
-			})
-			decodeDocs(db, func(d int64) {
-				latest[d] = false
-				count[d]++
-				total++
-			})
-			cu.advance()
-		}
-		flushKey()
-	}
-	if total == 0 {
-		return 0
-	}
-	return float64(dead) / float64(total)
 }
 
 // segsByIds returns the open segment handles whose ids are in ids, in OLDEST -> NEWEST (ascending

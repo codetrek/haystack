@@ -1,5 +1,11 @@
 package invertedstore
 
+import (
+	"strconv"
+	"sync/atomic"
+	"testing"
+)
+
 // This file provides test-only accessors (compiled only under `go test`) that drive the real
 // worker-side apply/spill so store_test.go can exercise the head buffer + spill path WITHOUT the
 // full Update path (P7). They run their work on the mpsc worker, exactly as the production write
@@ -82,5 +88,48 @@ func (s *Store) dropHeadCloseSegmentsForTest() {
 	s.mu.Unlock()
 	for _, seg := range segs {
 		seg.retireKeepFile() // close the fd, keep the file (still live in the on-disk MANIFEST)
+	}
+}
+
+// DeadFractionForTest exposes the covering-merge trigger value.
+func (s *Store) DeadFractionForTest() float64 { return s.deadFraction() }
+
+// uniqWord makes a per-index distinct keyword (so each doc adds a unique posting).
+func uniqWord(n int) string { return "w" + strconv.Itoa(n) }
+
+// installCoveringCounter installs the package coveringMergeHook to count covering merges (covering
+// BOTH the dead-fraction-triggered and the DeleteTable/orphan forced paths). Read via .Load(). The
+// hook runs on the worker, so the atomic keeps it -race clean. Cleared on test cleanup.
+func installCoveringCounter(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var n atomic.Int64
+	coveringMergeHook = func() { n.Add(1) }
+	t.Cleanup(func() { coveringMergeHook = nil })
+	return &n
+}
+
+// assertCounterInvariantForTest checks the spec §5 invariant: live (catalog-gated) never goes
+// negative and exceeds sealed `written` by at most a head's worth of postings (≤ CapBytes, since a
+// posting is ≥ 1 byte). A larger excess signals a counter over-count bug the deadFraction clamp would
+// otherwise silently swallow.
+func (s *Store) assertCounterInvariantForTest(t *testing.T) {
+	t.Helper()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var written, live int64
+	for _, sm := range s.man.Segments {
+		written += sm.Postings
+	}
+	for tid, v := range s.liveByTable {
+		if _, ok := s.man.Tables[tid]; ok {
+			live += v
+		}
+	}
+	if live < 0 {
+		t.Fatalf("counter invariant: live=%d went negative", live)
+	}
+	if live-written > int64(s.opts.CapBytes) {
+		t.Fatalf("counter invariant: live(%d) - written(%d) = %d exceeds headCap(%d) — over-count bug",
+			live, written, live-written, s.opts.CapBytes)
 	}
 }
