@@ -53,7 +53,12 @@ func crashRelease(t *testing.T, s *Store) {
 	}
 	s.mu.Unlock()
 	_ = s.cs.Close()
-	s.alloc.CrashRelease() // release the idtable bbolt flock the way a kill would, WITHOUT committing pending
+	s.alloc.CrashRelease() // discard the idtable's uncommitted batch + detach
+	if s.ownIdStore {
+		// Release the pebble lock on the store's own idtable KV the way a real
+		// kill would, so a same-process reopen over the same dir can re-take it.
+		_ = s.idStore.Close()
+	}
 }
 
 // TestSeal_IdtableDurableBeforeHeadClear is the red-proof for the committed-data

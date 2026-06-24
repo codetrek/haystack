@@ -471,9 +471,9 @@ func TestFullIntegration(t *testing.T) {
 	var shutdownWg sync.WaitGroup
 	running.InitShutdown(&shutdownWg)
 
-	alloc, err := idtable.Open(filepath.Join(env.TempDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(env.DB, idtable.Options{})
 	if err != nil {
-		t.Fatalf("idtable.Open: %v", err)
+		t.Fatalf("idtable.New: %v", err)
 	}
 	indexer.SetIdAllocator(alloc)
 	idx, err := invertedindex.New(env.DB, env.Mpsc, iiOpts)

@@ -85,11 +85,10 @@ func run() error {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	// idtable is a standalone bbolt-backed component (separate from the `data`
-	// pebble store); the legacy 28/29-prefix KV idtable predates it and is no
-	// longer migrated.
-	idtablePath := filepath.Join(conf.Get().Global.DataPath, "idtable.db")
-	idAlloc, err := idtable.Open(idtablePath, idtable.Options{})
+	// idtable is a thin docid allocator OVER the shared `data` pebble store,
+	// namespaced by its default 28/29 key prefixes — it coexists with
+	// documents/invertedindex in the one store (no separate file).
+	idAlloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing id table: %w", err)

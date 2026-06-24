@@ -38,7 +38,7 @@ func buildIndexedStack(t *testing.T, docMap map[string][]string) *indexedStack {
 	q := queue.NewMpsc("engine-test-writes")
 	q.Start()
 
-	alloc, err := idtable.Open(filepath.Join(tmpDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(store, idtable.Options{})
 	require.NoError(t, err)
 	ids := make(map[string]string, len(docMap))
 	for relPath := range docMap {

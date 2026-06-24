@@ -125,7 +125,7 @@ This is a test project.`,
 			return
 		}
 
-		alloc, allocErr := idtable.Open(filepath.Join(conf.Get().Global.DataPath, "idtable.db"), idtable.Options{})
+		alloc, allocErr := idtable.New(db, idtable.Options{})
 		if !assert.NoError(t, allocErr) {
 			return
 		}
