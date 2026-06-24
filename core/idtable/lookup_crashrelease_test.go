@@ -14,6 +14,7 @@ import (
 func TestLookup(t *testing.T) {
 	store, err := openTestStore(t, t.TempDir())
 	require.NoError(t, err)
+	defer store.Close() // the shared store is the caller's to close; a.Close only detaches
 	a, err := New(store, Options{CommitInterval: time.Hour})
 	require.NoError(t, err)
 
