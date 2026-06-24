@@ -34,7 +34,7 @@ func putRandomSegment(t *testing.T, s *Store, n, dim int, seed int64) {
 func TestRecovery_StrayGraphSweptFromLiveSegDir(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	putRandomSegment(t, s, 60, 8, 91)
 

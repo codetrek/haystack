@@ -18,7 +18,7 @@ func batchRandVec(rng *rand.Rand, dim int) []float32 {
 func TestBatch_DurableSearchableReopen(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(5))
 	dim := 16
