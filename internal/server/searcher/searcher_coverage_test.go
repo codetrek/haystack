@@ -491,7 +491,6 @@ func TestFullIntegration(t *testing.T) {
 	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
-	workspace.MigrateLegacyRecords(env.DB, collection.Options{}) //nolint:errcheck
 	cat, err := collection.New(env.DB, docSt, collection.Options{})
 	if err != nil {
 		t.Fatalf("collection.New: %v", err)

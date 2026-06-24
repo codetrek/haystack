@@ -85,15 +85,10 @@ func run() error {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	// idtable is now a standalone bbolt-backed component (no longer sharing the
-	// `data` pebble store). Migrate any pre-existing key→id entries out of the
-	// legacy 28/29 prefixes on `db` into the bbolt file on first run; the migration
-	// is idempotent (a no-op once the bbolt file holds entries).
+	// idtable is a standalone bbolt-backed component (separate from the `data`
+	// pebble store); the legacy 28/29-prefix KV idtable predates it and is no
+	// longer migrated.
 	idtablePath := filepath.Join(conf.Get().Global.DataPath, "idtable.db")
-	if err := idtable.MigrateFromKV(db, idtablePath, idtable.LegacyKeyTypeKey, idtable.LegacyKeyTypeNextId); err != nil {
-		running.Shutdown()
-		return fmt.Errorf("error migrating id table: %w", err)
-	}
 	idAlloc, err := idtable.Open(idtablePath, idtable.Options{})
 	if err != nil {
 		running.Shutdown()
@@ -116,15 +111,6 @@ func run() error {
 	// Wire the documents store into dependent packages.
 	indexer.SetDocStore(st)
 	workspace.SetDocStore(st)
-
-	// Migrate any legacy workspace records BEFORE constructing the Catalog so
-	// that collection.New sees only the new-format JSON. A migration failure may
-	// leave the store partially migrated, so abort startup rather than run
-	// collection.New against inconsistent data.
-	if err := workspace.MigrateLegacyRecords(db, collection.Options{}); err != nil {
-		running.Shutdown()
-		return fmt.Errorf("error migrating legacy workspace records: %w", err)
-	}
 
 	cat, err := collection.New(db, st, collection.Options{})
 	if err != nil {

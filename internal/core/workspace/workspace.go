@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -205,4 +206,43 @@ func (w *Workspace) IsDeleted() bool {
 	defer w.mutex.Unlock()
 
 	return w.deleted
+}
+
+// ----------------------------------------------------------------------------
+// collection.Record.Extra (de)serialization
+//
+// A workspace is persisted as a collection.Record; its workspace-specific
+// fields (filter config) live in the opaque Record.Extra blob. Save() encodes
+// them on the way out; Init() decodes them when rebuilding *Workspace.
+// ----------------------------------------------------------------------------
+
+// extraPayload is the workspace-specific data stored in collection.Record.Extra.
+type extraPayload struct {
+	UseGlobalFilters bool           `json:"use_global_filters"`
+	Filters          *types.Filters `json:"filters,omitempty"`
+}
+
+// encodeExtra serialises workspace-specific filter config into the opaque Extra
+// field of a collection.Record.
+func encodeExtra(useGlobalFilters bool, filters *types.Filters) []byte {
+	b, _ := json.Marshal(extraPayload{
+		UseGlobalFilters: useGlobalFilters,
+		Filters:          filters,
+	})
+	return b
+}
+
+// decodeExtra deserialises the Extra field produced by encodeExtra. If the
+// payload is nil/empty or malformed, sensible defaults are returned (global
+// filters enabled, nil custom filters).
+func decodeExtra(extra []byte) (useGlobalFilters bool, filters *types.Filters) {
+	useGlobalFilters = true // safe default
+	if len(extra) == 0 {
+		return
+	}
+	var p extraPayload
+	if err := json.Unmarshal(extra, &p); err != nil {
+		return
+	}
+	return p.UseGlobalFilters, p.Filters
 }
