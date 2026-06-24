@@ -176,7 +176,7 @@ func SplitCamelCase(name string) []string {
 	return result
 }
 
-func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, oldFuncNames []string) {
+func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames []string) {
 	sw, err := GetSymbolWordsTable(workspaceid)
 	if err != nil {
 		log.Println("[Symbols] Error: failed to get symbol words table:", err)
@@ -190,22 +190,14 @@ func updateSymbolWordsInverseIndex(workspaceid int, docId string, newFuncNames, 
 			wordsInNewFuncNames = append(wordsInNewFuncNames, strings.ToLower(word))
 		}
 	}
-
-	wordsInOldFuncNames := []string{}
-	for _, fn := range oldFuncNames {
-		words := tokenizer.TokenizeForIndex(fn)
-		for _, word := range words {
-			wordsInOldFuncNames = append(wordsInOldFuncNames, strings.ToLower(word))
-		}
-	}
-	idxInst.Update(sw.InvertedId, idtable.DecodeId(docId), wordsInNewFuncNames, wordsInOldFuncNames)
+	idxInst.Update(sw.InvertedId, idtable.DecodeId(docId), wordsInNewFuncNames)
 
 	s, err := GetSymbolTable(workspaceid)
 	if err != nil {
 		log.Println("[Symbols] Error: failed to get symbol table:", err)
 		return
 	}
-	idxInst.Update(s.InvertedId, idtable.DecodeId(docId), newFuncNames, oldFuncNames)
+	idxInst.Update(s.InvertedId, idtable.DecodeId(docId), newFuncNames)
 }
 
 func DeleteDocument(workspaceId int, docId string) error {
@@ -224,12 +216,7 @@ func DeleteDocument(workspaceId int, docId string) error {
 			return err
 		}
 
-		oldFunctions, err := GetDocFunctions(workspaceId, docId)
-		if err != nil {
-			log.Println("[Symbols] Error: failed to get existing functions for document:", docId, err)
-			return err
-		}
-		idxInst.Update(s.InvertedId, idtable.DecodeId(docId), []string{}, getUniqueFunctionNames(oldFunctions))
+		idxInst.Delete(s.InvertedId, idtable.DecodeId(docId))
 
 		batch := NewBatch(db)
 		batch.Delete(EncodeDocFunctionsKey(workspaceId, docId))
@@ -252,15 +239,8 @@ func AddFunctions(workspaceid int, functions []DocFunction) error {
 		batch := NewBatch(db)
 
 		for _, df := range functions {
-			oldFunctions, err := GetDocFunctions(workspaceid, df.ID)
-			if err != nil {
-				log.Println("[Symbols] Error: failed to get existing functions for document:", df.ID, err)
-				continue
-			}
-
-			oldFuncNames := getUniqueFunctionNames(oldFunctions)
 			newFuncNames := getUniqueFunctionNames(df.Functions)
-			updateSymbolWordsInverseIndex(workspaceid, df.ID, newFuncNames, oldFuncNames)
+			updateSymbolWordsInverseIndex(workspaceid, df.ID, newFuncNames)
 
 			saveDocFunctions(batch, workspaceid, &df)
 		}

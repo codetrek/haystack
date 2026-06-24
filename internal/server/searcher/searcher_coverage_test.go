@@ -929,7 +929,7 @@ func TestFullIntegration(t *testing.T) {
 			return relPath == "keep.go"
 		})
 		for _, docid := range sorted {
-			doc, _ := stInst.GetDocument(sharedWS.Id, idtable.EncodeId(docid), false)
+			doc, _ := stInst.GetDocument(sharedWS.Id, idtable.EncodeId(docid))
 			if doc != nil {
 				assert.Equal(t, "keep.go", doc.RelPath)
 			}
@@ -1964,7 +1964,7 @@ func TestFullIntegration(t *testing.T) {
 		// Only files containing BOTH terms should survive intersection.
 		// Verify by resolving doc IDs to paths.
 		for docId := range result.DocIds {
-			doc, _ := stInst.GetDocument(sharedWS.Id, idtable.EncodeId(docId), false)
+			doc, _ := stInst.GetDocument(sharedWS.Id, idtable.EncodeId(docId))
 			if doc != nil {
 				assert.Equal(t, "andfileA.go", doc.RelPath,
 					"only andfileA.go should survive AND intersection")

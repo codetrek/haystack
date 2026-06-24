@@ -16,6 +16,13 @@ const (
 	DefaultKeyTypeTable  = byte(21)
 	DefaultKeyTypeNextId = byte(22)
 
+	// DefaultKeyTypeForward is the on-disk key-type prefix byte for the
+	// per-document forward map (docid -> keyword set) that the index owns. Byte
+	// 11 is reused from the documents store's retired doc-words key: the inverted
+	// index lives in a physically separate `index` db where 11 is free (the index
+	// uses 20/21/22), so there is no collision with the data db's keys.
+	DefaultKeyTypeForward = byte(11)
+
 	InvalidId = -1
 )
 
@@ -194,4 +201,48 @@ func decodeInvertedValueStr(data string) []int64 {
 	// The merger holds row values as strings; copy once into a byte slice and
 	// reuse the byte decoder.
 	return decodeInvertedValue([]byte(data))
+}
+
+// encodeForwardKey builds "<keyTypeForward><tableId>|<docid>" where <docid> is its
+// fixed 8-byte big-endian form. The fixed-width 8-byte suffix needs no trailing
+// delimiter and no companion decode function — the caller that wrote the key
+// already holds the docid; the decimal tableId + '|' keeps table 1's prefix from
+// matching table 12's.
+func (idx *Index) encodeForwardKey(tableId int, docid int64) []byte {
+	b := make([]byte, 0, 1+11+1+8)
+	b = append(b, idx.keyTypeForward)
+	b = strconv.AppendInt(b, int64(tableId), 10)
+	b = append(b, '|')
+	var d [8]byte
+	binary.BigEndian.PutUint64(d[:], uint64(docid))
+	b = append(b, d[:]...)
+	return b
+}
+
+// encodeForwardKeyPrefix builds "<keyTypeForward><tableId>|", the DeletePrefix
+// argument that clears a whole table's forward map. The trailing '|' ensures
+// table 5's prefix does not also match table 50's rows.
+func (idx *Index) encodeForwardKeyPrefix(tableId int) []byte {
+	b := make([]byte, 0, 1+11+1)
+	b = append(b, idx.keyTypeForward)
+	b = strconv.AppendInt(b, int64(tableId), 10)
+	b = append(b, '|')
+	return b
+}
+
+// encodeForwardValue joins keywords with '|' — the same encoding the retired
+// doc-words value used. A keyword containing '|' splits the same lossy way it
+// always has (no behavior change vs. the old doc-words value).
+func encodeForwardValue(keywords []string) []byte {
+	return []byte(strings.Join(keywords, "|"))
+}
+
+// decodeForwardValue is the inverse of encodeForwardValue. An empty input decodes
+// to a zero-length slice (NOT []string{""}); a plain strings.Split("", "|") would
+// mis-yield the latter.
+func decodeForwardValue(data []byte) []string {
+	if len(data) == 0 {
+		return []string{}
+	}
+	return strings.Split(string(data), "|")
 }

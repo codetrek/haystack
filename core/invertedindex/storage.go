@@ -32,6 +32,11 @@ type Options struct {
 	// A zero value selects DefaultKeyTypeNextId (22); byte 0 is reserved.
 	KeyTypeNextId byte
 
+	// KeyTypeForward is the on-disk key-type prefix byte for the per-document
+	// forward map (docid -> keyword set). A zero value selects
+	// DefaultKeyTypeForward (11); byte 0 is reserved.
+	KeyTypeForward byte
+
 	// FlushTicker is how often the flush goroutine enqueues a flush task.
 	// Default: 1 second.
 	FlushTicker time.Duration
@@ -145,9 +150,10 @@ type Index struct {
 	opts Options
 
 	// resolved on-disk key-type bytes (set in New from opts with defaults applied)
-	keyTypeRow    byte
-	keyTypeTable  byte
-	keyTypeNextId byte
+	keyTypeRow     byte
+	keyTypeTable   byte
+	keyTypeNextId  byte
+	keyTypeForward byte
 
 	// pending writes/deletes — accessed only from the single-threaded mpsc queue
 	pendingWrites      map[int]*pendingTableWrites
@@ -191,6 +197,9 @@ func New(store kv.Store, q queue.Queue, opts Options) (*Index, error) {
 	if opts.KeyTypeNextId == 0 {
 		opts.KeyTypeNextId = DefaultKeyTypeNextId
 	}
+	if opts.KeyTypeForward == 0 {
+		opts.KeyTypeForward = DefaultKeyTypeForward
+	}
 
 	idx := &Index{
 		db:                  store,
@@ -199,6 +208,7 @@ func New(store kv.Store, q queue.Queue, opts Options) (*Index, error) {
 		keyTypeRow:          opts.KeyTypeRow,
 		keyTypeTable:        opts.KeyTypeTable,
 		keyTypeNextId:       opts.KeyTypeNextId,
+		keyTypeForward:      opts.KeyTypeForward,
 		pendingWrites:       map[int]*pendingTableWrites{},
 		lastFlushWriteTime:  time.Now(),
 		pendingDeletes:      map[int]*pendingTableWrites{},

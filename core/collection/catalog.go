@@ -354,10 +354,9 @@ func (c *Collection) DeleteDocument(docID string) error {
 }
 
 // GetDocument retrieves a document from this collection.
-// If includeWords is true, the document's Words field is populated.
 // Returns nil, nil if the document does not exist.
-func (c *Collection) GetDocument(docID string, includeWords bool) (*documents.Document, error) {
-	return c.catalog.docs.GetDocument(c.id, docID, includeWords)
+func (c *Collection) GetDocument(docID string) (*documents.Document, error) {
+	return c.catalog.docs.GetDocument(c.id, docID)
 }
 
 // Count returns the number of documents in this collection.

@@ -41,10 +41,6 @@ type Options struct {
 	// Zero selects DefaultKeyTypeDocCollection (10).
 	KeyTypeDocCollection byte
 
-	// KeyTypeDocWords is the on-disk prefix byte for document words keys.
-	// Zero selects DefaultKeyTypeDocWords (11).
-	KeyTypeDocWords byte
-
 	// KeyTypeDocMeta is the on-disk prefix byte for document metadata keys.
 	// Zero selects DefaultKeyTypeDocMeta (12).
 	KeyTypeDocMeta byte
@@ -64,7 +60,6 @@ type Store struct {
 
 	// resolved on-disk key-type bytes (set in New from opts with defaults applied)
 	keyTypeDocCollection byte
-	keyTypeDocWords      byte
 	keyTypeDocMeta       byte
 	keyTypeDocPath       byte
 
@@ -85,9 +80,6 @@ func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) 
 	if opts.KeyTypeDocCollection == 0 {
 		opts.KeyTypeDocCollection = DefaultKeyTypeDocCollection
 	}
-	if opts.KeyTypeDocWords == 0 {
-		opts.KeyTypeDocWords = DefaultKeyTypeDocWords
-	}
 	if opts.KeyTypeDocMeta == 0 {
 		opts.KeyTypeDocMeta = DefaultKeyTypeDocMeta
 	}
@@ -100,7 +92,6 @@ func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) 
 		q:                    q,
 		idx:                  idx,
 		keyTypeDocCollection: opts.KeyTypeDocCollection,
-		keyTypeDocWords:      opts.KeyTypeDocWords,
 		keyTypeDocMeta:       opts.KeyTypeDocMeta,
 		keyTypeDocPath:       opts.KeyTypeDocPath,
 		collections:          make(map[int]*CollectionInfo),
@@ -191,7 +182,6 @@ func (s *Store) Delete(collectionID int) error {
 
 		batch := s.db.NewBatch(0)
 		batch.DeletePrefix(s.encodeDocumentMetaKey(collectionID, ""))
-		batch.DeletePrefix(s.encodeDocumentWordsKey(collectionID, ""))
 
 		err = batch.Commit()
 		if err != nil {
@@ -256,13 +246,30 @@ func (s *Store) indexDeleteTable(tableId int) {
 	s.idx.DeleteTable(tableId)
 }
 
-// indexDocument is the seam for per-document index update (add/update words).
-func (s *Store) indexDocument(tableId int, docId string, newWords, oldWords []string) {
+// indexAddDocument is the seam for indexing a brand-new document's words. The
+// inverted index keys postings by the docid's int64 value; docId here is its
+// canonical 8-byte string form (as produced by idtable.GetId and used for the
+// document-store keys), so decode it at this boundary.
+func (s *Store) indexAddDocument(tableId int, docId string, words []string) {
 	if s.idx == nil {
 		return
 	}
-	// The inverted index keys postings by the docid's int64 value; docId here is
-	// its canonical 8-byte string form (as produced by idtable.GetId and used for
-	// the document-store keys), so decode it at this boundary.
-	s.idx.Update(tableId, idtable.DecodeId(docId), newWords, oldWords)
+	s.idx.Add(tableId, idtable.DecodeId(docId), words)
+}
+
+// indexUpdateDocument is the seam for re-indexing an existing document; the index
+// diffs against the keyword set it already owns, so no old set is passed.
+func (s *Store) indexUpdateDocument(tableId int, docId string, words []string) {
+	if s.idx == nil {
+		return
+	}
+	s.idx.Update(tableId, idtable.DecodeId(docId), words)
+}
+
+// indexDeleteDocument is the seam for removing a document from the index.
+func (s *Store) indexDeleteDocument(tableId int, docId string) {
+	if s.idx == nil {
+		return
+	}
+	s.idx.Delete(tableId, idtable.DecodeId(docId))
 }

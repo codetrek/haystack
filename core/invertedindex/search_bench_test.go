@@ -32,7 +32,7 @@ func benchSearchEnv(b *testing.B, nDocs int) (*Index, func()) {
 		b.Fatal(err)
 	}
 	for i := range nDocs {
-		idx.Update(1, makeDocID(fmt.Sprintf("d%07d", i)), []string{"kw"}, nil)
+		idx.Add(1, makeDocID(fmt.Sprintf("d%07d", i)), []string{"kw"})
 	}
 	forceFlush(idx)
 	cleanup := func() {

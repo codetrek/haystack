@@ -67,33 +67,6 @@ func TestDecodeDocumentMetaValue_Invalid(t *testing.T) {
 	assert.Error(t, err)
 }
 
-func TestEncodeDecodeDocumentWordsKey(t *testing.T) {
-	s := newTestStore()
-	key := s.encodeDocumentWordsKey(7, "words789")
-	wsId, docId := s.decodeDocumentWordsKey(string(key))
-	assert.Equal(t, 7, wsId)
-	assert.Equal(t, "words789", docId)
-}
-
-func TestDecodeDocumentWordsKey_Invalid(t *testing.T) {
-	s := newTestStore()
-	wsId, docId := s.decodeDocumentWordsKey("bad")
-	assert.Equal(t, invalidCollectionID, wsId)
-	assert.Equal(t, "", docId)
-}
-
-func TestEncodeDecodeDocumentWordsValue(t *testing.T) {
-	words := []string{"hello", "world", "test"}
-	encoded := encodeDocumentWordsValue(words)
-	decoded := decodeDocumentWordsValue(string(encoded))
-	assert.Equal(t, words, decoded)
-}
-
-func TestDecodeDocumentWordsValue_EmptyString(t *testing.T) {
-	decoded := decodeDocumentWordsValue("")
-	assert.Equal(t, []string{}, decoded)
-}
-
 func TestEncodeMetaKey(t *testing.T) {
 	s := newTestStore()
 	key := s.encodeMetaKey(10)

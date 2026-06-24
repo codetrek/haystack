@@ -116,7 +116,7 @@ func AddOrSyncFile(workspace *workspace.Workspace, relPath string) error {
 		return err
 	}
 
-	doc, err := st.GetDocument(workspace.Id, docid, false)
+	doc, err := st.GetDocument(workspace.Id, docid)
 	if err != nil {
 		return err
 	}

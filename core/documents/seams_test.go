@@ -24,5 +24,7 @@ func TestStoreIndexSeams_NilIdx(t *testing.T) {
 
 	// Must not panic / touch a nil index.
 	s.indexDeleteTable(1)
-	s.indexDocument(1, "doc", []string{"a"}, []string{"b"})
+	s.indexAddDocument(1, "doc", []string{"a"})
+	s.indexUpdateDocument(1, "doc", []string{"a"})
+	s.indexDeleteDocument(1, "doc")
 }

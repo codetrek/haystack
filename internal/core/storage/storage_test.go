@@ -144,6 +144,12 @@ func TestIsKeyType(t *testing.T) {
 // authoritative Default* constants from each core sub-package and the
 // storage-local symbol consts, then asserts there are no duplicates across
 // the entire shared on-disk key namespace.
+//
+// Byte 11 is intentionally reused across the two physically-separate dbs (the
+// document data db vs the inverted-index db): it was documents'
+// DefaultKeyTypeDocWords and is now invertedindex.DefaultKeyTypeForward in the
+// separate index db. Because the dbs never share a file, the flat list below
+// still asserts a single global uniqueness with byte 11 appearing exactly once.
 func TestKeyTypeConstants(t *testing.T) {
 	type entry struct {
 		name  string
@@ -153,15 +159,15 @@ func TestKeyTypeConstants(t *testing.T) {
 		// collection (1-2)
 		{"collection.DefaultKeyTypeIncrId", collection.DefaultKeyTypeIncrId},
 		{"collection.DefaultKeyTypeRecord", collection.DefaultKeyTypeRecord},
-		// documents (10-13)
+		// documents (10, 12-13; 11 freed, now invertedindex forward in the index db)
 		{"documents.DefaultKeyTypeDocCollection", documents.DefaultKeyTypeDocCollection},
-		{"documents.DefaultKeyTypeDocWords", documents.DefaultKeyTypeDocWords},
 		{"documents.DefaultKeyTypeDocMeta", documents.DefaultKeyTypeDocMeta},
 		{"documents.DefaultKeyTypeDocPath", documents.DefaultKeyTypeDocPath},
-		// invertedindex (20-22)
+		// invertedindex (20-22) + forward map (11, in the separate index db)
 		{"invertedindex.DefaultKeyTypeRow", invertedindex.DefaultKeyTypeRow},
 		{"invertedindex.DefaultKeyTypeTable", invertedindex.DefaultKeyTypeTable},
 		{"invertedindex.DefaultKeyTypeNextId", invertedindex.DefaultKeyTypeNextId},
+		{"invertedindex.DefaultKeyTypeForward", invertedindex.DefaultKeyTypeForward},
 		// idtable (28-29)
 		{"idtable.LegacyKeyTypeNextId", idtable.LegacyKeyTypeNextId},
 		{"idtable.LegacyKeyTypeKey", idtable.LegacyKeyTypeKey},

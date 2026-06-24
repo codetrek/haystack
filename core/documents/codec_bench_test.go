@@ -13,9 +13,6 @@ func TestEncodeDocKeyGolden(t *testing.T) {
 	if got, want := string(s.encodeDocumentMetaKey(-3, "x")), "\x0c-3|x"; got != want {
 		t.Errorf("meta key = %q, want %q", got, want)
 	}
-	if got, want := string(s.encodeDocumentWordsKey(0, "")), "\x0b0|"; got != want {
-		t.Errorf("words key = %q, want %q", got, want)
-	}
 	if got, want := string(s.encodeMetaKey(7)), "\x0a7"; got != want {
 		t.Errorf("meta key = %q, want %q", got, want)
 	}
@@ -24,7 +21,6 @@ func TestEncodeDocKeyGolden(t *testing.T) {
 func benchStore() *Store {
 	return &Store{
 		keyTypeDocCollection: DefaultKeyTypeDocCollection,
-		keyTypeDocWords:      DefaultKeyTypeDocWords,
 		keyTypeDocMeta:       DefaultKeyTypeDocMeta,
 		keyTypeDocPath:       DefaultKeyTypeDocPath,
 	}

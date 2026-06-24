@@ -190,7 +190,7 @@ func TestDelete_MarksWorkspaceDeleted(t *testing.T) {
 	}
 
 	// Verify document exists before delete
-	got, err := env.St.GetDocument(1, "d1", false)
+	got, err := env.St.GetDocument(1, "d1")
 	if !assert.NoError(t, err) {
 		return
 	}

@@ -107,33 +107,64 @@ func (idx *Index) GetDocs(tableId int, key string) SearchResult {
 	return results
 }
 
-// Update updates the keywords index for a document.
-// If len(newKeywords) == 0, it will remove the document from the keywords index.
-// This function MUST be called in dbMPSCQueue.
-func (idx *Index) Update(tableId int, docid int64, newKeywords, oldKeywords []string) {
-	// Handle the case of complete deletion
-	if len(newKeywords) == 0 {
-		if len(oldKeywords) > 0 {
-			idx.removeIndex(tableId, docid, oldKeywords)
-		}
+// readForward returns the document's stored keyword set from the forward map and
+// whether the document is known to the index. A nil db value (missing key) means
+// the document is unknown (ok=false); a non-nil value — including an empty one —
+// means it is known (ok=true) and decodes to its keyword set (a zero-length slice
+// for an empty value). This unknown / known-empty distinction mirrors db.Get's
+// nil vs non-nil-empty contract and drives Update's add-vs-diff branch.
+func (idx *Index) readForward(tableId int, docid int64) ([]string, bool) {
+	v, err := idx.db.Get(idx.encodeForwardKey(tableId, docid))
+	if err != nil {
+		log.Printf("[Inverted] Error reading forward map (table=%d): %v", tableId, err)
+		return nil, false
+	}
+	if v == nil {
+		return nil, false
+	}
+	return decodeForwardValue(v), true
+}
+
+// Add indexes a brand-new document's keywords and records them in the forward
+// map. It performs NO read and removes nothing, so it must only be used for
+// documents the index has not seen. An empty keyword set is a no-op. This
+// function MUST be called in dbMPSCQueue.
+func (idx *Index) Add(tableId int, docid int64, keywords []string) {
+	if len(keywords) == 0 {
+		return
+	}
+	idx.updateIndex(tableId, docid, keywords)
+	if err := idx.db.Put(idx.encodeForwardKey(tableId, docid), encodeForwardValue(keywords)); err != nil {
+		log.Printf("[Inverted] Error writing forward map (table=%d): %v", tableId, err)
+	}
+}
+
+// Update re-indexes a document to the given keyword set, diffing against the set
+// the index previously stored in its forward map (so the caller no longer passes
+// the old set). An empty keyword set deletes the document; an unknown document is
+// added. This function MUST be called in dbMPSCQueue.
+func (idx *Index) Update(tableId int, docid int64, keywords []string) {
+	if len(keywords) == 0 {
+		idx.Delete(tableId, docid)
 		return
 	}
 
-	// Handle the case of complete addition
-	if len(oldKeywords) == 0 {
-		idx.updateIndex(tableId, docid, newKeywords)
+	oldKeywords, known := idx.readForward(tableId, docid)
+	if !known {
+		idx.Add(tableId, docid, keywords)
 		return
 	}
 
-	// Convert the updated document words to a map for faster lookup
+	// Diff old vs new. Empty strings are excluded only when building the
+	// comparison maps (exactly as the previous caller-supplied-old Update did);
+	// the add/remove sets are still taken from the raw slices, so the result is
+	// byte-for-byte identical to the pre-forward-map behavior.
 	newMap := map[string]struct{}{}
-	for _, kw := range newKeywords {
+	for _, kw := range keywords {
 		if kw != "" {
 			newMap[kw] = struct{}{}
 		}
 	}
-
-	// Convert the current document words to a map for faster lookup
 	oldMap := map[string]struct{}{}
 	for _, kw := range oldKeywords {
 		if kw != "" {
@@ -142,16 +173,12 @@ func (idx *Index) Update(tableId int, docid int64, newKeywords, oldKeywords []st
 	}
 
 	removedWords := make([]string, 0, len(oldKeywords))
-	newWords := make([]string, 0, len(newKeywords))
-
-	// Find the words that are added to the current document
-	for _, kw := range newKeywords {
+	newWords := make([]string, 0, len(keywords))
+	for _, kw := range keywords {
 		if _, ok := oldMap[kw]; !ok {
 			newWords = append(newWords, kw)
 		}
 	}
-
-	// Find the words that are removed from the current document
 	for _, kw := range oldKeywords {
 		if _, ok := newMap[kw]; !ok {
 			removedWords = append(removedWords, kw)
@@ -159,9 +186,24 @@ func (idx *Index) Update(tableId int, docid int64, newKeywords, oldKeywords []st
 	}
 
 	idx.removeIndex(tableId, docid, removedWords)
-
-	// Add new words to the keywords index
 	if len(newWords) > 0 {
 		idx.updateIndex(tableId, docid, newWords)
+	}
+
+	if err := idx.db.Put(idx.encodeForwardKey(tableId, docid), encodeForwardValue(keywords)); err != nil {
+		log.Printf("[Inverted] Error writing forward map (table=%d): %v", tableId, err)
+	}
+}
+
+// Delete removes a document from every posting of its stored keyword set and
+// drops its forward-map entry. A document the index never saw is a no-op. This
+// function MUST be called in dbMPSCQueue.
+func (idx *Index) Delete(tableId int, docid int64) {
+	oldKeywords, known := idx.readForward(tableId, docid)
+	if known && len(oldKeywords) > 0 {
+		idx.removeIndex(tableId, docid, oldKeywords)
+	}
+	if err := idx.db.Delete(idx.encodeForwardKey(tableId, docid)); err != nil {
+		log.Printf("[Inverted] Error deleting forward map (table=%d): %v", tableId, err)
 	}
 }

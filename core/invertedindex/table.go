@@ -39,6 +39,7 @@ func (idx *Index) DeleteTable(tableId int) error {
 
 	batch := idx.db.NewBatch(0)
 	batch.DeletePrefix(idx.encodeInvertedSearchKey(tableId, ""))
+	batch.DeletePrefix(idx.encodeForwardKeyPrefix(tableId))
 	batch.Delete(idx.encodeTableKey(tableId))
 	return batch.Commit()
 }

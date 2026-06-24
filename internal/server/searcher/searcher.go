@@ -312,7 +312,7 @@ func SearchContent(workspace *workspace.Workspace, req *types.SearchContentReque
 			break
 		}
 
-		doc, err := stInst.GetDocument(workspace.Id, idtable.EncodeId(docid), false)
+		doc, err := stInst.GetDocument(workspace.Id, idtable.EncodeId(docid))
 		if err != nil || doc == nil {
 			continue
 		}

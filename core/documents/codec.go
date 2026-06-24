@@ -13,9 +13,11 @@ import (
 // it cannot be selected as a custom prefix.
 const (
 	DefaultKeyTypeDocCollection = byte(10)
-	DefaultKeyTypeDocWords      = byte(11)
-	DefaultKeyTypeDocMeta       = byte(12)
-	DefaultKeyTypeDocPath       = byte(13)
+	// byte 11 retired: was DefaultKeyTypeDocWords. Document keywords are now owned
+	// by the inverted index's forward map (in the separate `index` db). Do not
+	// reuse 11 in this (data) db without updating the key-space canary.
+	DefaultKeyTypeDocMeta = byte(12)
+	DefaultKeyTypeDocPath = byte(13)
 
 	// invalidCollectionID is returned by parse/decode functions when parsing fails.
 	invalidCollectionID = -1
@@ -104,38 +106,6 @@ func decodeDocumentMetaValue(data []byte) (*Document, error) {
 		return nil, err
 	}
 	return &doc, nil
-}
-
-// encodeDocumentWordsKey encodes the key for a document words entry.
-func (s *Store) encodeDocumentWordsKey(collectionID int, docid string) []byte {
-	return appendDocKey(s.keyTypeDocWords, collectionID, docid)
-}
-
-// decodeDocumentWordsKey decodes a document words key, returning (collectionID, docid).
-// Returns (invalidCollectionID, "") if the key is malformed or has the wrong type byte.
-func (s *Store) decodeDocumentWordsKey(key string) (int, string) {
-	if !isKeyType(key, s.keyTypeDocWords) {
-		return invalidCollectionID, ""
-	}
-	key = key[1:]
-	parts := strings.SplitN(key, "|", 2)
-	if len(parts) != 2 {
-		return invalidCollectionID, ""
-	}
-	return parseCollectionID(parts[0]), parts[1]
-}
-
-// encodeDocumentWordsValue encodes a slice of keywords as a pipe-separated byte slice.
-func encodeDocumentWordsValue(keywords []string) []byte {
-	return []byte(strings.Join(keywords, "|"))
-}
-
-// decodeDocumentWordsValue decodes a pipe-separated keywords string.
-func decodeDocumentWordsValue(data string) []string {
-	if len(data) == 0 {
-		return []string{}
-	}
-	return strings.Split(data, "|")
 }
 
 // encodeMetaKey encodes the key for a collection metadata entry.
