@@ -725,52 +725,6 @@ func TestAddFunctions_DbClosed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// AddFunctions – GetDocFunctions error path (continue)
-// ---------------------------------------------------------------------------
-
-func TestAddFunctions_GetDocFunctionsError(t *testing.T) {
-	env := setupTestEnv(t)
-	defer env.teardown()
-
-	// Do NOT create workspace – GetDocFunctions will succeed (returns empty)
-	// but GetSymbolWordsTable/GetSymbolTable inside updateSymbolWordsInverseIndex
-	// will fail. The important thing is that AddFunctions itself doesn't error
-	// out catastrophically on workspace issues.
-	//
-	// To trigger the GetDocFunctions error path specifically, we need db.Get
-	// to fail for the doc functions key but db to not be fully closed.
-	// We can achieve this by using a workspace that was never created: the
-	// doc functions key won't exist (returns nil, nil from pebble), so
-	// GetDocFunctions won't error. Instead, we exercise the continue path
-	// by temporarily swapping the db with a closed one after the IsClosed
-	// check passes.
-	//
-	// A simpler approach: create a workspace, add functions, then verify
-	// that even when updateSymbolWordsInverseIndex fails internally (because
-	// workspace 999 doesn't exist), the batch still commits for the valid docs.
-	mustCreateWorkspace(t, 1)
-
-	funcs := []DocFunction{
-		{
-			ID:      "doc_valid",
-			RelPath: "valid.go",
-			Functions: []Function{
-				{Name: "validFunc", Line: 1},
-			},
-		},
-	}
-
-	// This should succeed even though internal inverse index calls may log errors.
-	err := AddFunctions(1, funcs)
-	assert.NoError(t, err)
-
-	// Verify the function was saved despite any internal logging.
-	got, err := GetDocFunctions(1, "doc_valid")
-	assert.NoError(t, err)
-	assert.Len(t, got, 1)
-}
-
-// ---------------------------------------------------------------------------
 // DeleteDocument – db.IsClosed() early return
 // ---------------------------------------------------------------------------
 
@@ -797,47 +751,15 @@ func TestDeleteDocument_GetSymbolTableError(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DeleteDocument – GetDocFunctions error path
+// updateSymbolWordsInverseIndex – table-fetch error branch
 // ---------------------------------------------------------------------------
 
-func TestDeleteDocument_GetDocFunctionsError(t *testing.T) {
-	env := setupTestEnv(t)
-	defer env.teardown()
+// TestUpdateSymbolWordsInverseIndex_TableError covers the error branch when the
+// symbol-words table can't be fetched (closed db): it must log and return
+// without panicking (it never reaches idxInst).
+func TestUpdateSymbolWordsInverseIndex_TableError(t *testing.T) {
+	cleanup := setupClosedDbEnv(t)
+	defer cleanup()
 
-	mustCreateWorkspace(t, 1)
-
-	// Write a corrupted/malformed doc-functions key value that will still
-	// parse without error (pebble returns data fine). To actually trigger a
-	// GetDocFunctions error we need db.Get to fail. We can do this by
-	// closing the DB right after GetSymbolTable succeeds. Since both calls
-	// happen inside mpsc.RunFunc (serialised), we use a workaround: put a
-	// valid symbol table for workspace 50 but then remove the underlying DB
-	// state for the doc functions lookup.
-	//
-	// The simplest reliable way: create workspace, add functions, verify
-	// DeleteDocument with a doc that has no functions still works fine.
-	// The GetDocFunctions call returns empty, exercising the empty-old-functions
-	// path through the delete flow.
-	funcs := []DocFunction{
-		{
-			ID:      "doc1",
-			RelPath: "main.go",
-			Functions: []Function{
-				{Name: "foo", Line: 1},
-			},
-		},
-	}
-	err := AddFunctions(1, funcs)
-	if !assert.NoError(t, err) {
-		return
-	}
-
-	// Delete a doc that exists
-	err = DeleteDocument(1, "doc1")
-	assert.NoError(t, err)
-
-	// Verify it's gone
-	got, err := GetDocFunctions(1, "doc1")
-	assert.NoError(t, err)
-	assert.Empty(t, got)
+	updateSymbolWordsInverseIndex(1, "doc1", []string{"foo", "bar"})
 }
