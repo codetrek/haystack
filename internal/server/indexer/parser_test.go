@@ -45,7 +45,6 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 	if err := symbols.Init(env.DB, env.Mpsc, idx); err != nil {
 		t.Fatalf("symbols.Init: %v", err)
 	}
-	workspace.MigrateLegacyRecords(env.DB, collection.Options{}) //nolint:errcheck
 	cat, err := collection.New(env.DB, st, collection.Options{})
 	if err != nil {
 		t.Fatalf("collection.New: %v", err)

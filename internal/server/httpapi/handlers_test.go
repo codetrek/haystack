@@ -81,7 +81,6 @@ func TestMain(m *testing.M) {
 	}
 	indexer.SetIdAllocator(alloc)
 
-	workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck
 	cat, err := collection.New(db, st, collection.Options{})
 	if err != nil {
 		panic("Failed to init collection catalog: " + err.Error())

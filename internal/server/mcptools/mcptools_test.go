@@ -114,7 +114,6 @@ This is a test project.`,
 		}
 		indexer.SetDocStore(st)
 		workspace.SetDocStore(st)
-		workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck
 		cat, catErr := collection.New(db, st, collection.Options{})
 		if !assert.NoError(t, catErr) {
 			return

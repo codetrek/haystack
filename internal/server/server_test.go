@@ -225,8 +225,6 @@ func startTestServer(t *testing.T) func() {
 	indexer.SetDocStore(st)
 	workspace.SetDocStore(st)
 
-	workspace.MigrateLegacyRecords(db, collection.Options{}) //nolint:errcheck — non-fatal in test
-
 	cat, err := collection.New(db, st, collection.Options{})
 	assert.NoError(t, err)
 

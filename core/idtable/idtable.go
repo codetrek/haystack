@@ -25,9 +25,9 @@ const (
 	InvalidId = int64(-1)
 
 	// LegacyKeyTypeNextId / LegacyKeyTypeKey are the key-type prefix bytes the
-	// previous shared-kv.Store-backed allocator used by default. They are retained
-	// only as the default migration-source parameters for MigrateFromKV; the
-	// standalone bbolt layout uses buckets, not prefixes.
+	// previous shared-kv.Store-backed allocator used by default. The migration off
+	// that layout has been removed; these are retained only as RESERVED markers so
+	// the key-space stays burned (do not reuse 28/29 for new key types).
 	LegacyKeyTypeNextId = byte(28)
 	LegacyKeyTypeKey    = byte(29)
 
