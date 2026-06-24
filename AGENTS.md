@@ -45,3 +45,27 @@ its header/skeleton first, then append one section at a time.
   after the entire artifact lands, and produces a cleaner edit history.
 - Applies to generated docs and plans especially, but to any long file: prefer a
   sequence of focused appends over one monolithic write.
+
+## 4. A perf demo must be format-identical to the real implementation
+
+When you measure a design with a demo/prototype/spike, **the demo's on-disk format and
+data path must be EXACTLY what the real code will implement.** No simplified, packed,
+"good-enough", or approximate version is acceptable as a source of numbers.
+
+- **The disk format is the contract.** The byte layout the demo writes MUST be the byte
+  layout the production code writes — same blocks, same indexes, same chunking, same
+  encodings. A simplified layout produces simplified (i.e. wrong, usually optimistic)
+  numbers — disk size, memory, read amplification all change with the format.
+- **Every feature is measured through the demo, not estimated.** If a feature exists in
+  the design (the forward map, tombstones, compression, merge, large-value chunking),
+  it must be present and exercised in the demo before any number that involves it is
+  reported. "Inverted-only", "merge handled separately", "forward estimated" etc. are
+  self-deception — the deployed system always pays those costs, so the measurement must
+  too.
+- The CODE may be rough (messy, unfactored, demo-quality) — that is fine. The FORMAT and
+  the set of features exercised may **not** be rough or partial.
+- If a measurement was taken on a simplified path, it does not count. Rebuild the demo to
+  the real format and re-measure.
+
+This is the data-integrity counterpart to Principle 2: Principle 2 says measure in the
+real *environment*; Principle 3 says measure with the real *format and feature set*.
