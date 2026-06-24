@@ -33,7 +33,14 @@ func forwardKey(tableId uint32, docid int64) []byte {
 }
 
 // encodeDocs: sort + dedup + delta-varint (gaps are non-negative). int64 (production docid).
+//
+// It COPIES the input before sorting (copy-before-sort), so a caller may pass a slice it still
+// owns/shares without having it reordered out from under it. The merge path (merge.go) builds a
+// reconciled posting list and re-encodes it; copy-before-sort guarantees the merge never mutates a
+// source-derived slice it might re-read, and is cheap relative to the delta-varint it already does.
 func encodeDocs(docs []int64) []byte {
+	cp := append([]int64(nil), docs...)
+	docs = cp
 	sort.Slice(docs, func(i, j int) bool { return docs[i] < docs[j] })
 	buf := make([]byte, 0, len(docs)+len(docs)/2)
 	var prev int64

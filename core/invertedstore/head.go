@@ -156,6 +156,8 @@ func (s *Store) spill(tableId int) error {
 	// 5. Seal: finish() fsyncs the file and returns the opened segment. Record its segMeta,
 	//    bump NextSegId, durably rewrite the MANIFEST, publish into s.segs, reset the head.
 	seg := w.finish(path)
+	seg.id = segId    // P5: chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
+	seg.refs.Store(1) // P9: the published snapshot holds one ref on this newly sealed segment
 	size := fileSize(path)
 	sm := segMeta{
 		Id:        segId,
@@ -166,17 +168,54 @@ func (s *Store) spill(tableId int) error {
 		MaxTable:  tid,
 		Size:      size,
 	}
+
+	// Persist the new MANIFEST, then publish — but keep the slow fsync OUT of the reader-blocking
+	// critical section (P9/T8, design §6: "readers never block on a writer's I/O — the lock is held
+	// only for the O(1) pointer swap and ref bookkeeping, never for spill/merge/file work"). All
+	// writes run on the single mpsc worker, so there is no concurrent writer of s.man; the lock here
+	// guards s.man only against concurrent READERS (tableInfo). So: (a) under the lock, append the
+	// segMeta + bump NextSegId + marshal the manifest to bytes (cheap, no I/O); (b) OUTSIDE the lock,
+	// do the two fsyncs (writeManifestBytes) — a concurrent Search/GetDocs is not blocked on them; (c)
+	// re-take the lock only for the O(1) s.segs append + publishSnapshotLocked + head reset.
 	s.mu.Lock()
 	s.man.Segments = append(s.man.Segments, sm)
 	s.man.NextSegId++
-	if err := writeManifest(s.dir, s.man); err != nil {
+	b, err := marshalManifest(s.man)
+	if err != nil {
+		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1] // roll back the in-memory manifest
+		s.man.NextSegId--
 		s.mu.Unlock()
+		seg.refs.Store(0) // never published: drop the ref we just took before closing
 		seg.close()
 		return err
 	}
+	s.mu.Unlock()
+
+	if err := writeManifestBytes(s.dir, b); err != nil {
+		// The fsync failed: roll the in-memory manifest back to the pre-spill set so it stays
+		// consistent with the still-old on-disk MANIFEST and with s.segs (which we never touched).
+		s.mu.Lock()
+		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1]
+		s.man.NextSegId--
+		s.mu.Unlock()
+		seg.refs.Store(0) // never published: drop the ref we just took before closing
+		seg.close()
+		return err
+	}
+
+	s.mu.Lock()
 	s.segs = append(s.segs, seg)
+	s.publishSnapshotLocked() // P9: republish the live set (this spill's new segment) for readers
 	s.head[tableId] = newHeadTable()
 	s.mu.Unlock()
+
+	// Background merger (design §6, P8/P9): a new L0 segment may push a level to >= Fanout, or push the
+	// bottom level's dead fraction over the covering threshold. When AutoMerge is on, raise a
+	// NON-BLOCKING trigger on the background merge goroutine (concurrency.go). spill runs ON the worker,
+	// so it MUST NOT send a task to its own queue (s.q.AddFunc would block-send and self-deadlock once
+	// the queue fills — the worker is the only consumer). triggerMerge just flips a flag/channel; the
+	// merge goroutine drives the actual passes back onto the worker via RunFunc.
+	s.triggerMerge(false)
 	return nil
 }
 

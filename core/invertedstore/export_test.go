@@ -33,3 +33,24 @@ func (s *Store) applyForTest(tableId int, docid int64, keywords []string) {
 func (s *Store) spillForTest(tableId int) {
 	s.q.RunFunc(func() error { return s.spill(tableId) })
 }
+
+// dropHeadCloseSegmentsForTest simulates a process crash for the recovery tests (T11/§9): it discards
+// the volatile in-memory head (every apply that has NOT yet spilled to a sealed segment is LOST) and
+// closes the open segment fds WITHOUT spilling the head, keeping the on-disk files so the next Open
+// finds exactly the durable, MANIFEST-named segments. This is deliberately NOT CloseAndWait —
+// CloseAndWait spills the head first (a clean close), which is the opposite of a crash. It mirrors
+// CloseAndWait's segment teardown (stop the merge loop, publish emptySnapshot so no late reader
+// acquires a ref, retireKeepFile each segment) but drops the head map instead of flushing it, leaving
+// the store in the design §9 crash-consistency state: sealed segments durable, head volatile/lost.
+func (s *Store) dropHeadCloseSegmentsForTest() {
+	s.stopMergeLoop() // drain + stop the background merger before any fd is closed
+	s.mu.Lock()
+	s.head = map[int]*headTable{} // the crash: the volatile head is simply gone
+	segs := s.segs
+	s.segs = nil
+	s.snap.Store(emptySnapshot) // drop the published set first so no late reader acquires a ref
+	s.mu.Unlock()
+	for _, seg := range segs {
+		seg.retireKeepFile() // close the fd, keep the file (still live in the on-disk MANIFEST)
+	}
+}

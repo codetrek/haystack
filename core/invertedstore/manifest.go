@@ -69,14 +69,47 @@ func readManifest(dir string) (*manifest, error) {
 	return &m, nil
 }
 
-// writeManifest atomically replaces dir/MANIFEST with m: write MANIFEST.tmp, fsync it, rename
-// it over MANIFEST, then fsync the directory so the rename itself is durable. A crash at any
+// writeManifest atomically replaces dir/MANIFEST with m: marshal, write MANIFEST.tmp, fsync it,
+// rename it over MANIFEST, then fsync the directory so the rename itself is durable. A crash at any
 // point leaves either the old MANIFEST or the new one — never a torn file (a half-written
-// MANIFEST.tmp is never renamed and is ignored by readManifest).
+// MANIFEST.tmp is never renamed and is ignored by readManifest). Kept for the table-catalog paths
+// (CreateTable/DeleteTable) where the marshal+fsync already run on the worker with no concurrent
+// reader of the head/segment set — the spill/merge paths instead split this (marshalManifest under
+// the lock, writeManifestBytes outside it) so a reader never blocks on the fsync (P9/T8, design §6).
 func writeManifest(dir string, m *manifest) error {
-	b, err := json.Marshal(m)
+	b, err := marshalManifest(m)
 	if err != nil {
 		return err
+	}
+	return writeManifestBytes(dir, b)
+}
+
+// marshalManifest serializes a manifest to its on-disk JSON bytes. It is split out of writeManifest
+// so a writer (spill/installMerge) can capture the bytes WHILE it briefly holds s.mu (the marshal
+// reads s.man's maps/slices, which a reader may also be reading under RLock — concurrent reads are
+// safe, but the in-memory s.man must not be mutated concurrently), then perform the slow fsync via
+// writeManifestBytes OUTSIDE the lock. No I/O here, so it is cheap to run under the lock.
+func marshalManifest(m *manifest) ([]byte, error) {
+	return json.Marshal(m)
+}
+
+// beforeManifestFsync, when non-nil, is invoked by writeManifestBytes at the START of its I/O (after
+// the marshaled bytes are captured, before the file write + fsyncs). Test-only observability/blocking
+// hook (P9/T8): a test installs one that blocks, kicks a real spill on the worker so it reaches this
+// point, and asserts a concurrent Search returns promptly — proving the writer holds NO lock across
+// its I/O. nil in production (one predictable, never-taken branch). Same parallel-safety constraint
+// as the merge observers: a test installing it MUST NOT run t.Parallel.
+var beforeManifestFsync func()
+
+// writeManifestBytes durably installs the already-marshaled MANIFEST bytes b: write MANIFEST.tmp,
+// fsync it, rename it over MANIFEST, then fsync the directory (same atomic, crash-safe sequence as
+// writeManifest). It touches NO shared in-memory state — only the filesystem — so the spill/merge
+// paths call it OUTSIDE s.mu, keeping the two fsyncs off the reader-blocking critical section
+// (design §6: "readers never block on a writer's I/O"). All writes run on the single mpsc worker, so
+// there is never a concurrent writeManifestBytes racing for the MANIFEST.tmp file.
+func writeManifestBytes(dir string, b []byte) error {
+	if beforeManifestFsync != nil {
+		beforeManifestFsync()
 	}
 	tmp := filepath.Join(dir, "MANIFEST.tmp")
 	f, err := os.Create(tmp)

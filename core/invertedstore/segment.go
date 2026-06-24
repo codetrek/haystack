@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"os"
 	"sort"
+	"sync"
+	"sync/atomic"
 )
 
 // ---- key prefix helpers (port spike main.go:213-234, verbatim) -------------
@@ -230,12 +232,25 @@ func (w *segWriter) writeTermDict() {
 
 type segment struct {
 	f                    *os.File
+	id                   uint64 // seal-sequence id (== seg-%06d.dat); the chunk-LRU key (P5)
 	dataCodec, dictCodec *codec
 	idx                  []blockEntry
 	biOff, dictOff       int64
 	path                 string
 	dictChunks           []dictChunk // built lazily for resolve (P3 index mode)
-	dictBuilt            bool
+	dictOnce             sync.Once   // guards the one-time, build-once-read-only dictChunks init
+
+	// Concurrency (P9/T8, concurrency.go): the live snapshot holds one PUBLISHED ref per segment;
+	// a reader bumps an extra ref for its scan. retired is set when a merge drops the segment from
+	// the live set (or Close drops the whole set); when refs reaches zero on a retired segment it is
+	// torn down (close fd, and — UNLESS keepFile is set — unlink the file). keepFile distinguishes a
+	// Close-retire (just close the fd; the file must survive for the next Open) from a merge-retire
+	// (close + unlink the merged-away file). tornDown makes teardown idempotent under a reader/worker
+	// race to the final decref.
+	refs     atomic.Int64
+	retired  atomic.Bool
+	keepFile atomic.Bool
+	tornDown atomic.Bool
 }
 
 // dictChunk locates one compressed term-dict chunk for on-demand (index-mode) resolution.
@@ -399,25 +414,31 @@ func (s *segment) lookupForward(key []byte) ([]byte, bool) {
 // ensureDictIndex (index mode) scans only the term-dict chunk HEADERS (firstOrd, offset,
 // lengths) — tiny, no strings held — so a resolve decompresses just the chunks holding the
 // requested ordinals. Bounded memory. (port spike main.go:960-979.)
+//
+// The build runs exactly once under a sync.Once: dictChunks is append-once here and read-only
+// thereafter, so concurrent resolves (P5 forwardKeywords, and the concurrent readers T8 will
+// publish) all observe a fully-built, immutable slice. Once.Do establishes the happens-before
+// that makes the populated dictChunks visible to every caller before Do returns.
 func (s *segment) ensureDictIndex() {
-	if s.dictBuilt || s.dictOff == 0 {
+	if s.dictOff == 0 {
 		return
 	}
-	hdr := make([]byte, 30)
-	for pos := s.dictOff; pos < s.biOff; {
-		mustReadAt(s.f, hdr, pos)
-		p := 0
-		fo, a := binary.Uvarint(hdr[p:])
-		p += a
-		rl, b := binary.Uvarint(hdr[p:])
-		p += b
-		cl, c := binary.Uvarint(hdr[p:])
-		p += c
-		compOff := pos + int64(p)
-		s.dictChunks = append(s.dictChunks, dictChunk{uint32(fo), compOff, int(cl), int(rl)})
-		pos = compOff + int64(cl)
-	}
-	s.dictBuilt = true
+	s.dictOnce.Do(func() {
+		hdr := make([]byte, 30)
+		for pos := s.dictOff; pos < s.biOff; {
+			mustReadAt(s.f, hdr, pos)
+			p := 0
+			fo, a := binary.Uvarint(hdr[p:])
+			p += a
+			rl, b := binary.Uvarint(hdr[p:])
+			p += b
+			cl, c := binary.Uvarint(hdr[p:])
+			p += c
+			compOff := pos + int64(p)
+			s.dictChunks = append(s.dictChunks, dictChunk{uint32(fo), compOff, int(cl), int(rl)})
+			pos = compOff + int64(cl)
+		}
+	})
 }
 
 // resolveOrds maps requested term-id ordinals -> keyword strings via the term-dict chunk
