@@ -91,6 +91,14 @@ type Store struct {
 	head map[int]*headTable // tableId -> in-memory head (P4c)
 	segs []*segment         // worker-owned live sealed segment slice, oldest->newest (the swap source)
 
+	// liveByTable[tableId] = distinct live (keyword,docid) pairs in that table = Σ over the table's
+	// live docs of their distinct keyword count. The `live` term of the covering-merge trigger
+	// (deadFraction). NOT persisted: recomputed on Open from the segments' forward records
+	// (recomputeLive), maintained incrementally in applyBatch (under s.mu.Lock, so the RLock read in
+	// deadFraction is race-free), and dropped per-table by DeleteTable. A plain arithmetic counter
+	// (missing key reads 0; no CreateTable seeding). Mutated only on the worker, like head/segs.
+	liveByTable map[int]int64
+
 	// snap is the atomically-published live segment set readers load (concurrency.go, P9/T8). The
 	// worker rebuilds + Store()s it from s.segs on every spill/merge/table change; a reader Load()s it
 	// once per call and refcounts its segments for the scan. Always non-nil (Open seeds emptySnapshot).
@@ -148,11 +156,12 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{
-		dir:  path,
-		q:    q,
-		opts: opts.withDefaults(),
-		man:  man,
-		head: map[int]*headTable{},
+		dir:         path,
+		q:           q,
+		opts:        opts.withDefaults(),
+		man:         man,
+		head:        map[int]*headTable{},
+		liveByTable: map[int]int64{},
 	}
 	s.dictCache = newChunkLRU(int64(s.opts.ChunkCacheBytes))
 	for _, sm := range man.Segments {
@@ -239,6 +248,7 @@ func (s *Store) DeleteTable(tableId int) error {
 		defer s.mu.Unlock()
 		delete(s.man.Tables, tableId)
 		delete(s.head, tableId)
+		delete(s.liveByTable, tableId) // drop the table's live-pair partition in O(1) (spec §4.2.3)
 		return writeManifest(s.dir, s.man)
 	})
 	if err != nil {

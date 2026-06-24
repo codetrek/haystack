@@ -41,6 +41,17 @@ func (s *Store) SegmentsForTest() []segMeta {
 	return append([]segMeta(nil), s.man.Segments...)
 }
 
+// LiveByTableForTest returns a copy of the per-table live-pair counter.
+func (s *Store) LiveByTableForTest() map[int]int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make(map[int]int64, len(s.liveByTable))
+	for k, v := range s.liveByTable {
+		out[k] = v
+	}
+	return out
+}
+
 // dropHeadCloseSegmentsForTest simulates a process crash for the recovery tests (T11/§9): it discards
 // the volatile in-memory head (every apply that has NOT yet spilled to a sealed segment is LOST) and
 // closes the open segment fds WITHOUT spilling the head, keeping the on-disk files so the next Open

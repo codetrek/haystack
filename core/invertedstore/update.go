@@ -126,6 +126,11 @@ func (s *Store) applyBatch(ops []updateOp) error {
 			s.head[op.tableId] = h
 		}
 
+		// liveByTable delta (spec §4.2.2): live pairs change by (new distinct − old distinct). `old`
+		// may carry caller duplicates (the forward stores raw keywords), so dedup it — len(old) is not
+		// the distinct count. Runs under s.mu.Lock so deadFraction's RLock read is race-free.
+		oldN := int64(distinctStrings(old))
+
 		if len(op.keywords) == 0 {
 			// DELETE: tombstone the docid in ALL its old keywords + write a forward-tombstone, so
 			// no older non-empty segment can win and resurrect the doc (design §6).
@@ -133,6 +138,7 @@ func (s *Store) applyBatch(ops []updateOp) error {
 				h.tombstonePosting(w, op.docid)
 			}
 			h.deleteForward(op.docid)
+			s.liveByTable[op.tableId] -= oldN
 			inBatch[key] = nil
 		} else {
 			// FULL RE-POST (term-id, §8): add EVERY current keyword (addPosting dedups in the head),
@@ -150,6 +156,7 @@ func (s *Store) applyBatch(ops []updateOp) error {
 				}
 			}
 			h.setForward(op.docid, op.keywords)
+			s.liveByTable[op.tableId] += int64(len(newSet)) - oldN
 			inBatch[key] = op.keywords
 		}
 		over := h.bytes >= int64(s.opts.CapBytes)
@@ -167,4 +174,18 @@ func (s *Store) applyBatch(ops []updateOp) error {
 		}
 	}
 	return nil
+}
+
+// distinctStrings counts the distinct strings in ss. Converts a doc's (possibly caller-duplicated)
+// keyword slice to its distinct count for the liveByTable delta, matching the inverted index which
+// dedups via addPosting.
+func distinctStrings(ss []string) int {
+	if len(ss) <= 1 {
+		return len(ss)
+	}
+	seen := make(map[string]struct{}, len(ss))
+	for _, s := range ss {
+		seen[s] = struct{}{}
+	}
+	return len(seen)
 }
