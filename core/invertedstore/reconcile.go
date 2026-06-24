@@ -70,9 +70,26 @@ func (s *Store) ForwardDocids(tableId int, fn func(docid int64) bool) {
 		}
 	}
 
-	// 3. Segments newest -> oldest. Scan the table's whole [F] keyspace; the first segment (newest)
-	//    to mention a docid decides it — a forward-tombstone marks it dead (decided, never yielded),
-	//    a live forward yields it (also decided so an older segment cannot re-yield a duplicate).
+	// 3. Segments newest -> oldest: the shared resolver yields each not-yet-decided docid's newest
+	//    forward; ForwardDocids only needs the docid, so it ignores the ords and yields live ones.
+	s.forEachLiveSegmentForward(tableId, decided, segs, func(docid int64, _ []uint32, deleted bool) bool {
+		if deleted {
+			return true // forward-tombstone: dead, decided, not yielded — keep scanning
+		}
+		return fn(docid)
+	})
+}
+
+// forEachLiveSegmentForward is the segment half of ForwardDocids's newest-wins forward resolution,
+// factored out so the Open live-recompute (recomputeLive) can reuse the EXACT same resolution
+// (tombstone handling, newest-wins, per-table) and surface each live docid's ORDS — which
+// ForwardDocids discards. It scans segs (a caller-owned slice — the refcounted snapshot for
+// ForwardDocids, or s.segs directly on Open when there are no concurrent readers) newest -> oldest:
+// the first segment to mention a docid decides it (a forward-tombstone marks it dead via deleted=true,
+// a live forward yields its ords). `decided` carries any newer-source decisions (the head's, for
+// ForwardDocids; empty for the head-less Open recompute). visit returning false stops early. It does
+// NOT take s.mu — the caller owns the consistency of `segs` (snapshot ref or single-threaded Open).
+func (s *Store) forEachLiveSegmentForward(tableId int, decided map[int64]struct{}, segs []*segment, visit func(docid int64, ords []uint32, deleted bool) (keepGoing bool)) {
 	tid := uint32(tableId)
 	lo := forwardKeyPrefix(tid)
 	hi := prefixUpper(lo)
@@ -87,11 +104,8 @@ func (s *Store) ForwardDocids(tableId int, fn func(docid int64) bool) {
 				return // an equal-or-newer source already decided this docid
 			}
 			decided[docid] = struct{}{}
-			_, del := decodeForward(value)
-			if del {
-				return // forward-tombstone: dead, decided, not yielded
-			}
-			if !fn(docid) {
+			ords, del := decodeForward(value)
+			if !visit(docid, ords, del) {
 				stop = true
 			}
 		})
@@ -99,6 +113,23 @@ func (s *Store) ForwardDocids(tableId int, fn func(docid int64) bool) {
 			return
 		}
 	}
+}
+
+// distinctOrds returns the count of distinct ords as a slice (the input is sorted by encodeForward,
+// so a single skip-equal-previous pass dedups). The forward stores RAW ords (encodeForward does not
+// dedup, head.setForward keeps caller duplicates), so a doc indexed with duplicate keywords yields
+// duplicate ords; distinctOrds collapses them to match the inverted index, which dedups via addPosting.
+func distinctOrds(ords []uint32) []uint32 {
+	if len(ords) <= 1 {
+		return ords
+	}
+	out := ords[:1]
+	for _, o := range ords[1:] {
+		if o != out[len(out)-1] {
+			out = append(out, o)
+		}
+	}
+	return out
 }
 
 // forwardKeyPrefix is the [F] tableId key prefix (no docid) — the lower bound for scanning a table's
