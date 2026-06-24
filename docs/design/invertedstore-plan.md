@@ -637,7 +637,371 @@ git commit -m "feat(invertedstore): segment writer/reader + term-dict region (25
 
 ---
 
+## P4 — Head buffer + spill + MANIFEST + table catalog (design T2, §5/§6)
+
+The in-memory write side + durable metadata. Unlike P1–P3 this is genuine design-to-code (the spike's
+head/spill lives inside `doSortruns`; MANIFEST + `Store` + table ops don't exist there). Three sub-tasks:
+**P4a** MANIFEST, **P4b** `Store`/`Open`/tables, **P4c** head buffer + spill. Read design §5 (MANIFEST,
+on-disk layout) + §6 (write path) before starting.
+
+### P4a — MANIFEST (manifest.go)
+
+Versioned metadata: storage version, live segment set, table catalog, next-ids. **No recovery
+watermark** (recovery is indexer-driven, §9). Atomic replace: write `MANIFEST.tmp`, fsync, rename, fsync
+dir. v1 uses JSON with a leading version field (the design permits versioned JSON).
+
+**Files:** Create `core/invertedstore/manifest.go`, `core/invertedstore/manifest_test.go`.
+
+- [ ] **Step 1: failing test** — `manifest_test.go`
+
+```go
+package invertedstore
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestManifestRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	m := &manifest{
+		FormatVersion: 1, StorageVersion: "1.6", NextTableId: 3, NextSegId: 5,
+		Tables:   map[int]tableInfo{1: {Id: 1, Description: "files"}},
+		Segments: []segMeta{{Id: 4, Level: 0, DataCodec: codecSnappy, DictCodec: codecZstd, MinTable: 1, MaxTable: 1, Size: 123}},
+	}
+	if err := writeManifest(dir, m); err != nil {
+		t.Fatal(err)
+	}
+	// no stray tmp left behind
+	if _, err := os.Stat(filepath.Join(dir, "MANIFEST.tmp")); !os.IsNotExist(err) {
+		t.Fatal("MANIFEST.tmp should not linger after atomic rename")
+	}
+	got, err := readManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NextTableId != 3 || got.NextSegId != 5 || len(got.Segments) != 1 ||
+		got.Segments[0].Id != 4 || got.Tables[1].Description != "files" {
+		t.Fatalf("manifest round-trip mismatch: %+v", got)
+	}
+}
+
+func TestManifestMissingIsEmpty(t *testing.T) {
+	// reading a dir with no MANIFEST yields a fresh empty manifest, not an error
+	m, err := readManifest(t.TempDir())
+	if err != nil || m == nil || len(m.Segments) != 0 {
+		t.Fatalf("fresh dir should give empty manifest: %v %+v", err, m)
+	}
+}
+```
+
+- [ ] **Step 2: run, verify fail** — `cd core && GOWORK=off go test ./invertedstore/ -run TestManifest -v` → FAIL.
+
+- [ ] **Step 3: write `manifest.go`**
+
+```go
+package invertedstore
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+type segMeta struct {
+	Id        uint64 `json:"id"`
+	Level     int    `json:"level"`
+	DataCodec byte   `json:"dataCodec"`
+	DictCodec byte   `json:"dictCodec"`
+	MinTable  uint32 `json:"minTable"`
+	MaxTable  uint32 `json:"maxTable"`
+	Size      int64  `json:"size"`
+}
+type tableInfo struct {
+	Id          int       `json:"id"`
+	CreatedAt   time.Time `json:"createdAt"`
+	Description string    `json:"description"`
+}
+type manifest struct {
+	FormatVersion  int               `json:"formatVersion"`  // bump on any breaking manifest change
+	StorageVersion string            `json:"storageVersion"`
+	Segments       []segMeta         `json:"segments"`
+	Tables         map[int]tableInfo `json:"tables"`
+	NextTableId    int               `json:"nextTableId"`
+	NextSegId      uint64            `json:"nextSegId"`
+}
+
+func newManifest() *manifest {
+	return &manifest{FormatVersion: 1, Tables: map[int]tableInfo{}, NextTableId: 1, NextSegId: 1}
+}
+
+func readManifest(dir string) (*manifest, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "MANIFEST"))
+	if os.IsNotExist(err) {
+		return newManifest(), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var m manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	if m.Tables == nil {
+		m.Tables = map[int]tableInfo{}
+	}
+	return &m, nil
+}
+
+func writeManifest(dir string, m *manifest) error {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, "MANIFEST.tmp")
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(b); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(dir, "MANIFEST")); err != nil {
+		return err
+	}
+	// fsync the dir so the rename is durable
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
+}
+```
+
+- [ ] **Step 4: run, verify pass** → PASS. **Step 5: commit** `feat(invertedstore): P4a MANIFEST`.
+
+### P4b — Store, Open/Close, CreateTable/DeleteTable (store.go)
+
+`Open(path, q, opts)` reads (or creates) the MANIFEST and opens its segments; table ops are synchronous
+via `q.RunTask` and atomically rewrite the MANIFEST. `DeleteTable` drops the catalog entry (reclamation
+of its segment bytes is deferred to the covering merge, P8 — for P4 just the catalog drop). `Options`
+per design §4 with defaults.
+
+**Files:** Create `core/invertedstore/store.go`, `core/invertedstore/store_test.go`.
+
+- [ ] **Step 1: failing test** — `store_test.go`
+
+```go
+package invertedstore
+
+import (
+	"testing"
+
+	"github.com/codetrek/haystack/core/queue"
+)
+
+func openTestStore(t *testing.T, dir string) *Store {
+	t.Helper()
+	q := queue.NewMpsc("invtest")
+	q.Start()
+	s, err := Open(dir, q, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestCreateDeleteTablePersist(t *testing.T) {
+	dir := t.TempDir()
+	s := openTestStore(t, dir)
+	id, err := s.CreateTable("files")
+	if err != nil || id != 1 {
+		t.Fatalf("CreateTable: id=%d err=%v", id, err)
+	}
+	id2, _ := s.CreateTable("symbols")
+	if id2 != 2 {
+		t.Fatalf("second table id=%d, want 2", id2)
+	}
+	s.CloseAndWait()
+
+	// reopen: catalog persisted, next id continues
+	s2 := openTestStore(t, dir)
+	defer s2.CloseAndWait()
+	id3, _ := s2.CreateTable("third")
+	if id3 != 3 {
+		t.Fatalf("after reopen next id=%d, want 3", id3)
+	}
+	if err := s2.DeleteTable(1); err != nil {
+		t.Fatalf("DeleteTable: %v", err)
+	}
+	if _, ok := s2.tableInfo(1); ok {
+		t.Fatal("table 1 should be gone from the catalog after DeleteTable")
+	}
+}
+```
+
+- [ ] **Step 2: run, verify fail.**
+
+- [ ] **Step 3: write `store.go`** — the `Options` (design §4 defaults), `Store` struct (dir, queue,
+opts, `sync.RWMutex`, `*manifest`, `head map[int]*headTable` [P4c], loaded `segs []*segment`), `Open`
+(read manifest via `readManifest`, `openSegment` each referenced file), `CloseAndWait` (flush head via
+spill [P4c], then close segments), and the table ops. Table ops run on the worker and rewrite MANIFEST:
+
+```go
+func (s *Store) CreateTable(description string) (int, error) {
+	var id int
+	err := s.q.RunTask(queue.TaskFunc(func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		id = s.man.NextTableId
+		s.man.NextTableId++
+		s.man.Tables[id] = tableInfo{Id: id, CreatedAt: time.Now(), Description: description}
+		return writeManifest(s.dir, s.man)
+	}))
+	return id, err
+}
+```
+`DeleteTable` similarly: delete `s.man.Tables[id]`, `writeManifest`. (Covering-merge reclamation = P8.)
+`tableInfo(id)` is a small read helper used by the test/Search. Match `queue`'s real API — check
+`core/queue` for `NewMpsc`/`Start`/`RunTask`/`TaskFunc` exact names and adapt.
+
+- [ ] **Step 4: run, verify pass.** **Step 5: commit** `feat(invertedstore): P4b Store + table catalog`.
+
+### P4c — Head buffer + spill (head.go)
+
+Per-table in-memory head: inverted adds + per-keyword tombstones, forward keyword-lists (encoded to
+term-ids at spill), a forward-delete set, and a logical byte estimate. Keeps the **latest action per
+`(keyword,docid)`** and **dedups docids in memory**. Spill (at `CapBytes`) sorts the term dict, assigns
+ordinals, writes one L0 segment via the P3 `segWriter`, appends a `segMeta`, rewrites the MANIFEST, and
+resets the head. This is design §6's write/spill path; the segment-writing mirrors the spike's `spill`
+(`main.go:767-816`) but using the production `segWriter`/encoders.
+
+**Files:** Create `core/invertedstore/head.go`; tests in `store_test.go`.
+
+- [ ] **Step 1: failing test** — append to `store_test.go`
+
+```go
+func TestSpillAndReopen(t *testing.T) {
+	dir := t.TempDir()
+	s := openTestStore(t, dir)
+	tbl, _ := s.CreateTable("files")
+	// the internal building blocks Update (P7) will call: doc 10 = {alpha,gamma}; doc 11 = {beta}
+	s.applyForTest(tbl, 10, []string{"alpha", "gamma"})
+	s.applyForTest(tbl, 11, []string{"beta"})
+	s.spillForTest(tbl) // force a spill
+	s.CloseAndWait()
+
+	s2 := openTestStore(t, dir)
+	defer s2.CloseAndWait()
+	if len(s2.segs) != 1 {
+		t.Fatalf("expected 1 sealed segment after reopen, got %d", len(s2.segs))
+	}
+	seg := s2.segs[0]
+	lo := invertedKey(uint32(tbl), "alpha")
+	var hits []int64
+	seg.scanPrefix(lo, prefixUpper(lo), func(_ []byte, v []byte) {
+		ab, _ := splitInvertedValue(v)
+		decodeDocs(ab, func(d int64) { hits = append(hits, d) })
+	})
+	if len(hits) != 1 || hits[0] != 10 {
+		t.Fatalf("alpha postings after reopen = %v, want [10]", hits)
+	}
+	fv, ok := seg.lookupForward(forwardKey(uint32(tbl), 10))
+	if !ok {
+		t.Fatal("forward lookup miss for doc 10")
+	}
+	ords, _ := decodeForward(fv)
+	need := map[uint32]struct{}{}
+	for _, o := range ords {
+		need[o] = struct{}{}
+	}
+	if got := seg.resolveOrds(need); len(got) != 2 {
+		t.Fatalf("doc 10 resolved to %d keywords, want 2: %v", len(got), got)
+	}
+}
+```
+
+- [ ] **Step 2: run, verify fail.**
+
+- [ ] **Step 3: write `head.go`** — head structures + apply + spill. `applyForTest`/`spillForTest` are
+thin `export_test.go` accessors over the real worker-side apply/spill so the test drives them without the
+Update path (P7).
+
+```go
+type postingDelta struct {
+	adds map[int64]struct{}
+	dels map[int64]struct{}
+}
+type headTable struct {
+	inv        map[string]*postingDelta // keyword -> latest adds/dels (per (kw,docid))
+	fwd        map[int64][]string        // docid -> keyword strings (→ ordinals at spill)
+	delForward map[int64]struct{}        // docids whose forward is a tombstone
+	bytes      int64
+}
+
+func newHeadTable() *headTable {
+	return &headTable{inv: map[string]*postingDelta{}, fwd: map[int64][]string{}, delForward: map[int64]struct{}{}}
+}
+func (h *headTable) addPosting(keyword string, docid int64) {
+	pd := h.inv[keyword]
+	if pd == nil {
+		pd = &postingDelta{adds: map[int64]struct{}{}, dels: map[int64]struct{}{}}
+		h.inv[keyword] = pd
+		h.bytes += int64(len(keyword)) + 16
+	}
+	delete(pd.dels, docid)            // latest action wins
+	if _, ok := pd.adds[docid]; !ok { // in-memory dedup
+		pd.adds[docid] = struct{}{}
+		h.bytes += 4
+	}
+}
+func (h *headTable) tombstonePosting(keyword string, docid int64) { /* symmetric: dels[docid], delete from adds */ }
+func (h *headTable) setForward(docid int64, words []string) {
+	delete(h.delForward, docid)
+	h.fwd[docid] = words
+	h.bytes += int64(8 + len(words)*4)
+}
+func (h *headTable) deleteForward(docid int64) {
+	delete(h.fwd, docid)
+	h.delForward[docid] = struct{}{}
+	h.bytes += 12
+}
+```
+
+`spill(tableId)` — port the spike `spill` shape (`main.go:767-816`):
+1. `terms` = sorted union of `head.inv` keys and tombstone-only keys; `kw2ord[term]=i`.
+2. New `segWriter` (L0: `DataCodecL0`=snappy, `DictCodec`, `DictChunkBytes`, `chunk`, `InlineThreshold`, termid=true).
+3. Inverted records in `terms` order: `addEntry(invertedKey(tableId, t), encodeInvertedValue(addsOf(t), delsOf(t)))`.
+4. Forward records ascending by docid: live → `addEntry(forwardKey(tableId, d), encodeForward(ordsOf(words, kw2ord)))`; `delForward` → `addEntry(forwardKey(tableId, d), forwardTombstone())`.
+5. `seg := w.finish(path)`; append `segMeta{Id: man.NextSegId, Level:0, DataCodec, DictCodec, MinTable/MaxTable: tableId, Size}`; `man.NextSegId++`; `writeManifest`; publish into `s.segs` under the write lock; reset `head[tableId]`.
+
+Spill triggers from the apply path when `head.bytes >= opts.CapBytes`; `CloseAndWait` spills any
+non-empty head. (Background tiered merge of these L0 segments = P8.)
+
+- [ ] **Step 4: run, verify pass** — `cd core && GOWORK=off go test ./invertedstore/ -v` (all P1–P4
+green). **Step 5: commit** `feat(invertedstore): P4c head buffer + spill`.
+
+> **Acceptance for design T2 (all of P4):** Open→CreateTable persists across reopen (P4b); `CapBytes`
+> bounds the head and a spill produces a queryable sealed segment recoverable after reopen (P4c);
+> MANIFEST is the only fsync'd metadata, a torn `MANIFEST.tmp` is ignored (P4a). Owed re-measure: the
+> in-memory-dedup peak-memory effect (capped build benchmark, T11).
+
+---
+
 ## Self-review (writing-plans)
+
+
 
 - **Spec coverage (design T1 = §5 format):** key/value encoding (P1), codecs (P2/§7), segment blocks +
   inline/external + term-dict region + 25B footer + scanPrefix + ord→string resolve (P3). ✓ The format
