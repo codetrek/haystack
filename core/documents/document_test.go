@@ -100,7 +100,7 @@ func TestGetDocument_RoundTrip_WithoutWords(t *testing.T) {
 // SaveNewDocuments
 // ---------------------------------------------------------------------------
 
-func TestSaveNewDocuments_PersistsMetaWordsPath(t *testing.T) {
+func TestSaveNewDocuments_PersistsMetaAndPath(t *testing.T) {
 	env := setupTestEnv(t)
 	defer env.teardown()
 
@@ -278,9 +278,9 @@ func TestUpdateDocuments_NonExistentDocGraceful(t *testing.T) {
 
 	mustCreateWorkspace(t, env.St, 1)
 
-	// Update a document that was never saved -- should not panic,
-	// GetDocumentWords returns empty for missing docs so the
-	// inverted index diff is simply "add all new words".
+	// Update a document that was never saved -- should not panic. The index
+	// treats an unknown doc as an Add (its forward map has no prior set), so the
+	// update is simply "add all new words".
 	doc := &Document{
 		ID:      "ghost",
 		RelPath: "ghost.go",
