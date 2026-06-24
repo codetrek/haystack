@@ -2,137 +2,91 @@ package idtable
 
 import (
 	"encoding/binary"
+	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
-	bolt "go.etcd.io/bbolt"
-
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 	"github.com/stretchr/testify/assert"
 )
 
-// openTestAlloc opens a fresh bbolt-backed Allocator in a temp file.
-func openTestAlloc(t *testing.T, opts Options) *Allocator {
+// openTestStore opens a pebble-backed kv.Store in a temporary directory.
+func openTestStore(t *testing.T, dir string) (kv.Store, error) {
 	t.Helper()
-	a, err := Open(filepath.Join(t.TempDir(), "idtable.db"), opts)
-	assert.NoError(t, err, "Open failed")
-	return a
+	return pebblekv.Open(filepath.Join(dir, "data"), 0)
 }
 
-// TestNew tests Open initialization and nextId persistence across reopen.
+// TestNew tests the New function with various scenarios.
 func TestNew(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "idtable.db")
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
 
-	alloc, err := Open(path, Options{CommitInterval: 50 * time.Millisecond})
-	assert.NoError(t, err, "Open failed")
+	store, err := openTestStore(t, tempDir)
+	assert.NoError(t, err, "Failed to open kv store")
+	defer store.Close()
+
+	// Test initial initialization.
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+	assert.NoError(t, err, "New failed")
 	assert.NotNil(t, alloc)
 
-	// Verify nextId is initialized to 1 on a fresh database.
+	// Verify nextId is initialized to 1.
 	assert.Equal(t, int64(1), alloc.nextId, "Expected nextId to be 1")
-
-	// Allocate 41 ids so nextId advances to 42, then flush + close.
-	for i := 0; i < 41; i++ {
-		_, err := alloc.GetId([]byte("seed-" + strconv.Itoa(i)))
-		assert.NoError(t, err)
-	}
-	assert.NoError(t, alloc.Commit())
 	alloc.Close()
 
-	// Reopen: nextId must be loaded from the persisted meta.
-	alloc2, err := Open(path, Options{CommitInterval: 50 * time.Millisecond})
-	assert.NoError(t, err, "Re-Open failed")
+	// Test re-initialization with existing data: seed a specific nextId.
+	testNextId := int64(42)
+	err = store.Put([]byte{DefaultKeyTypeNextId}, []byte(strconv.FormatInt(testNextId, 10)))
+	assert.NoError(t, err, "Failed to put nextId")
+
+	alloc2, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+	assert.NoError(t, err, "Re-New failed")
 	assert.NotNil(t, alloc2)
-	assert.Equal(t, int64(42), alloc2.nextId, "Expected nextId to be loaded correctly")
+	assert.Equal(t, testNextId, alloc2.nextId, "Expected nextId to be loaded correctly")
 	alloc2.Close()
 }
 
-// TestNewWithInvalidData tests Open with a corrupted nextId in the meta bucket.
+// TestNewWithInvalidData tests New with corrupted data.
 func TestNewWithInvalidData(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "idtable.db")
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
 
-	// Seed a negative nextId directly into the meta bucket.
-	seedNextId := func(t *testing.T, raw []byte) {
-		t.Helper()
-		db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second})
-		assert.NoError(t, err)
-		err = db.Update(func(tx *bolt.Tx) error {
-			b, err := tx.CreateBucketIfNotExists(bucketMeta)
-			if err != nil {
-				return err
-			}
-			return b.Put(metaNextId, raw)
-		})
-		assert.NoError(t, err)
-		db.Close()
-	}
+	store, err := openTestStore(t, tempDir)
+	assert.NoError(t, err, "Failed to open kv store")
+	defer store.Close()
 
-	// A negative big-endian nextId is malformed → Open must fail.
-	neg := make([]byte, 8)
-	var negVal int64 = -5
-	binary.BigEndian.PutUint64(neg, uint64(negVal))
-	seedNextId(t, neg)
-	_, err := Open(path, Options{})
-	assert.Error(t, err, "Expected Open to fail with negative nextId")
+	// Put invalid nextId value.
+	err = store.Put([]byte{DefaultKeyTypeNextId}, []byte("invalid"))
+	assert.NoError(t, err, "Failed to put invalid nextId")
 
-	// A too-short (non-8-byte) nextId is also malformed (decodeId yields -1).
-	short := filepath.Join(t.TempDir(), "idtable.db")
-	db, err := bolt.Open(short, 0600, &bolt.Options{Timeout: time.Second})
-	assert.NoError(t, err)
-	assert.NoError(t, db.Update(func(tx *bolt.Tx) error {
-		b, e := tx.CreateBucketIfNotExists(bucketMeta)
-		if e != nil {
-			return e
-		}
-		return b.Put(metaNextId, []byte{1, 2, 3}) // 3 bytes
-	}))
-	db.Close()
-	_, err = Open(short, Options{})
-	assert.Error(t, err, "Expected Open to fail with a too-short nextId")
-}
+	_, err = New(store, Options{})
+	assert.Error(t, err, "Expected New to fail with invalid nextId data")
 
-// TestCrashRelease verifies CrashRelease drops uncommitted (pending) allocations
-// and releases the file lock without flushing — mimicking an abrupt termination.
-func TestCrashRelease(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "idtable.db")
-	alloc, err := Open(path, Options{CommitInterval: time.Hour})
-	assert.NoError(t, err)
+	// Test with negative nextId.
+	err = store.Put([]byte{DefaultKeyTypeNextId}, []byte("-5"))
+	assert.NoError(t, err, "Failed to put negative nextId")
 
-	// Commit one mapping (durable), then allocate another that stays pending.
-	committed, err := alloc.GetId([]byte("durable"))
-	assert.NoError(t, err)
-	assert.NoError(t, alloc.Commit())
-	_, err = alloc.GetId([]byte("pending")) // staged, NOT committed
-	assert.NoError(t, err)
-
-	alloc.CrashRelease() // drop the lock WITHOUT flushing pending
-
-	// After CrashRelease the allocator is closed.
-	_, err = alloc.GetId([]byte("x"))
-	assert.Error(t, err, "GetId after CrashRelease must error")
-	// Double CrashRelease and a Close afterwards are safe no-ops.
-	alloc.CrashRelease()
-	alloc.Close()
-
-	// Reopen: the committed mapping survives; the pending one was discarded.
-	alloc2, err := Open(path, Options{CommitInterval: time.Hour})
-	assert.NoError(t, err)
-	defer alloc2.Close()
-	_, found, err := alloc2.Lookup([]byte("durable"))
-	assert.NoError(t, err)
-	assert.True(t, found, "committed mapping must survive CrashRelease")
-	got, err := alloc2.GetId([]byte("durable"))
-	assert.NoError(t, err)
-	assert.Equal(t, committed, got)
-
-	_, found, err = alloc2.Lookup([]byte("pending"))
-	assert.NoError(t, err)
-	assert.False(t, found, "uncommitted mapping must be discarded by CrashRelease")
+	_, err = New(store, Options{})
+	assert.Error(t, err, "Expected New to fail with negative nextId")
 }
 
 // TestGetId tests the GetId method.
 func TestGetId(t *testing.T) {
-	alloc := openTestAlloc(t, Options{CommitInterval: 50 * time.Millisecond})
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	store, err := openTestStore(t, tempDir)
+	assert.NoError(t, err, "Failed to open kv store")
+	defer store.Close()
+
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+	assert.NoError(t, err, "New failed")
 	defer alloc.Close()
 
 	// Test getting ID for a new key.
@@ -140,53 +94,42 @@ func TestGetId(t *testing.T) {
 	id1, err := alloc.GetId(testKey)
 	assert.NoError(t, err, "GetId failed")
 
-	// Verify the ID is returned as 8 binary-encoded bytes.
+	// Verify the ID is returned as binary encoded bytes.
 	assert.Equal(t, 8, len(id1), "Expected ID length to be 8 bytes")
-	assert.Equal(t, uint64(1), binary.BigEndian.Uint64([]byte(id1)), "Expected first ID to be 1")
 
-	// Same key returns the same ID.
+	// Convert the binary ID back to int64 to verify.
+	idValue := binary.BigEndian.Uint64([]byte(id1))
+	assert.Equal(t, uint64(1), idValue, "Expected first ID to be 1")
+
+	// Test getting ID for the same key should return the same ID.
 	id2, err := alloc.GetId(testKey)
 	assert.NoError(t, err, "GetId failed for existing key")
 	assert.Equal(t, id1, id2, "Expected same ID for same key")
 
-	// A different key returns a different, incremented ID.
-	id3, err := alloc.GetId([]byte("test-key-2"))
+	// Test getting ID for a different key should return a different ID.
+	testKey2 := []byte("test-key-2")
+	id3, err := alloc.GetId(testKey2)
 	assert.NoError(t, err, "GetId failed for second key")
+
 	assert.NotEqual(t, id1, id3, "Expected different IDs for different keys")
-	assert.Equal(t, uint64(2), binary.BigEndian.Uint64([]byte(id3)), "Expected second ID to be 2")
-}
 
-// TestLookup verifies the non-allocating lookup path.
-func TestLookup(t *testing.T) {
-	alloc := openTestAlloc(t, Options{CommitInterval: 50 * time.Millisecond})
-	defer alloc.Close()
-
-	// Unknown key: found=false, allocates nothing.
-	id, found, err := alloc.Lookup([]byte("never-seen"))
-	assert.NoError(t, err)
-	assert.False(t, found, "unknown key must not be found")
-	assert.Equal(t, int64(0), id)
-	assert.Equal(t, int64(1), alloc.nextId, "Lookup must not allocate")
-
-	// Allocate, then Lookup finds the same id (from pending, pre-commit).
-	got, err := alloc.GetId([]byte("k"))
-	assert.NoError(t, err)
-	id, found, err = alloc.Lookup([]byte("k"))
-	assert.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, got, EncodeId(id), "Lookup id must match GetId")
-
-	// After commit it is found from the durable store too.
-	assert.NoError(t, alloc.Commit())
-	id, found, err = alloc.Lookup([]byte("k"))
-	assert.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, int64(1), id)
+	// Verify the second ID is incremented.
+	idValue3 := binary.BigEndian.Uint64([]byte(id3))
+	assert.Equal(t, uint64(2), idValue3, "Expected second ID to be 2")
 }
 
 // TestGetIdConcurrency tests GetId under concurrent access.
 func TestGetIdConcurrency(t *testing.T) {
-	alloc := openTestAlloc(t, Options{CommitInterval: 50 * time.Millisecond})
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	store, err := openTestStore(t, tempDir)
+	assert.NoError(t, err, "Failed to open kv store")
+	defer store.Close()
+
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+	assert.NoError(t, err, "New failed")
 	defer alloc.Close()
 
 	numGoroutines := 10
@@ -220,26 +163,57 @@ func TestGetIdConcurrency(t *testing.T) {
 		}
 	}
 
+	// Verify all IDs are unique.
 	idSet := make(map[string]bool)
 	for _, id := range allResults {
 		idSet[id] = true
 	}
-	assert.Equal(t, numGoroutines*numKeysPerGoroutine, len(idSet), "Expected all IDs to be unique")
+
+	expectedIds := numGoroutines * numKeysPerGoroutine
+	assert.Equal(t, expectedIds, len(idSet), "Expected all IDs to be unique")
 }
 
-// TestGetIdWithClosedStore tests GetId after Close.
+// TestGetIdWithClosedStore tests GetId with a closed store.
 func TestGetIdWithClosedStore(t *testing.T) {
-	alloc := openTestAlloc(t, Options{CommitInterval: 50 * time.Millisecond})
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	store, err := openTestStore(t, tempDir)
+	assert.NoError(t, err, "Failed to open kv store")
+
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+	assert.NoError(t, err, "New failed")
 	alloc.Close()
+	store.Close()
 
-	_, err := alloc.GetId([]byte("test-key"))
-	assert.Error(t, err, "Expected GetId to fail after Close")
+	testKey := []byte("test-key")
+	_, err = alloc.GetId(testKey)
+	assert.Error(t, err, "Expected GetId to fail with closed store")
+}
 
-	_, _, err = alloc.Lookup([]byte("test-key"))
-	assert.Error(t, err, "Expected Lookup to fail after Close")
+// TestEncodeIncrIdKey tests the encodeIncrIdKey method.
+func TestEncodeIncrIdKey(t *testing.T) {
+	a := &Allocator{keyTypeNextId: DefaultKeyTypeNextId}
+	key := a.encodeIncrIdKey()
 
-	err = alloc.Commit()
-	assert.Error(t, err, "Expected Commit to fail after Close")
+	expectedKey := []byte{DefaultKeyTypeNextId}
+	assert.Equal(t, len(expectedKey), len(key), "Expected key length to match")
+	assert.Equal(t, DefaultKeyTypeNextId, key[0], "Expected correct key type")
+}
+
+// TestEncodeIdKey tests the encodeIdKey method.
+func TestEncodeIdKey(t *testing.T) {
+	a := &Allocator{keyTypeKey: DefaultKeyTypeKey}
+	testKey := []byte("test-key")
+	encodedKey := a.encodeIdKey(testKey)
+
+	expectedLength := 1 + len(testKey)
+	assert.Equal(t, expectedLength, len(encodedKey), "Expected correct encoded key length")
+	assert.Equal(t, DefaultKeyTypeKey, encodedKey[0], "Expected correct key type")
+
+	keyContent := encodedKey[1:]
+	assert.Equal(t, string(testKey), string(keyContent), "Expected key content to match")
 }
 
 // TestParseId tests the parseId function.
@@ -266,7 +240,16 @@ func TestParseId(t *testing.T) {
 
 // TestGetIdWithLargeNumberOfKeys tests GetId with a large number of keys.
 func TestGetIdWithLargeNumberOfKeys(t *testing.T) {
-	alloc := openTestAlloc(t, Options{CommitInterval: 50 * time.Millisecond})
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	store, err := openTestStore(t, tempDir)
+	assert.NoError(t, err, "Failed to open kv store")
+	defer store.Close()
+
+	alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+	assert.NoError(t, err, "New failed")
 	defer alloc.Close()
 
 	numKeys := 100
@@ -276,7 +259,12 @@ func TestGetIdWithLargeNumberOfKeys(t *testing.T) {
 		key := []byte("large-test-key-" + strconv.Itoa(i))
 		id, err := alloc.GetId(key)
 		assert.NoError(t, err, "GetId failed for key %d", i)
-		ids[string(key)] = id
+
+		keyStr := string(key)
+		if existingId, exists := ids[keyStr]; exists {
+			assert.Equal(t, existingId, id, "Key %s should get consistent ID", keyStr)
+		}
+		ids[keyStr] = id
 	}
 
 	idSet := make(map[string]bool)
@@ -285,35 +273,53 @@ func TestGetIdWithLargeNumberOfKeys(t *testing.T) {
 	}
 	assert.Equal(t, numKeys, len(idSet), "Expected all IDs to be unique")
 
-	// Requesting the same keys again returns the same IDs.
+	// Test that requesting the same keys again returns the same IDs.
 	for i := 0; i < numKeys; i++ {
 		key := []byte("large-test-key-" + strconv.Itoa(i))
 		id, err := alloc.GetId(key)
 		assert.NoError(t, err, "GetId failed for existing key %d", i)
-		assert.Equal(t, ids[string(key)], id, "Expected consistent ID for key %s", string(key))
+
+		expectedId := ids[string(key)]
+		assert.Equal(t, expectedId, id, "Expected consistent ID for key %s", string(key))
 	}
 }
 
-// TestGetIdPersistence tests that IDs persist across reopen.
+// TestGetIdPersistence tests that IDs persist across restarts.
 func TestGetIdPersistence(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "idtable.db")
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-test-*")
+	assert.NoError(t, err, "Failed to create temp dir")
+	defer os.RemoveAll(tempDir)
+
+	dbPath := filepath.Join(tempDir, "data")
 	testKey := []byte("persistence-test-key")
 
 	var firstId string
 	{
-		alloc, err := Open(path, Options{CommitInterval: 50 * time.Millisecond})
-		assert.NoError(t, err, "Open failed")
+		store, err := pebblekv.Open(dbPath, 0)
+		assert.NoError(t, err, "Failed to open kv store")
+
+		alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+		assert.NoError(t, err, "New failed")
+
 		firstId, err = alloc.GetId(testKey)
 		assert.NoError(t, err, "GetId failed")
-		alloc.Close() // flushes pending on close
+
+		alloc.Close()
+		store.Close()
 	}
 
 	{
-		alloc, err := Open(path, Options{CommitInterval: 50 * time.Millisecond})
-		assert.NoError(t, err, "Open failed on reopen")
+		store, err := pebblekv.Open(dbPath, 0)
+		assert.NoError(t, err, "Failed to reopen kv store")
+		defer store.Close()
+
+		alloc, err := New(store, Options{CommitInterval: 50 * time.Millisecond})
+		assert.NoError(t, err, "New failed on reopen")
 		defer alloc.Close()
+
 		secondId, err := alloc.GetId(testKey)
 		assert.NoError(t, err, "GetId failed on reopen")
+
 		assert.Equal(t, firstId, secondId, "ID should be persistent across restarts")
 	}
 }

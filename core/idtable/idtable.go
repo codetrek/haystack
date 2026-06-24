@@ -1,9 +1,5 @@
 // Package idtable allocates stable, compact int64 identifiers for arbitrary
-// byte keys, backed by a self-owned bbolt file with an LRU cache and background
-// commit loop. It is a standalone component: each Allocator owns its own bbolt
-// database (no shared key-value store, no key-type prefixes), so it can be used
-// by independent subsystems (the document indexer, the vector store) without
-// colliding in a shared namespace.
+// byte keys, backed by a kv.Store with an LRU cache and background commit loop.
 package idtable
 
 import (
@@ -14,113 +10,102 @@ import (
 	"sync"
 	"time"
 
-	bolt "go.etcd.io/bbolt"
+	"github.com/codetrek/haystack/core/kv"
 )
 
+// Default key-type prefix bytes (match the historical on-disk layout for on-disk compatibility).
 const (
+	DefaultKeyTypeNextId  = byte(28)
+	DefaultKeyTypeKey     = byte(29)
 	DefaultLRUCacheSize   = 200_000
-	DefaultCommitInterval = 1 * time.Second
+	DefaultBatchSize      = int32(100)
+	DefaultCommitInterval = 5 * time.Second
 
 	// InvalidId is returned by DecodeId for a malformed (too-short) docid string.
 	InvalidId = int64(-1)
-
-	// LegacyKeyTypeNextId / LegacyKeyTypeKey are the key-type prefix bytes the
-	// previous shared-kv.Store-backed allocator used by default. The migration off
-	// that layout has been removed; these are retained only as RESERVED markers so
-	// the key-space stays burned (do not reuse 28/29 for new key types).
-	LegacyKeyTypeNextId = byte(28)
-	LegacyKeyTypeKey    = byte(29)
-
-	// openTimeout bounds how long Open waits for the bbolt file lock before
-	// failing, instead of blocking forever when another process holds it.
-	openTimeout = 5 * time.Second
-)
-
-// Bucket / meta-key names for the on-disk layout. These are stable: changing
-// them after data has been written makes previously allocated ids unreachable.
-var (
-	bucketKeys = []byte("keys") // raw key -> 8-byte big-endian id
-	bucketMeta = []byte("meta") // metadata bucket
-	metaNextId = []byte("nextId")
 )
 
 // Options configures an Allocator. Zero-value fields fall back to defaults.
 type Options struct {
+	// KeyTypeNextId is the single-byte KV key PREFIX under which the allocator
+	// persists its nextId counter. It namespaces the allocator's keys within a
+	// shared store. Changing it after data has been written is a breaking
+	// on-disk change: previously allocated ids become unreachable.
+	// A zero value selects DefaultKeyTypeNextId (28); byte 0 cannot be used as
+	// an explicit prefix because it is reserved to mean "use the default".
+	KeyTypeNextId byte
+	// KeyTypeKey is the single-byte KV key PREFIX under which the allocator
+	// persists each key→id mapping. The same breaking-change and zero-value
+	// ("use default", DefaultKeyTypeKey 29) constraints as KeyTypeNextId apply.
+	KeyTypeKey     byte
 	LRUCacheSize   int           // default DefaultLRUCacheSize (200000)
-	CommitInterval time.Duration // default DefaultCommitInterval (1s)
+	BatchSize      int32         // default DefaultBatchSize (100)
+	CommitInterval time.Duration // default DefaultCommitInterval (5s)
 }
 
-// Allocator maps arbitrary keys to stable, compact int64 ids (returned as
-// 8-byte big-endian strings), LRU-cached and persisted to a self-owned bbolt
-// database, with a background commit loop.
+// Allocator maps arbitrary keys to stable, compact int64 ids (returned as 8-byte strings),
+// LRU-cached and persisted to the kv.Store, with a background commit loop.
 type Allocator struct {
-	mu     sync.Mutex
-	db     *bolt.DB
-	closed bool
-	// lru has its own internal locking, but every Allocator access to it already
-	// happens while holding a.mu, so its lock is effectively redundant here.
-	lru *lruCache
-	// pending holds key->id allocations made since the last commit. It is the
-	// authoritative read-your-own-writes buffer: the LRU is bounded and may evict
-	// an uncommitted entry, so GetId/Lookup consult pending too before allocating
-	// a (duplicate) id. Cleared on every successful commit.
-	pending       map[string]int64
-	pendingNextId bool
-	nextId        int64
-
+	mu    sync.Mutex
+	store kv.Store
+	batch kv.Batch
+	// lru has its own internal locking, but every Allocator access to it
+	// (GetId, Close) already happens while holding a.mu, so its lock is
+	// effectively redundant here and never contended by this package.
+	lru            *lruCache
+	nextId         int64
+	keyTypeNextId  byte
+	keyTypeKey     byte
 	commitInterval time.Duration
 	closing        chan bool
 	done           chan bool
 }
 
-// Open creates and starts an Allocator backed by a bbolt file at path, creating
-// it if necessary. Zero-value Options fields fall back to defaults.
-func Open(path string, opts Options) (*Allocator, error) {
+// New creates and starts an Allocator. Zero-value Options fields fall back to defaults.
+func New(store kv.Store, opts Options) (*Allocator, error) {
+	// Fill defaults
+	if opts.KeyTypeNextId == 0 {
+		opts.KeyTypeNextId = DefaultKeyTypeNextId
+	}
+	if opts.KeyTypeKey == 0 {
+		opts.KeyTypeKey = DefaultKeyTypeKey
+	}
 	if opts.LRUCacheSize == 0 {
 		opts.LRUCacheSize = DefaultLRUCacheSize
+	}
+	if opts.BatchSize == 0 {
+		opts.BatchSize = DefaultBatchSize
 	}
 	if opts.CommitInterval == 0 {
 		opts.CommitInterval = DefaultCommitInterval
 	}
 
-	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: openTimeout})
-	if err != nil {
-		return nil, fmt.Errorf("idtable: open %s: %w", path, err)
-	}
-
-	// Ensure buckets exist and read the persisted nextId.
-	var nextId int64 = 1
-	err = db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists(bucketKeys); err != nil {
-			return err
-		}
-		mb, err := tx.CreateBucketIfNotExists(bucketMeta)
-		if err != nil {
-			return err
-		}
-		if v := mb.Get(metaNextId); v != nil {
-			nextId = decodeId(v)
-		}
-		return nil
-	})
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	if nextId < 0 {
-		db.Close()
-		return nil, fmt.Errorf("idtable: invalid nextId value: %d, database malformed", nextId)
-	}
-
 	a := &Allocator{
-		db:             db,
-		lru:            newLRUCache(opts.LRUCacheSize),
-		pending:        make(map[string]int64),
-		nextId:         nextId,
+		store:          store,
+		keyTypeNextId:  opts.KeyTypeNextId,
+		keyTypeKey:     opts.KeyTypeKey,
 		commitInterval: opts.CommitInterval,
 		closing:        make(chan bool),
 		done:           make(chan bool),
 	}
+
+	v, err := store.Get(a.encodeIncrIdKey())
+	if err != nil {
+		return nil, err
+	}
+
+	if v == nil {
+		a.nextId = 1
+	} else {
+		a.nextId = parseId(string(v))
+	}
+
+	if a.nextId < 0 {
+		return nil, fmt.Errorf("invalid nextId value: %d, database malformed", a.nextId)
+	}
+
+	a.lru = newLRUCache(opts.LRUCacheSize)
+	a.batch = store.NewBatch(opts.BatchSize)
 
 	// Capture the channels locally so the goroutine never reads a.closing/a.done,
 	// which Close() nils out under a.mu (reading them in the goroutine would race).
@@ -156,91 +141,68 @@ func (a *Allocator) GetId(key []byte) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.closed {
+	if a.store == nil || a.store.IsClosed() {
 		return "", fmt.Errorf("database is closed")
 	}
 
-	// Hot path: keep string(key) inline in the LRU lookup so the compiler's
-	// no-alloc map-key optimization applies — hoisting it to a variable would
-	// force an allocation of the key string on every cached hit.
 	if v, ok := a.lru.Get(string(key)); ok {
-		return EncodeId(v), nil
-	}
-	sk := string(key)
-	// pending is authoritative for uncommitted allocations (robust to LRU eviction).
-	if v, ok := a.pending[sk]; ok {
-		a.lru.Put(sk, v)
-		return EncodeId(v), nil
+		return string(toBytes(v)), nil
 	}
 
-	id, found, err := a.readCommitted(key)
+	v, err := a.store.Get(a.encodeIdKey(key))
 	if err != nil {
-		return "", err
-	}
-	if found {
-		a.lru.Put(sk, id)
-		return EncodeId(id), nil
+		return "", fmt.Errorf("failed to get id for key %s: %v", key, err)
 	}
 
-	// Allocate a new id.
-	id = a.nextId
+	if v != nil {
+		a.lru.Put(string(key), fromBytes(v))
+		return string(v), nil
+	}
+
+	id := toBytes(a.nextId)
+	a.lru.Put(string(key), a.nextId)
+
 	a.nextId++
-	a.lru.Put(sk, id)
-	a.pending[sk] = id
-	a.pendingNextId = true
-	return EncodeId(id), nil
+
+	a.batch.Put(a.encodeIncrIdKey(), []byte(strconv.FormatInt(a.nextId, 10)))
+	a.batch.Put(a.encodeIdKey(key), id)
+
+	return string(id), nil
 }
 
 // Lookup resolves a key to its id WITHOUT allocating: it returns found=false for
-// a key that has never been assigned an id. It consults the LRU and the pending
-// (uncommitted) buffer before the durable store. Safe for concurrent use.
+// a key that has never been assigned an id. It consults the LRU before the store.
+// Safe for concurrent use.
 func (a *Allocator) Lookup(key []byte) (id int64, found bool, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if a.closed {
+	if a.store == nil || a.store.IsClosed() {
 		return 0, false, fmt.Errorf("database is closed")
 	}
 
-	if v, ok := a.lru.Get(string(key)); ok { // inline string(key): no-alloc map-key path
-		return v, true, nil
-	}
-	sk := string(key)
-	if v, ok := a.pending[sk]; ok {
+	if v, ok := a.lru.Get(string(key)); ok {
 		return v, true, nil
 	}
 
-	id, found, err = a.readCommitted(key)
+	v, err := a.store.Get(a.encodeIdKey(key))
 	if err != nil {
-		return 0, false, err
+		return 0, false, fmt.Errorf("failed to lookup id for key %s: %v", key, err)
 	}
-	if found {
-		a.lru.Put(sk, id)
+	if v == nil {
+		return 0, false, nil
 	}
-	return id, found, nil
+	id = fromBytes(v)
+	a.lru.Put(string(key), id)
+	return id, true, nil
 }
 
-// readCommitted reads a committed key->id entry from bbolt. Callers hold a.mu.
-func (a *Allocator) readCommitted(key []byte) (id int64, found bool, err error) {
-	err = a.db.View(func(tx *bolt.Tx) error {
-		if v := tx.Bucket(bucketKeys).Get(key); v != nil {
-			id = decodeId(v)
-			found = true
-		}
-		return nil
-	})
-	if err != nil {
-		return 0, false, fmt.Errorf("idtable: lookup failed: %w", err)
-	}
-	return id, found, nil
-}
-
-// Close flushes any pending writes, stops the background commit goroutine, and
-// closes the bbolt database.
+// Close flushes any pending batch writes, stops the background commit goroutine,
+// and clears the LRU cache.
 //
-// The mutex is released while waiting for the background goroutine to exit: that
-// goroutine's periodic-commit branch acquires a.mu, so holding the lock across
-// the <-done wait would deadlock if the timer fired concurrently.
+// The mutex is released while waiting for the background goroutine to exit:
+// that goroutine's periodic-commit branch acquires a.mu, so holding the lock
+// across the <-done wait would deadlock if the timer fired concurrently.
 func (a *Allocator) Close() {
 	a.mu.Lock()
 	if a.closing == nil {
@@ -260,28 +222,20 @@ func (a *Allocator) Close() {
 		log.Printf("[idtable] final commit on close failed: %v", err)
 	}
 	a.lru.Clear()
-	a.closed = true
-	if a.db != nil {
-		a.db.Close()
-		a.db = nil
-	}
+	a.store = nil
 }
 
-// CrashRelease drops the Allocator's OS-held resources the way a process kill
-// would: it stops the background commit goroutine and closes the bbolt file
-// WITHOUT the orderly final commit, so uncommitted (pending) allocations are
-// discarded and the file lock is released for a same-process reopen. It exists
-// for crash-recovery tests that simulate an abrupt termination; production code
-// uses Close. Safe to call more than once and after Close.
+// CrashRelease drops the Allocator's in-flight state the way a process kill would:
+// it stops the background commit goroutine and DISCARDS the uncommitted batch (any
+// pending allocations are lost), then detaches from the store WITHOUT closing it —
+// the kv.Store is owned by the caller. It exists for crash-recovery tests that
+// simulate an abrupt termination; production code uses Close. Safe to call more
+// than once and after Close.
 func (a *Allocator) CrashRelease() {
 	a.mu.Lock()
 	if a.closing == nil {
-		// Already cleanly closed or crash-released: just ensure the db is gone.
-		a.closed = true
-		if a.db != nil {
-			a.db.Close()
-			a.db = nil
-		}
+		// Already cleanly closed or crash-released: just detach.
+		a.store = nil
 		a.mu.Unlock()
 		return
 	}
@@ -294,71 +248,65 @@ func (a *Allocator) CrashRelease() {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	// Deliberately NO tryCommit: pending allocations are discarded, mimicking a
-	// crash that never flushed the lazy batch.
-	a.closed = true
-	if a.db != nil {
-		a.db.Close()
-		a.db = nil
+	// Deliberately NO tryCommit: the uncommitted batch is discarded, mimicking a
+	// crash that never flushed the lazy batch. The store is the caller's to close.
+	if a.batch != nil {
+		a.batch.Close()
+		a.batch = nil
 	}
+	a.store = nil
 }
 
 // Commit synchronously flushes any pending key→id mappings and the nextId
-// counter to the bbolt database (durable: bbolt fsyncs on transaction commit).
-// It is the public, on-demand counterpart to the lazy commit tick and the
-// Close-time flush: callers that must make the id allocations durable at a
+// counter to the backing kv.Store, fsync'd (the underlying batch commits with
+// pebble.Sync). It is the public, on-demand counterpart to the lazy 5s tick and
+// the Close-time flush: callers that must make the id allocations durable at a
 // precise point (e.g. before truncating an external write-ahead log that is the
 // only other record of those mappings) call this to close the durability gap.
 // It is safe for concurrent use and is a no-op when nothing is pending.
 func (a *Allocator) Commit() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.closed {
+	if a.store == nil || a.store.IsClosed() {
 		return fmt.Errorf("database is closed")
 	}
 	return a.tryCommit()
 }
 
-// tryCommit flushes the pending allocations and nextId in a single bbolt
-// transaction if anything is pending. Callers must hold a.mu.
+// encodeIncrIdKey returns the key used to store nextId.
+func (a *Allocator) encodeIncrIdKey() []byte {
+	return []byte{a.keyTypeNextId}
+}
+
+// encodeIdKey returns the key used to store the id for the given key.
+func (a *Allocator) encodeIdKey(key []byte) []byte {
+	result := make([]byte, 1+len(key))
+	result[0] = a.keyTypeKey
+	copy(result[1:], key)
+	return result
+}
+
+// tryCommit flushes the pending batch if it is non-empty, returning any
+// Commit error. Callers must hold a.mu.
 //
-// It re-checks the closed state before driving the write: the periodic-commit
-// tick and the Close-time flush both reach here, and committing against a closed
-// db would error — when closed we skip and return a clean error instead,
-// consistent with GetId/Commit's fail-closed guards. The check sits under a.mu
-// (held by every caller), so it cannot race a concurrent close-then-commit.
+// It re-checks the store's open state under a.mu immediately before driving
+// batch.Commit. The periodic-commit tick and the Close-time flush both reach
+// here, and the backing KV can be closed out from under the allocator (e.g. a
+// test's t.Cleanup closes the store while a tick is in flight). Committing a
+// batch against a closed pebble panics ("pebble: closed"), so when the store is
+// closed we skip the commit and return a clean error instead — consistent with
+// GetId/Commit's fail-closed guards. The check sits under a.mu (held by every
+// caller), so it cannot race a concurrent close-then-commit on this allocator.
 func (a *Allocator) tryCommit() error {
-	if a.closed || a.db == nil {
+	if a.store == nil || a.store.IsClosed() {
 		return fmt.Errorf("database is closed")
 	}
-	if len(a.pending) == 0 && !a.pendingNextId {
-		return nil
-	}
-	err := a.db.Update(func(tx *bolt.Tx) error {
-		kb := tx.Bucket(bucketKeys)
-		for k, id := range a.pending {
-			// A fresh slice per Put: bbolt retains the value slice by reference
-			// until the transaction commits, so a reused buffer would make every
-			// entry take the last-written value.
-			if err := kb.Put([]byte(k), toBytes(id)); err != nil {
-				return err
-			}
+	if a.batch.Count() > 0 {
+		if err := a.batch.Commit(); err != nil {
+			return err
 		}
-		if a.pendingNextId {
-			if err := tx.Bucket(bucketMeta).Put(metaNextId, toBytes(a.nextId)); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return err
+		a.batch.Reset()
 	}
-	// Reset pending only after a durable commit. Keep the map allocated for reuse.
-	for k := range a.pending {
-		delete(a.pending, k)
-	}
-	a.pendingNextId = false
 	return nil
 }
 
@@ -370,18 +318,14 @@ func parseId(id string) int64 {
 	return v
 }
 
-// decodeId reads an 8-byte big-endian id value; a short slice yields -1.
-func decodeId(v []byte) int64 {
-	if len(v) < 8 {
-		return -1
-	}
-	return int64(binary.BigEndian.Uint64(v))
-}
-
 func toBytes(v int64) []byte {
 	id := make([]byte, 8) // int64 is 8 bytes
 	binary.BigEndian.PutUint64(id, uint64(v))
 	return id
+}
+
+func fromBytes(buf []byte) int64 {
+	return int64(binary.BigEndian.Uint64(buf))
 }
 
 // EncodeId returns the canonical on-disk string form of a docid: its 8-byte

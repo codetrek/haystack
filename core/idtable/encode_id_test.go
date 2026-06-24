@@ -1,9 +1,11 @@
 package idtable
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -48,11 +50,19 @@ func TestDecodeId_ShortStringIsInvalid(t *testing.T) {
 // hands out for the same underlying counter value, so the int64 form and the
 // string form are interchangeable at storage boundaries.
 func TestEncodeId_MatchesGetId(t *testing.T) {
-	alloc, err := Open(filepath.Join(t.TempDir(), "idtable.db"), Options{})
+	tempDir, err := os.MkdirTemp("", "haystack-idtable-encode-*")
+	assert.NoError(t, err)
+	defer os.RemoveAll(tempDir)
+
+	store, err := pebblekv.Open(filepath.Join(tempDir, "data"), 0)
+	assert.NoError(t, err)
+	defer store.Close()
+
+	alloc, err := New(store, Options{})
 	assert.NoError(t, err)
 	defer alloc.Close()
 
-	// The first allocated id corresponds to nextId == 1 (Open seeds nextId = 1).
+	// The first allocated id corresponds to nextId == 1 (New seeds nextId = 1).
 	got, err := alloc.GetId([]byte("some/path.go"))
 	assert.NoError(t, err)
 	assert.Equal(t, EncodeId(1), got)
