@@ -19,6 +19,11 @@ type segMeta struct {
 	MinTable  uint32 `json:"minTable"`
 	MaxTable  uint32 `json:"maxTable"`
 	Size      int64  `json:"size"`
+	// Postings is the number of inverted posting ENTRIES (adds + dels) the segment stores — the
+	// `written` term of the covering-merge trigger (deadFraction). Set at spill/merge time from the
+	// counts already in hand; per-segment so it is crash-consistent (travels in the same MANIFEST as
+	// the segment). A covering merge drops all dels, so a covering output's Postings = its live adds.
+	Postings int64 `json:"postings"`
 }
 
 // tableInfo is one entry of the table catalog (replaces pebble's table rows).
@@ -44,7 +49,7 @@ type manifest struct {
 // newManifest returns a fresh, empty manifest for a not-yet-written store. Ids start at 1 so
 // the first table/segment is 1 (a 0 id is "absent").
 func newManifest() *manifest {
-	return &manifest{FormatVersion: 1, Tables: map[int]tableInfo{}, NextTableId: 1, NextSegId: 1}
+	return &manifest{FormatVersion: 2, Tables: map[int]tableInfo{}, NextTableId: 1, NextSegId: 1}
 }
 
 // readManifest loads dir/MANIFEST. A missing MANIFEST (a fresh dir) is NOT an error — it

@@ -118,10 +118,12 @@ func (s *Store) spill(tableId int) error {
 
 	// 3. Inverted records in sorted term order: [I] tableId keyword -> invertedValue(adds,dels).
 	tid := uint32(tableId)
+	var postings int64 // count add+del entries for segMeta.Postings (the deadFraction `written` term)
 	for _, t := range terms {
 		pd := h.inv[t]
 		adds := setToSlice(pd.adds)
 		dels := setToSlice(pd.dels)
+		postings += int64(len(adds) + len(dels))
 		w.addEntry(invertedKey(tid, t), encodeInvertedValue(adds, dels))
 	}
 
@@ -167,6 +169,7 @@ func (s *Store) spill(tableId int) error {
 		MinTable:  tid,
 		MaxTable:  tid,
 		Size:      size,
+		Postings:  postings,
 	}
 
 	// Persist the new MANIFEST, then publish — but keep the slow fsync OUT of the reader-blocking

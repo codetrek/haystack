@@ -34,6 +34,13 @@ func (s *Store) spillForTest(tableId int) {
 	s.q.RunFunc(func() error { return s.spill(tableId) })
 }
 
+// SegmentsForTest returns a copy of the live segMeta set (the MANIFEST's segment list).
+func (s *Store) SegmentsForTest() []segMeta {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]segMeta(nil), s.man.Segments...)
+}
+
 // dropHeadCloseSegmentsForTest simulates a process crash for the recovery tests (T11/§9): it discards
 // the volatile in-memory head (every apply that has NOT yet spilled to a sealed segment is LOST) and
 // closes the open segment fds WITHOUT spilling the head, keeping the on-disk files so the next Open

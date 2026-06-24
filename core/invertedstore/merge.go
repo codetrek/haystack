@@ -158,6 +158,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 	// forward record is emitted. tableRange tracks the output's covered tableIds for prune.
 	remap := make([][]uint32, len(segs))
 	outOrd := uint32(0)
+	var postings int64 // count emitted add+del entries for the output segMeta.Postings
 	minTable := uint32(0)
 	maxTable := uint32(0)
 	haveTable := false
@@ -286,6 +287,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 
 			if keep {
 				w.addEntry(min, encodeInvertedValue(addList, delList))
+				postings += int64(len(addList) + len(delList)) // segMeta.Postings (only emitted keys count)
 				noteTable(tid)
 				for _, i := range hit {
 					remap[i] = append(remap[i], outOrd) // append index == this key's srcOrd in seg i
@@ -319,6 +321,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 		MinTable:  minTable,
 		MaxTable:  maxTable,
 		Size:      size,
+		Postings:  postings,
 	}
 	return mergeResult{seg: seg, sm: sm}
 }
