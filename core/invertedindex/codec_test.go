@@ -10,9 +10,10 @@ import (
 // testCodecIdx is a minimal *Index with default key-type bytes used by codec tests.
 // It avoids the need for a full test environment (database + queue).
 var testCodecIdx = &Index{
-	keyTypeRow:    DefaultKeyTypeRow,
-	keyTypeTable:  DefaultKeyTypeTable,
-	keyTypeNextId: DefaultKeyTypeNextId,
+	keyTypeRow:     DefaultKeyTypeRow,
+	keyTypeTable:   DefaultKeyTypeTable,
+	keyTypeNextId:  DefaultKeyTypeNextId,
+	keyTypeForward: DefaultKeyTypeForward,
 }
 
 // ---------------------------------------------------------------------------
