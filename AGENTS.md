@@ -32,3 +32,16 @@ proxy environment or a substitute method and then draw conclusions from it.
 
 When the two meet: make the real infrastructure improvement (Principle 1) **and** prove
 it in the real failing environment (Principle 2) — never in a convenient substitute.
+
+## 3. Author large files incrementally — chunk, don't dump
+
+When creating a large file (a plan, spec, design doc, or sizable code file), **do not
+emit the whole thing in one giant write.** Build it up in chunks: create the file with
+its header/skeleton first, then append one section at a time.
+
+- Write the file in pieces (header → section → section …), each a small, self-contained
+  append — not a single multi-hundred-line dump.
+- This keeps every step reviewable, lets the user course-correct mid-way instead of
+  after the entire artifact lands, and produces a cleaner edit history.
+- Applies to generated docs and plans especially, but to any long file: prefer a
+  sequence of focused appends over one monolithic write.
