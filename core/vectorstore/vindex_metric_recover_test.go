@@ -14,7 +14,7 @@ import (
 func TestStore_Recover_PreservesNonPrimaryMetric(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 
 	rng := rand.New(rand.NewSource(202))

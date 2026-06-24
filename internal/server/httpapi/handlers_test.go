@@ -75,7 +75,7 @@ func TestMain(m *testing.M) {
 	// Inject the inverted index into the searcher so search handlers work.
 	searcher.Run(&runningWg, idx, st)
 
-	alloc, err := idtable.Open(filepath.Join(tempDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {
 		panic("Failed to init idtable: " + err.Error())
 	}

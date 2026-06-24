@@ -147,7 +147,7 @@ func TestMerge_PutRehomeDuringWindow_NotDuplicated(t *testing.T) {
 // reconstructed from the durable docseg + tomb buckets, not an on-disk bitmap rescan).
 func TestMerge_DeleteDuringWindow_DurableAcrossRestart(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(22))
 	live := map[int64][]float32{}

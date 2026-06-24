@@ -17,7 +17,7 @@ import (
 func TestRecovery_DeleteSealedDocAfterReopen(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(101))
 	dim := 12
@@ -159,7 +159,7 @@ func TestRecovery_ResumesPendingBuild(t *testing.T) {
 func TestRecovery_CrossSegmentUpdateTombstoneNotFlushed(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(7777))
 	dim := 8
@@ -232,7 +232,7 @@ func TestRecovery_CrossSegmentUpdateTombstoneNotFlushed(t *testing.T) {
 func TestRecovery_SealHeadClearIsAtomicNoDoubleStore(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(103))
 	dim := 10

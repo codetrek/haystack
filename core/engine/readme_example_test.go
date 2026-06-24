@@ -38,9 +38,9 @@ func TestReadmeExample(t *testing.T) {
 
 	// Allocate a stable 8-byte document id from idtable (IDs must be exactly
 	// 8 bytes so the inverted-index codec can decode them correctly).
-	alloc, err := idtable.Open(filepath.Join(tmpDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(store, idtable.Options{})
 	if err != nil {
-		t.Fatalf("idtable.Open: %v", err)
+		t.Fatalf("idtable.New: %v", err)
 	}
 	docID, err := alloc.GetId([]byte("main.go")) // path → stable 8-byte id
 	if err != nil {

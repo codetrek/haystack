@@ -28,7 +28,7 @@ func TestMerge_ConcurrentDeletePutDuringInFlightMerge(t *testing.T) {
 	}
 	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
-		s, err := Open(Options{Dir: t.TempDir(), Metric: DotProduct})
+		s, err := Open(Options{Dir: t.TempDir(), Metric: DotProduct, KV: kvStore})
 		requireNoError(t, err)
 		rng := rand.New(rand.NewSource(int64(200 + iter)))
 		dim := 8

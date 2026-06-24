@@ -23,7 +23,7 @@ import (
 // manifest was never rewritten, so the two inputs stay authoritative.
 func TestAbortMerge_WriteFaultRollsBackCleanly(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	s.maxSegSize = 5 // delete-driven repack packs into 5-row buckets
 	rng := rand.New(rand.NewSource(91))

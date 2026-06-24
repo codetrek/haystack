@@ -356,11 +356,22 @@ func TestErroredPutNotResurrectedOnReopen(t *testing.T) {
 
 func TestStore_OpenIdtableError(t *testing.T) {
 	dir := t.TempDir()
-	// Occupy the idtable's path with a directory so idtable.Open (bbolt) fails,
-	// which must fail Store.Open.
-	requireNoError(t, os.MkdirAll(filepath.Join(dir, "idtable.db"), 0o755))
+	// Put a regular file where the idtable's pebble store directory is expected, so
+	// pebblekv.Open (and thus Store.Open) fails.
+	requireNoError(t, os.WriteFile(filepath.Join(dir, "idtable"), []byte("x"), 0o644))
 	if _, err := Open(Options{Dir: dir, Metric: Cosine}); err == nil {
 		t.Fatal("Open should fail when the idtable cannot be opened")
+	}
+}
+
+func TestStore_OpenControlStoreError(t *testing.T) {
+	dir := t.TempDir()
+	// Block the control store (a directory where bbolt wants control.db) so
+	// openControlStore fails AFTER the store-owned idtable KV opened — exercising
+	// Open's error-path cleanup of that owned idtable store.
+	requireNoError(t, os.MkdirAll(filepath.Join(dir, "control.db"), 0o755))
+	if _, err := Open(Options{Dir: dir, Metric: Cosine}); err == nil {
+		t.Fatal("Open should fail when the control store cannot be opened")
 	}
 }
 
