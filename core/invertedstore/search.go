@@ -115,6 +115,22 @@ func (s *Store) Search(tableId int, query string, limit int, filterKeyword func(
 			headHits = append(headHits, headPosting{kw: kw, adds: setToSlice(pd.adds), dels: setToSlice(pd.dels)})
 		}
 	}
+	// Spilling tier (item F, B1): heads DETACHED for off-worker encode, between the live head and the
+	// sealed segments, newest -> oldest. Append each matching keyword's deltas into the SAME ordered
+	// headHits so merge sees live-head -> spilling newest->oldest -> segments (newest-wins). Copied
+	// inside this RLock window (before RUnlock); the spilling iteration does NOT re-lock.
+	for i := len(s.spilling) - 1; i >= 0; i-- {
+		e := s.spilling[i]
+		if e.tableId != tableId {
+			continue
+		}
+		for kw, pd := range e.head.inv {
+			if !strings.HasPrefix(kw, q) {
+				continue
+			}
+			headHits = append(headHits, headPosting{kw: kw, adds: setToSlice(pd.adds), dels: setToSlice(pd.dels)})
+		}
+	}
 	segs := s.acquireSnapshotLocked()
 	s.mu.RUnlock()
 	defer s.releaseSnapshot(segs)
@@ -199,6 +215,19 @@ func (s *Store) GetDocs(tableId int, key string) SearchResult {
 			headDels = setToSlice(pd.dels)
 		}
 	}
+	// Spilling tier (item F, B1): copy each detached head's deltas for this exact key, newest -> oldest,
+	// inside this RLock window — merged between the live head and the segments (newest-wins).
+	type spillHit struct{ adds, dels []int64 }
+	var spillHits []spillHit
+	for i := len(s.spilling) - 1; i >= 0; i-- {
+		e := s.spilling[i]
+		if e.tableId != tableId {
+			continue
+		}
+		if pd := e.head.inv[key]; pd != nil {
+			spillHits = append(spillHits, spillHit{adds: setToSlice(pd.adds), dels: setToSlice(pd.dels)})
+		}
+	}
 	segs := s.acquireSnapshotLocked()
 	s.mu.RUnlock()
 	defer s.releaseSnapshot(segs)
@@ -206,6 +235,11 @@ func (s *Store) GetDocs(tableId int, key string) SearchResult {
 	// Head is newest.
 	if headHit {
 		merge(headAdds, headDels)
+	}
+
+	// Spilling tier next, newest -> oldest (already in that order).
+	for _, sh := range spillHits {
+		merge(sh.adds, sh.dels)
 	}
 
 	// Segments newest -> oldest; compare each visited key for EXACT equality so a longer keyword

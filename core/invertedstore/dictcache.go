@@ -169,17 +169,26 @@ func (s *Store) forwardKeywords(tableId int, docid int64) (words []string, delet
 	// 1. HEAD first (newest of all): an explicit pending delete is a tombstone; a pending
 	//    forward set wins over any sealed record for this docid. Finding either in the head is a
 	//    real forward read (the doc was seen before), so the hook fires.
-	if h := s.head[tableId]; h != nil {
-		if _, del := h.delForward[docid]; del {
-			s.mu.RUnlock()
-			s.noteForwardRead()
-			return nil, true
+	if w, del, found := headForwardLookup(s.head[tableId], docid); found {
+		s.mu.RUnlock()
+		s.noteForwardRead()
+		return w, del
+	}
+	// 1b. The spilling tier (item F, B1): heads DETACHED for off-worker encode, between the live head
+	//     and the sealed segments, newest -> oldest by detach order. A doc whose forward lives only in a
+	//     detached head must still resolve here, or a re-post would diff against an empty old set and
+	//     drop no tombstone (silent corruption). Resolved (copied) inside the SAME RLock as the live
+	//     head read, before RUnlock — acquireSnapshot below re-takes the RLock, so this must NOT nest.
+	for i := len(s.spilling) - 1; i >= 0; i-- { // newest detached head wins
+		e := s.spilling[i]
+		if e.tableId != tableId {
+			continue
 		}
-		if w, ok := h.fwd[docid]; ok {
-			out := append([]string(nil), w...) // copy out from under the lock
+		// Task 7C inserts the docid-range skip here: if docid < e.minDocid || docid > e.maxDocid { continue }
+		if w, del, found := headForwardLookup(e.head, docid); found {
 			s.mu.RUnlock()
 			s.noteForwardRead()
-			return out, false
+			return w, del
 		}
 	}
 	s.mu.RUnlock()

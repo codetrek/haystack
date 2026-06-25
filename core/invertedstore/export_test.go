@@ -171,3 +171,31 @@ func (s *Store) segRefsByIdForTest(id uint64) int64 {
 	}
 	return -1
 }
+
+// injectSpillingHeadForTest detaches tableId's CURRENT head into s.spilling WITHOUT encoding it (the
+// head stays readable as a spilling tier), reserving its outId — a test stand-in for 7B's real detach,
+// so 7A's read tiers can be tested before the async encode exists. Runs on the worker.
+func (s *Store) injectSpillingHeadForTest(tableId int) {
+	s.q.RunFunc(func() error {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		h := s.head[tableId]
+		if h == nil {
+			return nil
+		}
+		s.head[tableId] = newHeadTable()
+		minD, maxD := headForwardRange(h)
+		outId := s.man.NextSegId
+		s.man.NextSegId++
+		s.spilling = append(s.spilling, &spillEntry{tableId: tableId, head: h, outId: outId,
+			minDocid: minD, maxDocid: maxD})
+		return nil
+	})
+}
+
+// SpillingLenForTest returns the number of currently-detached spilling heads (item F observability).
+func (s *Store) SpillingLenForTest() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.spilling)
+}

@@ -101,6 +101,11 @@ type Store struct {
 	head map[int]*headTable // tableId -> in-memory head (P4c)
 	segs []*segment         // worker-owned live sealed segment slice, oldest->newest (the swap source)
 
+	// spilling holds heads DETACHED for off-worker encode (item F), newest last. Readers consult it as
+	// a tier between the live head and the sealed segments (B1). Published at detach + removed at
+	// install, both under s.mu.Lock. Read (copied) under s.mu.RLock. Never refcounted/pooled.
+	spilling []*spillEntry
+
 	// liveByTable[tableId] = distinct live (keyword,docid) pairs in that table = Σ over the table's
 	// live docs of their distinct keyword count. The `live` term of the covering-merge trigger
 	// (deadFraction). NOT persisted: recomputed on Open from the segments' forward records

@@ -59,12 +59,40 @@ func (s *Store) ForwardDocids(tableId int, fn func(docid int64) bool) {
 			headLive = append(headLive, d)
 		}
 	}
+	// Spilling tier (item F, B1): heads DETACHED for off-worker encode, between the live head and the
+	// sealed segments, newest -> oldest. A tombstone in a newer-or-equal tier decides the docid dead; a
+	// live forward not yet decided is yielded (after the head's headLive, before the segment resolver).
+	// Collected inside this RLock window, before RUnlock.
+	var spillingLive []int64 // spilling-tier live fwd docids, newest -> oldest; yielded after headLive
+	for i := len(s.spilling) - 1; i >= 0; i-- {
+		e := s.spilling[i]
+		if e.tableId != tableId {
+			continue
+		}
+		for d := range e.head.delForward {
+			decided[d] = struct{}{} // a tombstone in a newer-or-equal tier decides the docid dead
+		}
+		for d := range e.head.fwd {
+			if _, dead := decided[d]; dead {
+				continue
+			}
+			decided[d] = struct{}{}
+			spillingLive = append(spillingLive, d)
+		}
+	}
 	segs := s.acquireSnapshotLocked()
 	s.mu.RUnlock()
 	defer s.releaseSnapshot(segs)
 
 	// 2. Head is newest: yield its live forwards first.
 	for _, d := range headLive {
+		if !fn(d) {
+			return
+		}
+	}
+
+	// 2b. Spilling tier next, newest -> oldest (already collected in that order).
+	for _, d := range spillingLive {
 		if !fn(d) {
 			return
 		}
