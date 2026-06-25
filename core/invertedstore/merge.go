@@ -159,6 +159,15 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 	remap := make([][]uint32, len(segs))
 	outOrd := uint32(0)
 	var postings int64 // count emitted add+del entries for the output segMeta.Postings
+	outMinDocid, outMaxDocid := emptyDocidRange()
+	noteDocid := func(d int64) {
+		if d < outMinDocid {
+			outMinDocid = d
+		}
+		if d > outMaxDocid {
+			outMaxDocid = d
+		}
+	}
 	minTable := uint32(0)
 	maxTable := uint32(0)
 	haveTable := false
@@ -213,6 +222,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 					if !covering {
 						w.addEntry(min, forwardTombstone())
 						noteTable(tid)
+						noteDocid(int64(binary.BigEndian.Uint64(min[5:13]))) // B: tombstone counts toward the skip range
 					}
 				} else {
 					out := make([]uint32, 0, len(ords))
@@ -244,6 +254,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 					} else {
 						w.addEntry(min, encodeForward(out))
 						noteTable(tid)
+						noteDocid(int64(binary.BigEndian.Uint64(min[5:13]))) // B: live forward counts toward the skip range
 					}
 				}
 			}
@@ -309,6 +320,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 
 	seg := w.finish(path)
 	seg.id = outId
+	seg.minDocid, seg.maxDocid = outMinDocid, outMaxDocid // B
 	if mergeRemapObserver != nil {
 		mergeRemapObserver(remap)
 	}
@@ -322,6 +334,8 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 		MaxTable:  maxTable,
 		Size:      size,
 		Postings:  postings,
+		MinDocid:  outMinDocid, // B
+		MaxDocid:  outMaxDocid, // B
 	}
 	return mergeResult{seg: seg, sm: sm}
 }

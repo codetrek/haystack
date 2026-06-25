@@ -133,3 +133,23 @@ func (s *Store) assertCounterInvariantForTest(t *testing.T) {
 			live, written, live-written, s.opts.CapBytes)
 	}
 }
+
+// installForwardProbeCounter counts segment forward PROBES (non-skipped lookupForward calls). The
+// hook runs on the worker; the atomic keeps it -race clean. Cleared on cleanup.
+func (s *Store) installForwardProbeCounter(t *testing.T) *atomic.Int64 {
+	t.Helper()
+	var n atomic.Int64
+	s.onForwardProbe = func() { n.Add(1) }
+	t.Cleanup(func() { s.onForwardProbe = nil })
+	return &n
+}
+
+// forwardKeywordsForTest runs forwardKeywords on the worker (synchronous), so a test can drive the
+// "read old keyword set" path directly and observe the probe counter.
+func (s *Store) forwardKeywordsForTest(tableId int, docid int64) (words []string, deleted bool) {
+	s.q.RunFunc(func() error {
+		words, deleted = s.forwardKeywords(tableId, docid)
+		return nil
+	})
+	return
+}

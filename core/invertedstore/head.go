@@ -159,6 +159,12 @@ func (s *Store) spill(tableId int) error {
 		recs = append(recs, fwdRec{docid: d, deleted: true})
 	}
 	sort.Slice(recs, func(i, j int) bool { return recs[i].docid < recs[j].docid })
+	// B: the forward-read skip range covers every EMITTED forward record (live + tombstone). recs is
+	// sorted ascending by docid, so the span is its ends; an empty recs keeps the always-skip range.
+	minD, maxD := emptyDocidRange()
+	if len(recs) > 0 {
+		minD, maxD = recs[0].docid, recs[len(recs)-1].docid
+	}
 	for _, r := range recs {
 		if r.deleted {
 			w.addEntry(forwardKey(tid, r.docid), forwardTombstone())
@@ -174,8 +180,9 @@ func (s *Store) spill(tableId int) error {
 	// 5. Seal: finish() fsyncs the file and returns the opened segment. Record its segMeta,
 	//    bump NextSegId, durably rewrite the MANIFEST, publish into s.segs, reset the head.
 	seg := w.finish(path)
-	seg.id = segId    // P5: chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
-	seg.refs.Store(1) // P9: the published snapshot holds one ref on this newly sealed segment
+	seg.id = segId                          // P5: chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
+	seg.minDocid, seg.maxDocid = minD, maxD // B
+	seg.refs.Store(1)                       // P9: the published snapshot holds one ref on this newly sealed segment
 	size := fileSize(path)
 	sm := segMeta{
 		Id:        segId,
@@ -186,6 +193,8 @@ func (s *Store) spill(tableId int) error {
 		MaxTable:  tid,
 		Size:      size,
 		Postings:  postings,
+		MinDocid:  minD, // B
+		MaxDocid:  maxD, // B
 	}
 
 	// Persist the new MANIFEST, then publish — but keep the slow fsync OUT of the reader-blocking

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/binary"
+	"math"
 	"os"
 	"sort"
 	"sync"
@@ -220,6 +221,7 @@ type segment struct {
 	idx                  []blockEntry
 	biOff, dictOff       int64
 	path                 string
+	minDocid, maxDocid   int64       // forward-record docid span (B); set from segMeta on Open / at seal
 	dictChunks           []dictChunk // built lazily for resolve (P3 index mode)
 	dictOnce             sync.Once   // guards the one-time, build-once-read-only dictChunks init
 
@@ -235,6 +237,13 @@ type segment struct {
 	keepFile atomic.Bool
 	tornDown atomic.Bool
 }
+
+// emptyDocidRange is the inverted "no forward records" span: min > max, so coversDocid is always
+// false and forwardKeywords always skips the segment (spec §4 item B).
+func emptyDocidRange() (min, max int64) { return math.MaxInt64, math.MinInt64 }
+
+// coversDocid reports whether a forward record for docid could exist in this segment.
+func (s *segment) coversDocid(docid int64) bool { return docid >= s.minDocid && docid <= s.maxDocid }
 
 // dictChunk locates one compressed term-dict chunk for on-demand (index-mode) resolution.
 type dictChunk struct {

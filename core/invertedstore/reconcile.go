@@ -141,6 +141,36 @@ func forwardKeyPrefix(tableId uint32) []byte {
 	return b
 }
 
+// upgradeSegmentRanges recomputes every live segment's [minDocid,maxDocid] from its forward records
+// (live AND tombstone) and rewrites the MANIFEST at FormatVersion 3. One-time legacy migration for
+// the forward-skip range (B): a pre-3 manifest lacks the fields, so a stale [0,0] would mis-skip.
+// Open-only (no snapshot refcount, no concurrent writers).
+func (s *Store) upgradeSegmentRanges() error {
+	for i := range s.segs {
+		seg := s.segs[i]
+		minD, maxD := emptyDocidRange()
+		lo := []byte{ktForward}
+		hi := prefixUpper(lo)
+		seg.scanPrefix(lo, hi, func(key, _ []byte) {
+			d := int64(binary.BigEndian.Uint64(key[5:13]))
+			if d < minD {
+				minD = d
+			}
+			if d > maxD {
+				maxD = d
+			}
+		})
+		seg.minDocid, seg.maxDocid = minD, maxD
+		for j := range s.man.Segments {
+			if s.man.Segments[j].Id == seg.id {
+				s.man.Segments[j].MinDocid, s.man.Segments[j].MaxDocid = minD, maxD
+			}
+		}
+	}
+	s.man.FormatVersion = 3
+	return writeManifest(s.dir, s.man)
+}
+
 // recomputeLive rebuilds s.liveByTable from the segments' forward records, catalog-gated. It is the
 // authoritative anchor for the live counter (spec §4.2.1): called on Open, it is consistent with
 // `written` (Σ segMeta.Postings) by construction, so a crash that dropped unspilled head writes

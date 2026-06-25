@@ -199,11 +199,19 @@ func (s *Store) forwardKeywords(tableId int, docid int64) (words []string, delet
 	if len(segs) == 0 {
 		return nil, false
 	}
-	s.noteForwardRead()
 
 	tid := uint32(tableId)
+	probed := false
 	for i := len(segs) - 1; i >= 0; i-- { // newest wins
 		seg := segs[i]
+		if !seg.coversDocid(docid) {
+			continue // B: no forward record for docid can exist in this segment — skip, no I/O
+		}
+		if !probed {
+			s.noteForwardRead() // first segment we actually touch = the first real forward read
+			probed = true
+		}
+		s.noteForwardProbe()
 		val, ok := seg.lookupForward(forwardKey(tid, docid))
 		if !ok {
 			continue

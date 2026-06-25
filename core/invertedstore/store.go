@@ -126,12 +126,23 @@ type Store struct {
 	// Test-only observability hook (P7) for the "cold build takes no forward read" assertion;
 	// it is set/read only on the worker so it needs no extra locking.
 	onForwardRead func()
+
+	// onForwardProbe, if non-nil, fires once per segment forwardKeywords actually PROBES (decompresses
+	// a block via lookupForward) — i.e. NOT for a range-skipped segment. Test-only (B): asserts a
+	// cold-build read skips every sealed segment. Set/read only on the worker.
+	onForwardProbe func()
 }
 
 // noteForwardRead fires the forward-read observability hook if one is installed (P7).
 func (s *Store) noteForwardRead() {
 	if s.onForwardRead != nil {
 		s.onForwardRead()
+	}
+}
+
+func (s *Store) noteForwardProbe() {
+	if s.onForwardProbe != nil {
+		s.onForwardProbe()
 	}
 }
 
@@ -166,9 +177,18 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 	s.dictCache = newChunkLRU(int64(s.opts.ChunkCacheBytes))
 	for _, sm := range man.Segments {
 		seg := openSegment(filepath.Join(path, segFileName(sm.Id)))
-		seg.id = sm.Id    // P5: the chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
-		seg.refs.Store(1) // P9: the published snapshot holds one ref per live segment
+		seg.id = sm.Id                                        // P5: the chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
+		seg.minDocid, seg.maxDocid = sm.MinDocid, sm.MaxDocid // B
+		seg.refs.Store(1)                                     // P9: the published snapshot holds one ref per live segment
 		s.segs = append(s.segs, seg)
+	}
+	if man.FormatVersion < 3 {
+		// Pre-B manifests have no docid range (unmarshals to [0,0], which would mis-skip every docid
+		// != 0). Recompute each segment's range from its forward records, then persist at v3 so the
+		// stale range can never reach forwardKeywords.
+		if err := s.upgradeSegmentRanges(); err != nil {
+			return nil, err
+		}
 	}
 	s.snap.Store(emptySnapshot)
 	s.publishSnapshotLocked() // seed the atomic pointer with the opened set (no concurrent readers yet)

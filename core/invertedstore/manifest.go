@@ -24,6 +24,14 @@ type segMeta struct {
 	// counts already in hand; per-segment so it is crash-consistent (travels in the same MANIFEST as
 	// the segment). A covering merge drops all dels, so a covering output's Postings = its live adds.
 	Postings int64 `json:"postings"`
+	// MinDocid/MaxDocid bound the docids of the forward records (live AND tombstone) this segment
+	// emitted — the forward-read skip range (spec §4 item B). A read for a docid outside [Min,Max]
+	// cannot find a forward record here, so forwardKeywords skips the segment without decompressing a
+	// block. An empty forward output is the inverted range Min=MaxInt64 > Max=MinInt64, which always
+	// skips. Persisted so Open needs no scan; FormatVersion 3 guarantees the fields are present (a
+	// pre-3 manifest is upgraded on Open — a stale [0,0] would mis-skip).
+	MinDocid int64 `json:"minDocid"`
+	MaxDocid int64 `json:"maxDocid"`
 }
 
 // tableInfo is one entry of the table catalog (replaces pebble's table rows).
@@ -49,7 +57,7 @@ type manifest struct {
 // newManifest returns a fresh, empty manifest for a not-yet-written store. Ids start at 1 so
 // the first table/segment is 1 (a 0 id is "absent").
 func newManifest() *manifest {
-	return &manifest{FormatVersion: 2, Tables: map[int]tableInfo{}, NextTableId: 1, NextSegId: 1}
+	return &manifest{FormatVersion: 3, Tables: map[int]tableInfo{}, NextTableId: 1, NextSegId: 1}
 }
 
 // readManifest loads dir/MANIFEST. A missing MANIFEST (a fresh dir) is NOT an error — it
