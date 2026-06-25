@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -162,6 +164,47 @@ func (s *Store) noteForwardProbe() {
 // Matches design §5's layout (seg-000123.dat).
 func segFileName(id uint64) string { return fmt.Sprintf("seg-%06d.dat", id) }
 
+// parseSegFileName extracts the seal-sequence id from a "seg-%06d.dat" name; ok=false for any other
+// name, so MANIFEST/MANIFEST.tmp and unrelated files are left alone.
+func parseSegFileName(name string) (uint64, bool) {
+	if !strings.HasPrefix(name, "seg-") || !strings.HasSuffix(name, ".dat") {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(name[len("seg-"):len(name)-len(".dat")], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return id, true
+}
+
+// sweepOrphanSegments removes any seg-*.dat in the store dir whose id is NOT live in the MANIFEST
+// (item G) — an orphan left when a crash hit between reserving an outId + writing the segment file
+// and installing the MANIFEST (off-worker merge A / spill F). Makes the merge.go "GC'd on Open" claim
+// true. Open-only (single-threaded, exclusive owner).
+func (s *Store) sweepOrphanSegments() error {
+	live := make(map[uint64]bool, len(s.man.Segments))
+	for _, sm := range s.man.Segments {
+		live[sm.Id] = true
+	}
+	ents, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if e.IsDir() {
+			continue
+		}
+		id, ok := parseSegFileName(e.Name())
+		if !ok || live[id] {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.dir, e.Name())); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // Open reads (or bootstraps) the MANIFEST under path and opens each live segment file. A
 // missing MANIFEST yields a fresh empty store. The queue must already be started.
 //
@@ -188,6 +231,9 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 	}
 	s.dictCache = newChunkLRU(int64(s.opts.ChunkCacheBytes))
 	s.budget = newPostingBudget(int64(s.opts.MaxInflightPostings))
+	if err := s.sweepOrphanSegments(); err != nil {
+		return nil, err
+	}
 	for _, sm := range man.Segments {
 		seg := openSegment(filepath.Join(path, segFileName(sm.Id)))
 		seg.id = sm.Id                                        // P5: the chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
