@@ -10,6 +10,9 @@ import (
 // to the keyword and the set tombstoned (removed) from it. Keeping these as sets enforces the
 // "latest action per (keyword,docid)" rule and dedups docids in memory (design §6) — a later
 // add cancels a pending delete and vice-versa, so a spilled value never holds both for a docid.
+// Both sets are allocated LAZILY (nil until the first add/tombstone of that kind): a cold build
+// has no deletes, so the del-set stays nil and the per-add cross-delete is skipped. A nil set is
+// semantically an empty set (setToSlice handles nil), so spill output is unchanged.
 type postingDelta struct {
 	adds map[int64]struct{}
 	dels map[int64]struct{}
@@ -34,15 +37,28 @@ func newHeadTable() *headTable {
 	}
 }
 
-// addPosting records that docid is a member of keyword (latest action wins, in-memory dedup).
-func (h *headTable) addPosting(keyword string, docid int64) {
+// posting returns keyword's postingDelta, creating an empty one (both sets nil/lazy) on first sight
+// and charging the same logical byte estimate the eager version did (so spill cadence is unchanged).
+func (h *headTable) posting(keyword string) *postingDelta {
 	pd := h.inv[keyword]
 	if pd == nil {
-		pd = &postingDelta{adds: map[int64]struct{}{}, dels: map[int64]struct{}{}}
+		pd = &postingDelta{}
 		h.inv[keyword] = pd
 		h.bytes += int64(len(keyword)) + 16
 	}
-	delete(pd.dels, docid) // latest action wins: a re-add cancels a pending tombstone
+	return pd
+}
+
+// addPosting records that docid is a member of keyword (latest action wins, in-memory dedup). The
+// del-set is allocated lazily (nil on a cold build), so the cross-delete is skipped when dels==nil.
+func (h *headTable) addPosting(keyword string, docid int64) {
+	pd := h.posting(keyword)
+	if pd.dels != nil {
+		delete(pd.dels, docid) // latest action wins: a re-add cancels a pending tombstone
+	}
+	if pd.adds == nil {
+		pd.adds = make(map[int64]struct{})
+	}
 	if _, ok := pd.adds[docid]; !ok {
 		pd.adds[docid] = struct{}{}
 		h.bytes += 4
@@ -50,15 +66,15 @@ func (h *headTable) addPosting(keyword string, docid int64) {
 }
 
 // tombstonePosting records that docid is removed from keyword (latest action wins). Symmetric to
-// addPosting: the docid moves into the del-set and out of the add-set.
+// addPosting: the add-set is consulted only if allocated.
 func (h *headTable) tombstonePosting(keyword string, docid int64) {
-	pd := h.inv[keyword]
-	if pd == nil {
-		pd = &postingDelta{adds: map[int64]struct{}{}, dels: map[int64]struct{}{}}
-		h.inv[keyword] = pd
-		h.bytes += int64(len(keyword)) + 16
+	pd := h.posting(keyword)
+	if pd.adds != nil {
+		delete(pd.adds, docid) // latest action wins: a delete cancels a pending add
 	}
-	delete(pd.adds, docid) // latest action wins: a delete cancels a pending add
+	if pd.dels == nil {
+		pd.dels = make(map[int64]struct{})
+	}
 	if _, ok := pd.dels[docid]; !ok {
 		pd.dels[docid] = struct{}{}
 		h.bytes += 4
