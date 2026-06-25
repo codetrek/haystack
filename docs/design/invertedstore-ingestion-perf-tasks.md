@@ -2432,10 +2432,12 @@ compile; the ForwardDocids tier code matches reconcile.go's real structure.
 
 ## Next SDD stage
 
-The breakdown has been through three multi-agent cross-review rounds (R1, R2, R3). R3 found two
-MAJORs in the R2 deltas (the `applyOneOp` signature contradiction + a false give-up durability claim),
-both fixed inline — these were textual corrections to match already-verified-correct code, not new
-logic. A short **R4 must confirm the R3 corrections are clean** (AGENTS.md Principle 0: re-review until
-a full round returns zero Blocking/Major). Implementation order remains **F0 → head-fix → B → E → A →
-C.1/C.2/C.3 → G → F**; F gated hardest on the B1 corruption test + the `-race`
-atomicity/bound/queue-saturation/Close-drain stress.
+The breakdown has been through four multi-agent cross-review rounds. **R4 is CLEAN — two independent
+reviewers each returned "zero Blocking/Major, ready to implement."** The review loop has converged
+(R1 found a spec deadlock + missing helper + fake red; R2 found the deadlock fix migrated the cycle
+into Close + a stranding leak + dead-code cov breaks; R3 found a signature contradiction + a false
+durability claim; R4 confirmed all corrections are consistent and compile). Per AGENTS.md Principle 0
+this satisfies stage 4 (cross-review until clean). It is ready for **stage 5 — TDD implementation**,
+order **F0 → head-fix → B → E → A → C.1/C.2/C.3 → G → F**; each item red→green, `-race` on the
+concurrency items, measured on real ext4, committed independently. F lands last and is gated hardest
+on the B1 corruption test + the `-race` atomicity/bound/queue-saturation/Close-drain stress.
