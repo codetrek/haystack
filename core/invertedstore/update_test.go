@@ -30,8 +30,15 @@ func newUpdateStoreOpts(t *testing.T, opts Options) (*Store, int) {
 }
 
 // sync drains the worker so an async Update is observable. RunFunc enqueues an empty task and
-// blocks until it (and therefore every earlier-enqueued Update) has run.
-func (s *Store) sync() { s.q.RunFunc(func() error { return nil }) }
+// blocks until it (and therefore every earlier-enqueued Update) has run. It also settles any in-flight
+// OFF-WORKER spill (F v5): an over-cap Update now detaches its head for an async encode+install, so a
+// worker-only drain would return before the segment is installed — sync waits for that too, so a test
+// that observes s.segs / merges after sync sees the same settled state the synchronous spill produced.
+func (s *Store) sync() {
+	s.q.RunFunc(func() error { return nil })
+	s.WaitSpillsForTest() // settle in-flight off-worker spills (encode + install + any re-dispatch chain)
+	s.q.RunFunc(func() error { return nil })
+}
 
 // forceSpill spills the table's head on the worker (synchronous) — reuses the P4c test seam.
 func (s *Store) forceSpill(tbl int) { s.spillForTest(tbl) }

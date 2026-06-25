@@ -102,6 +102,10 @@ func (h *headTable) deleteForward(docid int64) {
 // MUST run on the worker (it mutates s.man/s.segs/s.head). Mirrors the spike's spill shape
 // (cmd/sortbench/main.go func spill) but uses the production segWriter/encoders, int64 docids,
 // the 4-byte tableId keys, and the nKw-prefixed forward value (incl. explicit forward-tombstones).
+//
+// This is the SYNCHRONOUS spill (spillForTest + the CloseAndWait flush): it encodes the head AND
+// installs the segment, both on the worker. The hot build path instead uses the OFF-WORKER detach +
+// encode + install (dispatchSpill/encodeSpill/installSpill, F v5).
 func (s *Store) spill(tableId int) error {
 	s.mu.RLock()
 	h := s.head[tableId]
@@ -110,6 +114,96 @@ func (s *Store) spill(tableId int) error {
 		return nil
 	}
 
+	s.mu.RLock()
+	segId := s.man.NextSegId
+	s.mu.RUnlock()
+	path := filepath.Join(s.dir, segFileName(segId))
+	res := s.encodeHeadToFile(h, tableId, path)
+	seg := res.seg
+	seg.id = segId                                  // P5: chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
+	seg.minDocid, seg.maxDocid = res.minD, res.maxD // B
+	seg.refs.Store(1)                               // P9: the published snapshot holds one ref on this newly sealed segment
+	sm := s.spillSegMeta(res, segId, tableId)
+
+	// Persist the new MANIFEST, then publish — but keep the slow fsync OUT of the reader-blocking
+	// critical section (P9/T8, design §6: "readers never block on a writer's I/O — the lock is held
+	// only for the O(1) pointer swap and ref bookkeeping, never for spill/merge/file work"). All
+	// writes run on the single mpsc worker, so there is no concurrent writer of s.man; the lock here
+	// guards s.man only against concurrent READERS (tableInfo). So: (a) under the lock, append the
+	// segMeta + bump NextSegId + marshal the manifest to bytes (cheap, no I/O); (b) OUTSIDE the lock,
+	// do the two fsyncs (writeManifestBytes) — a concurrent Search/GetDocs is not blocked on them; (c)
+	// re-take the lock only for the O(1) s.segs append + publishSnapshotLocked + head reset.
+	s.mu.Lock()
+	s.man.Segments = append(s.man.Segments, sm)
+	s.man.NextSegId++
+	b, err := marshalManifest(s.man)
+	if err != nil {
+		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1] // roll back the in-memory manifest
+		s.man.NextSegId--
+		s.mu.Unlock()
+		seg.refs.Store(0) // never published: drop the ref we just took before closing
+		seg.close()
+		return err
+	}
+	s.mu.Unlock()
+
+	if err := writeManifestBytes(s.dir, b); err != nil {
+		// The fsync failed: roll the in-memory manifest back to the pre-spill set so it stays
+		// consistent with the still-old on-disk MANIFEST and with s.segs (which we never touched).
+		s.mu.Lock()
+		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1]
+		s.man.NextSegId--
+		s.mu.Unlock()
+		seg.refs.Store(0) // never published: drop the ref we just took before closing
+		seg.close()
+		return err
+	}
+
+	s.mu.Lock()
+	s.segs = append(s.segs, seg)
+	s.publishSnapshotLocked() // P9: republish the live set (this spill's new segment) for readers
+	s.head[tableId] = newHeadTable()
+	s.mu.Unlock()
+
+	// Background merger (design §6, P8/P9): a new L0 segment may push a level to >= Fanout, or push the
+	// bottom level's dead fraction over the covering threshold. When AutoMerge is on, raise a
+	// NON-BLOCKING trigger on the background merge goroutine (concurrency.go). spill runs ON the worker,
+	// so it MUST NOT send a task to its own queue (s.q.AddFunc would block-send and self-deadlock once
+	// the queue fills — the worker is the only consumer). triggerMerge just flips a flag/channel; the
+	// merge goroutine drives the actual passes back onto the worker via RunFunc.
+	s.triggerMerge(false)
+	return nil
+}
+
+// spillResult is the product of encoding a head into a segment file (the read-only, install-free part
+// of a spill, shared by the synchronous spill + the off-worker encodeSpill): the opened segment and
+// the segMeta fields derived at encode time (the forward docid span + the posting count).
+type spillResult struct {
+	seg        *segment
+	minD, maxD int64
+	postings   int64
+}
+
+// spillSegMeta builds the L0 segMeta for an encoded head, given the seg id (assigned at install for
+// the off-worker path) and the table it belongs to. The codecs come from s.opts (the values
+// encodeHeadToFile actually used), so the meta matches the bytes on disk.
+func (s *Store) spillSegMeta(r spillResult, id uint64, tableId int) segMeta {
+	tid := uint32(tableId)
+	return segMeta{
+		Id: id, Level: 0,
+		DataCodec: s.opts.DataCodecL0, DictCodec: s.opts.DictCodec,
+		MinTable: tid, MaxTable: tid,
+		Size:     fileSize(r.seg.path),
+		Postings: r.postings,
+		MinDocid: r.minD, MaxDocid: r.maxD,
+	}
+}
+
+// encodeHeadToFile encodes head (READ-ONLY) for tableId into the segment file at path and returns the
+// opened segment + its derived segMeta fields. It does NOT touch s.man/s.segs/s.head, so it is safe to
+// run OFF the worker over a DETACHED head (F v5): the only shared state it reads is s.dir/s.opts (both
+// immutable after Open). The synchronous spill and the off-worker encodeSpill share it byte-for-byte.
+func (s *Store) encodeHeadToFile(h *headTable, tableId int, path string) spillResult {
 	// 1. The term dict is the union of keywords with adds and keywords with tombstones; both
 	//    are [I] records. Sort once: that single sort yields the sorted inverted order AND each
 	//    keyword's ordinal (its term-id) for the term-id forward value.
@@ -124,10 +218,6 @@ func (s *Store) spill(tableId int) error {
 	}
 
 	// 2. New L0 segment writer: snappy data blocks, the dict codec, term-id mode on.
-	s.mu.RLock()
-	segId := s.man.NextSegId
-	s.mu.RUnlock()
-	path := filepath.Join(s.dir, segFileName(segId))
 	w := newSegWriter(path,
 		newCodec(s.opts.DataCodecL0), newCodec(s.opts.DictCodec),
 		s.opts.BlockTarget, s.opts.Chunk, s.opts.InlineThreshold, true, s.opts.DictChunkBytes)
@@ -177,73 +267,196 @@ func (s *Store) spill(tableId int) error {
 		w.addEntry(forwardKey(tid, r.docid), encodeForward(ords))
 	}
 
-	// 5. Seal: finish() fsyncs the file and returns the opened segment. Record its segMeta,
-	//    bump NextSegId, durably rewrite the MANIFEST, publish into s.segs, reset the head.
+	// 5. Seal: finish() fsyncs the file and returns the opened segment.
 	seg := w.finish(path)
-	seg.id = segId                          // P5: chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
-	seg.minDocid, seg.maxDocid = minD, maxD // B
-	seg.refs.Store(1)                       // P9: the published snapshot holds one ref on this newly sealed segment
-	size := fileSize(path)
-	sm := segMeta{
-		Id:        segId,
-		Level:     0,
-		DataCodec: s.opts.DataCodecL0,
-		DictCodec: s.opts.DictCodec,
-		MinTable:  tid,
-		MaxTable:  tid,
-		Size:      size,
-		Postings:  postings,
-		MinDocid:  minD, // B
-		MaxDocid:  maxD, // B
-	}
+	return spillResult{seg: seg, minD: minD, maxD: maxD, postings: postings}
+}
 
-	// Persist the new MANIFEST, then publish — but keep the slow fsync OUT of the reader-blocking
-	// critical section (P9/T8, design §6: "readers never block on a writer's I/O — the lock is held
-	// only for the O(1) pointer swap and ref bookkeeping, never for spill/merge/file work"). All
-	// writes run on the single mpsc worker, so there is no concurrent writer of s.man; the lock here
-	// guards s.man only against concurrent READERS (tableInfo). So: (a) under the lock, append the
-	// segMeta + bump NextSegId + marshal the manifest to bytes (cheap, no I/O); (b) OUTSIDE the lock,
-	// do the two fsyncs (writeManifestBytes) — a concurrent Search/GetDocs is not blocked on them; (c)
-	// re-take the lock only for the O(1) s.segs append + publishSnapshotLocked + head reset.
+// detachHeadLocked detaches tableId's current head for an OFF-WORKER encode (F v5). The CALLER must
+// hold s.mu.Lock AND must have already verified (in the SAME lock section) that the head is over-cap
+// and !spillInFlight, so two applies can never both detach (one-in-flight stays race-free). It swaps
+// the live head for a fresh one, pushes the old head onto s.spilling (readers resolve it as a tier
+// between the live head and the segments — B1), reserves a temp-file counter (NOT a seg id; the id is
+// assigned at install), and sets spillInFlight. It returns the entry to dispatch (encode + install) on
+// a background goroutine OUTSIDE the lock — detachHeadLocked itself does NO I/O.
+func (s *Store) detachHeadLocked(tableId int) *spillEntry {
+	h := s.head[tableId]
+	s.head[tableId] = newHeadTable()
+	minD, maxD := headForwardRange(h)
+	s.spillTempCtr++
+	e := &spillEntry{tableId: tableId, head: h, tempN: s.spillTempCtr, minDocid: minD, maxDocid: maxD}
+	s.spilling = append(s.spilling, e)
+	s.spillInFlight = true
+	return e
+}
+
+// dispatchSpill spawns the background goroutine that encodes the detached head OFF the worker and then
+// installs it ON the worker (F v5). The encode is read-only over the detached head (M2); the install
+// is a worker RunFunc (single-mutator preserved). The install is RETRIED on a transient write failure
+// up to MaxInstallRetries, then GIVEN UP: a persistently-failing disk would otherwise wedge the
+// producer at the gate forever, so a give-up drops the detached head (treated as crash-volatile),
+// clears spillInFlight/blockProducer + broadcasts, and re-dispatches any over-cap head — exactly the
+// install's own liveness path. spillWG tracks the goroutine so CloseAndWait can drain it OFF the worker.
+func (s *Store) dispatchSpill(e *spillEntry) {
+	s.spillWG.Add(1)
+	go func() {
+		defer s.spillWG.Done()
+		res := s.encodeSpill(e)
+		for attempt := 0; ; attempt++ {
+			var err error
+			s.q.RunFunc(func() error { err = s.installSpill(e, res); return nil })
+			if err == nil {
+				return
+			}
+			if attempt+1 >= s.opts.MaxInstallRetries {
+				// Give up: the disk is persistently failing. Drop the detached head (crash-volatile —
+				// indexer replay recovers it), remove its temp file, clear the in-flight + gate state, and
+				// re-dispatch any over-cap head so the producer makes progress. Runs on the worker.
+				s.q.RunFunc(func() error { return s.giveUpSpill(e, res) })
+				return
+			}
+		}
+	}()
+}
+
+// encodeSpill encodes the detached head into its temp file (seg-tmp-<n>.dat) OFF the worker — strictly
+// READ-ONLY over the detached head (M2), touching no shared mutable state. encodeSpillBlock (test-only)
+// parks here so a test can hold the head in s.spilling across a re-post (the B1 gate).
+func (s *Store) encodeSpill(e *spillEntry) spillResult {
+	if encodeSpillBlock != nil {
+		encodeSpillBlock()
+	}
+	tempPath := filepath.Join(s.dir, segTempFileName(e.tempN))
+	return s.encodeHeadToFile(e.head, e.tableId, tempPath)
+}
+
+// installSpill installs the off-worker-encoded segment ON the worker (F v5). MUST run on the worker
+// (it mutates s.man/s.segs/s.spilling). The seg id is assigned HERE (install order ⇒ correct
+// newest-wins), the temp file is renamed atomically to seg-<id>.dat (the open fd survives the rename),
+// the segMeta is appended + the MANIFEST durably rewritten (persist-then-publish), the snapshot is
+// republished, and the entry is removed from s.spilling — PUBLISH BEFORE REMOVE, so a reader never sees
+// the doc in NEITHER tier. Finally spillInFlight is cleared, blockProducer cleared + broadcast, and
+// EVERY table is re-checked for an over-cap head (one-in-flight is store-wide, so a different table's
+// head that filled while this spill was in flight is found + re-dispatched here — LOAD-BEARING for
+// liveness). On a write failure it rolls back and returns the error for the dispatch's bounded retry;
+// the entry stays in s.spilling (data preserved) and spillInFlight stays set across the retry.
+func (s *Store) installSpill(e *spillEntry, res spillResult) error {
+	seg := res.seg
+	tempPath := filepath.Join(s.dir, segTempFileName(e.tempN)) // == seg.path on entry (encode wrote it)
+
 	s.mu.Lock()
+	id := s.man.NextSegId
+	finalPath := filepath.Join(s.dir, segFileName(id))
+	if err := os.Rename(tempPath, finalPath); err != nil {
+		s.mu.Unlock()
+		return err // transient (e.g. disk full); dispatch retries. The temp file + entry are preserved.
+	}
+	seg.id = id                                     // P5: the chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
+	seg.path = finalPath                            // teardown/retire must unlink the renamed file, not the temp name
+	seg.minDocid, seg.maxDocid = res.minD, res.maxD // B
+	seg.refs.Store(1)                               // P9: the published snapshot holds one ref on this new segment
+	sm := s.spillSegMeta(res, id, e.tableId)
 	s.man.Segments = append(s.man.Segments, sm)
 	s.man.NextSegId++
 	b, err := marshalManifest(s.man)
 	if err != nil {
 		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1] // roll back the in-memory manifest
 		s.man.NextSegId--
+		seg.refs.Store(0)
+		os.Rename(finalPath, tempPath) // restore the temp file for the retry (final name is unreferenced)
+		seg.path = tempPath
 		s.mu.Unlock()
-		seg.refs.Store(0) // never published: drop the ref we just took before closing
-		seg.close()
 		return err
 	}
 	s.mu.Unlock()
 
 	if err := writeManifestBytes(s.dir, b); err != nil {
-		// The fsync failed: roll the in-memory manifest back to the pre-spill set so it stays
-		// consistent with the still-old on-disk MANIFEST and with s.segs (which we never touched).
 		s.mu.Lock()
-		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1]
+		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1] // roll back to the pre-install set
 		s.man.NextSegId--
+		seg.refs.Store(0)
+		os.Rename(finalPath, tempPath) // restore the temp file for the retry (MANIFEST never recorded it)
+		seg.path = tempPath
 		s.mu.Unlock()
-		seg.refs.Store(0) // never published: drop the ref we just took before closing
-		seg.close()
 		return err
 	}
 
 	s.mu.Lock()
 	s.segs = append(s.segs, seg)
-	s.publishSnapshotLocked() // P9: republish the live set (this spill's new segment) for readers
-	s.head[tableId] = newHeadTable()
+	sortSegmentsById(s.segs) // the new id is the highest, so this is O(n) tail-insert — keep oldest->newest
+	s.publishSnapshotLocked() // PUBLISH the new segment BEFORE removing the spilling entry (the doc is in
+	s.removeSpillingLocked(e) // both tiers for an instant, never in neither — the forbidden direction)
+	s.spillInFlight = false
+	s.clearBlockProducerLocked()
+	next := s.findOverCapHeadLocked() // re-check ALL tables (one-in-flight is store-wide)
 	s.mu.Unlock()
 
-	// Background merger (design §6, P8/P9): a new L0 segment may push a level to >= Fanout, or push the
-	// bottom level's dead fraction over the covering threshold. When AutoMerge is on, raise a
-	// NON-BLOCKING trigger on the background merge goroutine (concurrency.go). spill runs ON the worker,
-	// so it MUST NOT send a task to its own queue (s.q.AddFunc would block-send and self-deadlock once
-	// the queue fills — the worker is the only consumer). triggerMerge just flips a flag/channel; the
-	// merge goroutine drives the actual passes back onto the worker via RunFunc.
+	if next != nil {
+		s.dispatchSpill(next)
+	}
 	s.triggerMerge(false)
+	return nil
+}
+
+// giveUpSpill abandons a detached head after the install retries are exhausted (a persistently-failing
+// disk). MUST run on the worker. The head's data is dropped (crash-volatile — indexer replay recovers
+// it), its temp file removed, the in-flight + gate state cleared + broadcast, and any over-cap head
+// re-dispatched so the producer is never wedged. Mirrors a successful install's liveness tail.
+func (s *Store) giveUpSpill(e *spillEntry, res spillResult) error {
+	res.seg.refs.Store(0)
+	res.seg.close()
+	os.Remove(res.seg.path) // the temp file (rename never succeeded durably)
+
+	s.mu.Lock()
+	s.removeSpillingLocked(e)
+	s.spillInFlight = false
+	s.clearBlockProducerLocked()
+	next := s.findOverCapHeadLocked()
+	s.mu.Unlock()
+
+	if next != nil {
+		s.dispatchSpill(next)
+	}
+	return nil
+}
+
+// removeSpillingLocked removes entry e from s.spilling (caller holds s.mu.Lock). Order within the slice
+// is preserved (newest last) so the read tiers stay correctly ordered for the OTHER in-flight entries —
+// there is at most one in v5, but the removal is general.
+func (s *Store) removeSpillingLocked(e *spillEntry) {
+	for i, x := range s.spilling {
+		if x == e {
+			s.spilling = append(s.spilling[:i], s.spilling[i+1:]...)
+			return
+		}
+	}
+}
+
+// clearBlockProducerLocked clears the producer gate and wakes every parked producer (caller holds
+// s.mu.Lock; spillCond.L == &s.mu). Broadcast (not Signal): Broadcast wakes all, and each re-checks the
+// for-loop condition — the install relieved exactly one head's worth, so a still-over-cap producer
+// re-parks, but a producer whose head is now under cap proceeds. A no-op if the gate was not set.
+func (s *Store) clearBlockProducerLocked() {
+	if s.blockProducer {
+		s.blockProducer = false
+	}
+	s.spillCond.Broadcast() // safe to broadcast unconditionally; harmless if no producer is parked
+}
+
+// findOverCapHeadLocked scans ALL tables for a head at/over CapBytes and, if found, detaches it for the
+// next off-worker spill, returning the entry to dispatch (or nil). Caller holds s.mu.Lock and has just
+// cleared spillInFlight, so this re-detach respects one-in-flight. LOAD-BEARING for liveness: a head
+// that went over-cap while a spill was in flight (possibly on a DIFFERENT table) is detached here, so
+// the producer parked at the gate is released and the build converges.
+func (s *Store) findOverCapHeadLocked() *spillEntry {
+	if s.spillInFlight {
+		return nil // already re-detached (defensive; install/give-up clear it before calling)
+	}
+	for tid, h := range s.head {
+		if h != nil && h.bytes >= int64(s.opts.CapBytes) {
+			return s.detachHeadLocked(tid)
+		}
+	}
 	return nil
 }
 

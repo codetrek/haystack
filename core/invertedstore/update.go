@@ -43,6 +43,21 @@ var (
 	_ invertedindex.Batch   = (*Batch)(nil)
 )
 
+// waitProducerGate blocks the calling PRODUCER goroutine while the worker has engaged the F v5
+// producer gate (over-cap with a spill already in flight). It loops `for blockProducer` (NOT an `if`:
+// Broadcast wakes all parked producers but each install relieves only one head's worth, so a producer
+// must re-check) on spillCond, whose L is s.mu — so the flag is read under the same lock the worker
+// sets/clears it under, closing the lost-wakeup window. It MUST be called BEFORE q.AddFunc: a parked
+// producer holds ZERO queue slots, which is what keeps the gate deadlock-free (the worker can always
+// drain the in-flight install RunFunc and clear the gate). The Wait releases + reacquires s.mu.
+func (s *Store) waitProducerGate() {
+	s.mu.Lock()
+	for s.blockProducer {
+		s.spillCond.Wait()
+	}
+	s.mu.Unlock()
+}
+
 // applyGate, when non-nil, is invoked at the START of an enqueued apply closure (on the worker),
 // BEFORE applyBatch runs — while the producer's acquired budget is still held. Test-only (E): a test
 // installs one that blocks so applies cannot drain, then observes the in-flight postings pile up at
@@ -89,6 +104,7 @@ func (b *Batch) Commit() {
 		postings += int64(len(op.keywords))
 	}
 	got := s.budget.acquire(postings) // producer backpressure (spec §7 E)
+	s.waitProducerGate()              // F v5 producer gate (over-cap + spill-in-flight); before q.AddFunc
 	s.q.AddFunc(func() error {
 		defer s.budget.release(got)
 		if applyGate != nil {
@@ -107,6 +123,7 @@ func (s *Store) Update(tableId int, docid int64, keywords []string) {
 	}
 	op := updateOp{tableId: tableId, docid: docid, keywords: kw}
 	got := s.budget.acquire(int64(len(kw))) // producer backpressure (spec §7 E)
+	s.waitProducerGate()                    // F v5 producer gate (over-cap + spill-in-flight); before q.AddFunc
 	s.q.AddFunc(func() error {
 		defer s.budget.release(got)
 		if applyGate != nil {
@@ -221,16 +238,25 @@ func (s *Store) applyOneOp(op updateOp, old []string) error {
 		s.liveByTable[op.tableId] += int64(len(newSet)) - oldN
 	}
 	over := h.bytes >= int64(s.opts.CapBytes)
+
+	// Over-cap handling (F v5): the spill encode runs OFF the worker. If no spill is in flight, detach
+	// this head NOW (under the SAME lock — the over-cap read + spillInFlight read + detach are one
+	// section, so two applies can never both detach) and dispatch its encode after dropping the lock.
+	// If a spill IS in flight, the worker must NOT detach a second one (one-in-flight); instead it sets
+	// the producer gate so Update/Commit park BEFORE enqueuing more applies — the live head keeps the
+	// data, bounded by that backpressure, until the in-flight install re-dispatches it.
+	var toDispatch *spillEntry
+	if over {
+		if !s.spillInFlight {
+			toDispatch = s.detachHeadLocked(op.tableId)
+		} else {
+			s.blockProducer = true // the producer parks until installSpill clears + broadcasts
+		}
+	}
 	s.mu.Unlock()
 
-	// 2. Spill if the head crossed its byte cap. The head + segment set are worker-owned and this
-	//    apply runs to completion before the next task, so a mid-batch spill is safe; the spilled
-	//    doc's later in-batch ops still diff against inBatch (their head re-posts land in the fresh
-	//    head). spill resets the table's head.
-	if over {
-		if err := s.spill(op.tableId); err != nil {
-			return err
-		}
+	if toDispatch != nil {
+		s.dispatchSpill(toDispatch)
 	}
 	return nil
 }

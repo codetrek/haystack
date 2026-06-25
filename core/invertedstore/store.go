@@ -30,6 +30,12 @@ type Options struct {
 	// budget frees; applyBatch releases via the enqueued closure's defer. 0 ⇒ default 4 × CapBytes.
 	MaxInflightPostings int
 
+	// MaxInstallRetries bounds installSpill's retry loop on a persistently-failing MANIFEST write (F
+	// v5): after this many failed attempts the dispatch gives up, drops the detached head (treating it
+	// as crash-volatile), clears spillInFlight/blockProducer, and re-dispatches, so a dead disk cannot
+	// wedge the producer forever. 0 ⇒ default 5.
+	MaxInstallRetries int
+
 	// AutoMerge enables the background tiered merger (P8): after each spill the worker enqueues a
 	// maybeMerge task (tiered fanout + covering-merge trigger). It defaults OFF so a test that asserts
 	// an exact segment count is not surprised by a merge collapsing segments; production wiring (and
@@ -72,6 +78,9 @@ func (o Options) withDefaults() Options {
 	if o.MaxInflightPostings <= 0 {
 		o.MaxInflightPostings = 4 * o.CapBytes // CapBytes already defaulted above
 	}
+	if o.MaxInstallRetries <= 0 {
+		o.MaxInstallRetries = 5
+	}
 	if o.BlockTarget <= 0 {
 		o.BlockTarget = 32 << 10
 	}
@@ -105,6 +114,22 @@ type Store struct {
 	// a tier between the live head and the sealed segments (B1). Published at detach + removed at
 	// install, both under s.mu.Lock. Read (copied) under s.mu.RLock. Never refcounted/pooled.
 	spilling []*spillEntry
+
+	// F v5 off-worker spill state (all guarded by s.mu):
+	//   spillInFlight  — true between a detach and its install: at most ONE spill is in flight, so a
+	//                    same-table spill can never install out of order (kills the v4 ordering defect).
+	//   blockProducer  — the worker-controlled producer gate: set on over-cap-while-spillInFlight,
+	//                    cleared at install (or give-up). Update/Commit park on spillCond while it is set,
+	//                    BEFORE q.AddFunc (a parked producer holds zero queue slots → deadlock-free).
+	//   spillCond      — sync.Cond over &s.mu; install Broadcasts it after clearing blockProducer.
+	//   spillTempCtr   — monotonic temp-file counter (seg-tmp-<n>.dat); the seg id is assigned at install.
+	//   spillWG        — tracks in-flight encode/install goroutines so CloseAndWait can drain them OFF
+	//                    the worker (Wait() on the caller goroutine, never inside a worker RunFunc).
+	spillInFlight bool
+	blockProducer bool
+	spillCond     *sync.Cond
+	spillTempCtr  uint64
+	spillWG       sync.WaitGroup
 
 	// liveByTable[tableId] = distinct live (keyword,docid) pairs in that table = Σ over the table's
 	// live docs of their distinct keyword count. The `live` term of the covering-merge trigger
@@ -169,8 +194,22 @@ func (s *Store) noteForwardProbe() {
 // Matches design §5's layout (seg-000123.dat).
 func segFileName(id uint64) string { return fmt.Sprintf("seg-%06d.dat", id) }
 
+// segTempFileName is the on-disk name for an in-flight off-worker spill encode (F v5): the encode
+// writes seg-tmp-<n>.dat (n from the private spillTempCtr) and install atomically renames it to
+// seg-<id>.dat (id assigned at install). A crash mid-encode leaves the temp file an orphan that G
+// (sweepOrphanSegments) removes on the next Open.
+func segTempFileName(n uint64) string { return fmt.Sprintf("seg-tmp-%06d.dat", n) }
+
+// isSegTempFileName reports whether name is an off-worker spill temp file (seg-tmp-*.dat, F v5). Such
+// a file is NEVER live in the MANIFEST (install renames it before recording the segMeta), so Open
+// always sweeps it as an orphan.
+func isSegTempFileName(name string) bool {
+	return strings.HasPrefix(name, "seg-tmp-") && strings.HasSuffix(name, ".dat")
+}
+
 // parseSegFileName extracts the seal-sequence id from a "seg-%06d.dat" name; ok=false for any other
-// name, so MANIFEST/MANIFEST.tmp and unrelated files are left alone.
+// name, so MANIFEST/MANIFEST.tmp, unrelated files, and seg-tmp-*.dat are left to the caller's own
+// handling (sweepOrphanSegments removes a temp file explicitly via isSegTempFileName).
 func parseSegFileName(name string) (uint64, bool) {
 	if !strings.HasPrefix(name, "seg-") || !strings.HasSuffix(name, ".dat") {
 		return 0, false
@@ -184,8 +223,9 @@ func parseSegFileName(name string) (uint64, bool) {
 
 // sweepOrphanSegments removes any seg-*.dat in the store dir whose id is NOT live in the MANIFEST
 // (item G) — an orphan left when a crash hit between reserving an outId + writing the segment file
-// and installing the MANIFEST (off-worker merge A / spill F). Makes the merge.go "GC'd on Open" claim
-// true. Open-only (single-threaded, exclusive owner).
+// and installing the MANIFEST (off-worker merge A / spill F). It also removes any seg-tmp-*.dat (an
+// off-worker spill encode F v5 crashed before install renamed it). Makes the merge.go "GC'd on Open"
+// claim true. Open-only (single-threaded, exclusive owner).
 func (s *Store) sweepOrphanSegments() error {
 	live := make(map[uint64]bool, len(s.man.Segments))
 	for _, sm := range s.man.Segments {
@@ -197,6 +237,13 @@ func (s *Store) sweepOrphanSegments() error {
 	}
 	for _, e := range ents {
 		if e.IsDir() {
+			continue
+		}
+		if isSegTempFileName(e.Name()) {
+			// An off-worker spill temp file is never live in the MANIFEST: remove it (F v5 crash orphan).
+			if err := os.Remove(filepath.Join(s.dir, e.Name())); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 			continue
 		}
 		id, ok := parseSegFileName(e.Name())
@@ -236,6 +283,7 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 	}
 	s.dictCache = newChunkLRU(int64(s.opts.ChunkCacheBytes))
 	s.budget = newPostingBudget(int64(s.opts.MaxInflightPostings))
+	s.spillCond = sync.NewCond(&s.mu) // F v5 producer gate; L is s.mu so the flag is checked under it
 	if err := s.sweepOrphanSegments(); err != nil {
 		return nil, err
 	}
@@ -276,6 +324,22 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 // the on-disk MANIFEST and must survive for the next Open. Callers should still quiesce writers (Close
 // is terminal), but a racing reader is handled correctly rather than crashing.
 func (s *Store) CloseAndWait() {
+	// F v5 drain (spec §7a "CloseAndWait"): FIRST clear the producer gate + broadcast so any producer
+	// parked in waitProducerGate is released and can finish/observe the close — broadcast BEFORE we wait
+	// on the in-flight encode, or a producer stuck in spillCond.Wait() can never be quiesced. Callers
+	// quiesce their own producers (Close is terminal); this only unblocks the gate.
+	s.mu.Lock()
+	s.blockProducer = false
+	s.spillCond.Broadcast()
+	s.mu.Unlock()
+	// Drain the in-flight off-worker encode + its install on THIS caller goroutine (NEVER inside a
+	// worker RunFunc — that deadlocks against the install's own RunFunc, the v4 regression). The install
+	// runs first (it is a worker RunFunc the dispatch goroutine drives), preserving seal order; a
+	// re-dispatch chained from that install is also tracked by spillWG, so Wait() covers the whole chain.
+	s.spillWG.Wait()
+
+	// THEN flush any remaining live head synchronously on the worker (a clean close loses no buffered
+	// write). The in-flight spill already installed above, so this only seals heads that never over-capped.
 	s.q.RunFunc(func() error {
 		s.mu.Lock()
 		tables := make([]int, 0, len(s.head))

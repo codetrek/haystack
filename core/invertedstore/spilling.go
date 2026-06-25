@@ -12,9 +12,15 @@ package invertedstore
 type spillEntry struct {
 	tableId            int
 	head               *headTable
-	outId              uint64 // the segment id reserved at detach (the file the encode writes)
+	tempN              uint64 // temp-file counter; the seg id is assigned at INSTALL (v5 install-time id)
 	minDocid, maxDocid int64  // forward-record docid span (the spilling-head analog of B; Task 7C)
 }
+
+// encodeSpillBlock, when non-nil, is invoked at the START of encodeSpill (the off-worker encode of a
+// detached head — item F v5). Test-only: the B1 gate installs one that blocks on a channel so the
+// detached head STAYS in s.spilling across a same-doc re-post, proving forwardKeywords reads the
+// detached head via the spilling tier (the silent-corruption fix). nil in production.
+var encodeSpillBlock func()
 
 // headForwardLookup resolves docid's forward decision in ONE head: found=false ⇒ this head does not
 // mention the docid (keep looking older). Words are COPIED so the caller may use them after dropping

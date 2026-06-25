@@ -35,8 +35,13 @@ func (s *Store) applyForTest(tableId int, docid int64, keywords []string) {
 	})
 }
 
-// spillForTest forces a spill of the table's head on the worker (synchronous).
+// spillForTest forces a spill of the table's head on the worker (synchronous). It FIRST drains any
+// in-flight off-worker spill (F v5): a tiny-CapBytes test that auto-detached the head via the real
+// Update path must observe the detached head's segment installed before (and instead of double-sealing
+// it) — so the synchronous spillForTest reconciles with the async path and stays deterministic. Then it
+// synchronously spills whatever remains in the (post-detach) head.
 func (s *Store) spillForTest(tableId int) {
+	s.WaitSpillsForTest() // let any in-flight async detach finish installing first
 	s.q.RunFunc(func() error { return s.spill(tableId) })
 }
 
@@ -79,6 +84,7 @@ func (s *Store) RecomputeLiveForTest() {
 // acquires a ref, retireKeepFile each segment) but drops the head map instead of flushing it, leaving
 // the store in the design §9 crash-consistency state: sealed segments durable, head volatile/lost.
 func (s *Store) dropHeadCloseSegmentsForTest() {
+	s.spillWG.Wait()  // F v5: let any in-flight off-worker encode finish (it may still be writing a file)
 	s.stopMergeLoop() // drain + stop the background merger before any fd is closed
 	s.mu.Lock()
 	s.head = map[int]*headTable{} // the crash: the volatile head is simply gone
@@ -173,8 +179,9 @@ func (s *Store) segRefsByIdForTest(id uint64) int64 {
 }
 
 // injectSpillingHeadForTest detaches tableId's CURRENT head into s.spilling WITHOUT encoding it (the
-// head stays readable as a spilling tier), reserving its outId — a test stand-in for 7B's real detach,
-// so 7A's read tiers can be tested before the async encode exists. Runs on the worker.
+// head stays readable as a spilling tier) — a test stand-in for 7B's real detach, so 7A's read tiers
+// can be tested without driving the async encode. The seg id is assigned at install (v5), so this
+// reserves only a temp-file counter. Runs on the worker.
 func (s *Store) injectSpillingHeadForTest(tableId int) {
 	s.q.RunFunc(func() error {
 		s.mu.Lock()
@@ -185,9 +192,8 @@ func (s *Store) injectSpillingHeadForTest(tableId int) {
 		}
 		s.head[tableId] = newHeadTable()
 		minD, maxD := headForwardRange(h)
-		outId := s.man.NextSegId
-		s.man.NextSegId++
-		s.spilling = append(s.spilling, &spillEntry{tableId: tableId, head: h, outId: outId,
+		s.spillTempCtr++
+		s.spilling = append(s.spilling, &spillEntry{tableId: tableId, head: h, tempN: s.spillTempCtr,
 			minDocid: minD, maxDocid: maxD})
 		return nil
 	})
@@ -198,4 +204,28 @@ func (s *Store) SpillingLenForTest() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.spilling)
+}
+
+// SpillInFlightForTest reports whether a detached head is currently being encoded off-worker (F v5).
+func (s *Store) SpillInFlightForTest() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.spillInFlight
+}
+
+// WaitSpillsForTest blocks until every in-flight off-worker encode/install goroutine has finished
+// (F v5). A test that drives the async detach MUST drain these before its t.TempDir() is removed, or a
+// still-running encode panics writing into the deleted dir. Drives the worker too so a re-dispatched
+// install lands. Idempotent.
+func (s *Store) WaitSpillsForTest() {
+	s.spillWG.Wait()
+	s.q.RunFunc(func() error { return nil }) // flush any install RunFunc the last encode enqueued
+	s.spillWG.Wait()                         // and any spill that install re-dispatched
+}
+
+// BlockProducerForTest reports whether the producer gate is currently engaged (F v5).
+func (s *Store) BlockProducerForTest() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.blockProducer
 }
