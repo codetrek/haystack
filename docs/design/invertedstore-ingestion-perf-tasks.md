@@ -64,7 +64,9 @@ prior task's `-race` (where applicable) and `go-cov` gates are green.
 | `core/invertedstore/spilling.go` (NEW: spillEntry, read tier) | | | | | | | | ● |
 | `core/invertedstore/export_test.go` (test hooks) | ● | ● | ● | ● | ● | ● | ● | ● |
 
-● = production change · △ = deletion only (`writeTermDict` removed) · `maybeMerge*` = `mergeOneLevel`/`coveringMerge`/`reclaimOrphanTables`/`runScheduledMerge`.
+● = production change · △ = deletion only (`writeTermDict` removed) · merge.go's `maybeMerge*` work =
+`mergeOneLevel`/`coveringMerge`/`reclaimOrphanTables` KEPT; `maybeMerge`/`maybeCoveringMerge` DELETED
+in A; `select{Tiered,Covering}MergePlan`/`runMergePlan`/`segsByIdsLocked` ADDED.
 
 ---
 
@@ -1288,8 +1290,10 @@ func TestApplyFastPath_WarmEditTombstonesDroppedKeyword(t *testing.T) {
 
 This case already works (the multi-op loop handles n=1). Run it to confirm GREEN, then refactor to the
 fast path and keep it green (a behavior-preserving extraction). In `update.go`, extract the per-op
-body into `applyOneOp(op updateOp, old []string) (over bool, err error)` returning whether the head
-crossed its cap, and split `applyBatch`:
+apply body (the `s.mu.Lock`→head→liveByTable-delta→`s.mu.Unlock`→spill-on-`over` block) into
+`applyOneOp(op updateOp, old []string) error` — the spill stays INSIDE, so it returns just the spill
+error (NOT `(over bool, err error)`). The `inBatch`/`seen` last-wins bookkeeping is NOT part of
+`applyOneOp` — it closes over loop state and stays in the multi-op loop. Split `applyBatch`:
 
 ```go
 func (s *Store) applyBatch(ops []updateOp) error {
@@ -1330,8 +1334,10 @@ func (s *Store) applyBatch(ops []updateOp) error {
 }
 ```
 
-`applyOneOp` is the existing lock→head→liveByTable-delta→unlock→spill block (lines 122–174), verbatim,
-returning `err` from the spill. (No behavior change; the spill-on-`over` stays inside it.)
+`applyOneOp` is the per-op apply block from today's `applyBatch` (update.go:122–174) **MINUS the
+loop-local bookkeeping** — i.e. lines 122–141 + 143–163 + 165–174, EXCLUDING `inBatch[key]=nil` (142),
+`inBatch[key]=op.keywords` (160), and `seen[key]=true` (164), which stay in the multi-op loop. It
+returns the spill error (the spill-on-`over` stays inside it). No behavior change.
 
 **Feature-taken test (cross-review R2 MAJOR-2 — the behavior test above passes even WITHOUT the fast
 path, so it does not cover the optimization).** Add `var applyFastPathTaken func()` (segment/update.go,
@@ -1993,7 +1999,7 @@ func (s *Store) dispatchSpill(tableId int) bool {
 		// read-correct in s.spilling until it installs, so a failed install must NOT silently strand
 		// it (that would leak the head + answer reads from a never-sealed tier forever). Release the
 		// slot ONLY after a SUCCESSFUL install; on give-up, KEEP the slot held (bounded backpressure,
-		// no leak past the bound) — CloseAndWait drains remaining s.spilling entries.
+		// no leak past the bound). A give-up entry is then CRASH-EQUIVALENT volatile (see below).
 		for attempt := 0; attempt < s.opts.MaxInstallRetries; attempt++ {
 			if err := s.q.RunFunc(func() error { return s.installSpill(e, seg, sm) }); err == nil {
 				<-s.spillSem // success: release the slot
@@ -2008,6 +2014,14 @@ func (s *Store) dispatchSpill(tableId int) bool {
 	return true
 }
 ```
+
+> **Give-up durability (R3 MAJOR):** a give-up entry is **crash-equivalent volatile** — it only
+> happens under PERSISTENT MANIFEST-write/fsync failure (the disk is dying), and on that path the data
+> is lost exactly like an unspilled head on a crash (indexer replay recovers it). `CloseAndWait` does
+> NOT re-drain `s.spilling` (it flushes only `s.head`); on a HEALTHY disk every in-flight encode
+> retry-succeeds and removes itself from `s.spilling` before `spillWG.Wait()` returns, so a clean Close
+> IS durable — the clean-Close drain test (7E) runs the healthy (blocked-then-released, install
+> SUCCEEDS) path. Do NOT claim CloseAndWait drains a give-up entry; it is reclassified as crash loss.
 
 > **`installSpill` atomicity (R2 MAJOR-1) — pin the publish-then-remove ordering:** under ONE final
 > `s.mu.Lock()`, do `s.segs = append(...)` → `publishSnapshotLocked()` → remove `e` from `s.spilling`,
@@ -2040,10 +2054,25 @@ func (s *Store) dispatchSpill(tableId int) bool {
 	}
 ```
 
-`store.go`: add `Options.MaxInflightSpills` (default 3); `Store.spillSem chan struct{}` (make it
-`make(chan struct{}, MaxInflightSpills)` in Open); `Store.spillWG sync.WaitGroup`. No long-lived pool
-goroutines — each dispatch spawns one (bounded by the semaphore). `CloseAndWait`: after the final head
-flush and BEFORE closing segment fds, `s.spillWG.Wait()` so every in-flight encode installs (durable).
+`store.go`: add `Options.MaxInflightSpills` (default 3) and `Options.MaxInstallRetries` (default 5) —
+both MUST be defaulted in `withDefaults` (a zero `MaxInstallRetries` makes the retry loop `for attempt
+< 0` a NO-OP → instant strand):
+
+```go
+	if o.MaxInflightSpills <= 0 {
+		o.MaxInflightSpills = 3
+	}
+	if o.MaxInstallRetries <= 0 {
+		o.MaxInstallRetries = 5
+	}
+```
+
+Add `Store.spillSem chan struct{}` (`make(chan struct{}, MaxInflightSpills)` in Open); `Store.spillWG
+sync.WaitGroup`; and a package const `const installBackoff = 50 * time.Millisecond`. No long-lived pool
+goroutines — each dispatch spawns one (bounded by the semaphore). **`dispatchSpill` (with
+`time.Sleep(installBackoff)`) lands in `head.go`, which must add `"time"` to its imports.**
+`CloseAndWait`: after the final head flush and BEFORE closing segment fds, `s.spillWG.Wait()` so every
+in-flight encode installs (durable on a healthy disk) — see the exact sequence in Task 7D.
 
 > **`spillForTest` stays synchronous** — it already runs `s.spill(tableId)` via `RunFunc`, which now
 > uses the inline `spill` (detach+encode+install on the worker). So every existing test that calls
@@ -2375,13 +2404,38 @@ gate deterministically forces the async path at `CapBytes:64` (head bytes ≈65 
 covering-hook has no double-count (disjoint sync vs off-worker paths); A's refcount lifecycle balances
 on success + both failure rollbacks; F0's genuine red; all R1 idxbench/helper/snippet identifiers.
 
+## Cross-review resolutions (R3 — re-review of the R2 fixes)
+
+R2's fixes introduced new code, so they were re-reviewed (2 reviewers). All R2 concurrency fixes
+(CloseAndWait off-worker Wait, publish-then-remove ordering, maybeMerge deletion, recursive-RLock,
+three-tier newest-wins) were CONFIRMED-CORRECT. Two MAJORs in the R2 deltas, fixed inline:
+- **C.1 `applyOneOp` signature contradiction** — prose said `(over bool, err error)` but both call
+  sites need `error`-only, and "lines 122–174 verbatim" wrongly included the `inBatch`/`seen` loop
+  bookkeeping. Corrected to `applyOneOp(...) error` (spill inside) with the bookkeeping explicitly left
+  in the multi-op loop.
+- **Give-up durability claim false** — `CloseAndWait` flushes only `s.head`, never `s.spilling`, so a
+  persistently-failing install's stranded entry is NOT "drained by Close". Reclassified as
+  crash-equivalent volatile loss (disk-failure-only; healthy disk retry-succeeds before `Wait()`
+  returns, so clean Close IS durable). Removed the false claim.
+
+MINORs fixed: `MaxInflightSpills`/`MaxInstallRetries` now have concrete `withDefaults` (a zero
+`MaxInstallRetries` would no-op the retry → instant strand); `installBackoff` const value + the `"time"`
+import in `head.go` pinned; the file-map `maybeMerge*` footnote corrected.
+
+**Confirmed-correct (no change):** the retry-loop slot/WG balance (success releases + Done; give-up
+holds slot + Done, bounded ≤ MaxInflightSpills heads); the CloseAndWait sequence is deadlock-free
+(worker alive + draining during the caller-side Wait; queue stopped by the caller only after Close
+returns); `installSpill` pointer-identity removal under the same lock as both installs (serialized);
+`maybeMerge`/`maybeCoveringMerge` have exactly one caller each and `deadFraction` stays live via
+`DeadFractionForTest`; `TestApplyFastPath_TakenForOneOpNotMultiOp` + the chainable `NewBatch().Update().Update().Commit()`
+compile; the ForwardDocids tier code matches reconcile.go's real structure.
+
 ## Next SDD stage
 
-The breakdown has been through two multi-agent cross-review rounds (R1, R2). R2 found that the R1
-deadlock fix migrated the cycle into `CloseAndWait` + an install-failure stranding leak + dead-code
-cov-gate breaks — all now fixed inline. Because R2's fixes introduce NEW code (the install retry loop,
-the explicit Close sequence, the `maybeMerge` deletion, the fast-path hook), a **round R3 must
-re-review the R2 changes** before implementation (AGENTS.md Principle 0: re-review until a full round
-returns zero Blocking/Major). Implementation order remains **F0 → head-fix → B → E → A →
+The breakdown has been through three multi-agent cross-review rounds (R1, R2, R3). R3 found two
+MAJORs in the R2 deltas (the `applyOneOp` signature contradiction + a false give-up durability claim),
+both fixed inline — these were textual corrections to match already-verified-correct code, not new
+logic. A short **R4 must confirm the R3 corrections are clean** (AGENTS.md Principle 0: re-review until
+a full round returns zero Blocking/Major). Implementation order remains **F0 → head-fix → B → E → A →
 C.1/C.2/C.3 → G → F**; F gated hardest on the B1 corruption test + the `-race`
 atomicity/bound/queue-saturation/Close-drain stress.
