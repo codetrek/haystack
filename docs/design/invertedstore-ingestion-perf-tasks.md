@@ -87,43 +87,66 @@ keywords in exact ordinal order — identical to the re-read.
 **Files:**
 - Modify: `core/invertedstore/segment.go` — `segWriter` struct (lines 52–64), `addEntry`
   (109–128), `finish` (149–178); **delete** `writeTermDict` (180–229).
+- Modify: `core/invertedstore/codec.go` — add the `onDecompress` test observer at the top of
+  `decompress` (the persistent no-re-read guard; nil in prod).
 - Test: `core/invertedstore/segment_inline_dict_test.go` (new).
 
-- [ ] **Step 1 — Write the failing test: a genuine behavioral red (no block re-read) + byte-identity + round-trip.**
+- [ ] **Step 1 — Write the failing test: a genuine, PERSISTENT behavioral red + byte-identity + round-trip.**
 
-The genuine red is **"`finish` performs zero data-block re-reads"** — true only after inlining. Add a
-test-only observer fired on each re-read in the CURRENT `writeTermDict`, so the test fails NOW
-(re-reads > 0) and passes after (inline ⇒ 0). Pair it with the independent byte-identity oracle +
-round-trip as the correctness net.
+> **Why not a re-read counter (R5 — the workflow caught this):** a hook fired *inside* `writeTermDict`
+> is a TAUTOLOGY — once `writeTermDict` is deleted the hook has no call site, so "rereads==0" is true
+> by construction and cannot catch a re-introduced re-read. And because F0 is byte-identical, a byte
+> oracle passes against BOTH old and new code, so it does not discriminate inline from re-read either.
+> The genuine, PERSISTENT discriminator is **"`finish()` decompresses ZERO data blocks"**: the deleted
+> `writeTermDict` re-reads + `dataCodec.decompress`es every `[I]` block; the inline build decompresses
+> nothing; `openSegment` (called at the end of `finish`) reads only the footer + block index, no
+> data-block decompress. Hook `codec.decompress`, count during the `finish()` window, assert 0. This
+> fails NOW (old re-read decompresses N blocks) and passes after, AND survives the deletion (any future
+> re-read would decompress → caught).
 
-In `segment.go`, add (fired inside `writeTermDict`'s per-block loop, at the `mustReadAt(w.f, comp, …)`
-re-read — see Step 3; nil in prod):
+In `codec.go`, add the observer (fired at the top of `func (c *codec) decompress`; nil in prod):
 
 ```go
-// finishDictReread, when non-nil, is invoked once per data block that finish() RE-READS to build the
-// term-dict region. F0 eliminates the re-read, so after F0 it never fires. Test-only (F0 red→green).
-var finishDictReread func()
+// onDecompress, when non-nil, is invoked at the start of every codec.decompress. Test-only (F0): a
+// test counts data-block decompressions DURING finish() — the genuine red→green discriminator (old
+// writeTermDict re-reads+decompresses each [I] block; the inline build decompresses none) that a
+// byte-identical oracle cannot provide. nil in production (one predictable branch). A test that
+// installs it MUST NOT t.Parallel (same constraint as the merge observers).
+var onDecompress func()
 ```
 
-`core/invertedstore/segment_inline_dict_test.go`. The oracle re-derives the expected dict region
-*independently* by reading the finished segment's `[I]` data blocks (it does NOT call the production
-dict builder), then asserts the on-disk dict region `[dictOff,biOff)` byte-equals it. This pins the
-format without depending on the code under test.
+`core/invertedstore/segment_inline_dict_test.go` (new) — the genuine red + an independent byte-identity
+oracle + round-trip. The oracle re-derives the expected dict region by scanning the finished segment's
+`[I]` blocks (it shares no code with the inline builder), pinning the FORMAT; the decompress-count
+test pins the no-re-read BEHAVIOR.
 
 ```go
 package invertedstore
 
 import (
 	"bytes"
-	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
+var dictKws = []string{"alpha", "beta", "delta", "gamma", "kappa", "omega", "zeta"}
+
+// writeDictSegment builds a small term-id segment: the 7 sorted [I] keys + one [F] record (which must
+// NOT enter the dict). blockTarget 64 forces multiple data blocks so the old re-read decompresses >1.
+func writeDictSegment(path string, dictChunk int) *segWriter {
+	w := newSegWriter(path, newCodec(codecSnappy), newCodec(codecZstd), 64, 1<<16, 1<<10, true, dictChunk)
+	tid := uint32(7)
+	for _, kw := range dictKws {
+		w.addEntry(invertedKey(tid, kw), encodeInvertedValue([]int64{1}, nil))
+	}
+	w.addEntry(forwardKey(tid, 1), encodeForward([]uint32{0, 1, 2, 3, 4, 5, 6}))
+	return w
+}
+
 // rereadDictRegion independently reconstructs the expected term-dict region bytes by scanning the
-// segment's own [I] data blocks in order — the SAME bytes finish() must now produce inline. It is an
-// oracle: it shares no code with the inline builder under test.
+// segment's own [I] data blocks in order — the SAME bytes finish() must produce inline. Oracle: it
+// shares no code with the inline builder under test.
 func rereadDictRegion(t *testing.T, s *segment, dictChunk int, dict *codec) []byte {
 	t.Helper()
 	var region, chunk []byte
@@ -161,32 +184,32 @@ func rereadDictRegion(t *testing.T, s *segment, dictChunk int, dict *codec) []by
 	return region
 }
 
-func TestInlineDict_RegionByteIdenticalToReread(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "seg-000001.dat")
-	dataC, dictC := newCodec(codecSnappy), newCodec(codecZstd)
-	dictChunk := 64 // small, to force multiple chunks
-
-	var rereads int
-	finishDictReread = func() { rereads++ }
-	t.Cleanup(func() { finishDictReread = nil })
-
-	w := newSegWriter(path, dataC, dictC, 64, 1<<16, 1<<10, true, dictChunk)
-	// [I] keys in sorted order (tableId 7), then a [F] record (must not enter the dict).
-	tid := uint32(7)
-	kws := []string{"alpha", "beta", "delta", "gamma", "kappa", "omega", "zeta"}
-	for _, kw := range kws {
-		w.addEntry(invertedKey(tid, kw), encodeInvertedValue([]int64{1}, nil))
+// THE GENUINE RED: finish() must decompress zero data blocks (no re-read). Fails before F0 (the
+// re-read decompresses every [I] block), passes after, and persists (a re-introduced re-read decompresses).
+func TestInlineDict_FinishDecompressesNoDataBlocks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seg-000001.dat")
+	w := writeDictSegment(path, 8)
+	var decompresses int
+	onDecompress = func() { decompresses++ }
+	t.Cleanup(func() { onDecompress = nil })
+	seg := w.finish(path)
+	onDecompress = nil // stop before any read-path decompress
+	defer seg.close()
+	if decompresses != 0 {
+		t.Fatalf("finish() decompressed %d data blocks (re-read path); the inline dict build must decompress 0", decompresses)
 	}
-	w.addEntry(forwardKey(tid, 1), encodeForward([]uint32{0, 1, 2, 3, 4, 5, 6}))
+}
+
+// Correctness net: the on-disk dict region byte-equals the independent oracle, and every ordinal
+// round-trips to its keyword. (Passes against both old + new code — it pins format, not behavior.)
+func TestInlineDict_RegionByteIdenticalToReread(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seg-000001.dat")
+	dictChunk := 8
+	w := writeDictSegment(path, dictChunk)
 	seg := w.finish(path)
 	defer seg.close()
 
-	if rereads != 0 {
-		t.Fatalf("finish re-read %d data blocks to build the dict; F0 must build it inline (want 0)", rereads)
-	}
-
-	want := rereadDictRegion(t, seg, dictChunk, dictC)
+	want := rereadDictRegion(t, seg, dictChunk, seg.dictCodec)
 	got := make([]byte, seg.biOff-seg.dictOff)
 	f, err := os.Open(path)
 	if err != nil {
@@ -195,28 +218,25 @@ func TestInlineDict_RegionByteIdenticalToReread(t *testing.T) {
 	defer f.Close()
 	mustReadAt(f, got, seg.dictOff)
 	if !bytes.Equal(got, want) {
-		t.Fatalf("inline dict region (%d B) != reread oracle (%d B)", len(got), len(want))
+		t.Fatalf("inline dict region (%d B) != oracle (%d B)", len(got), len(want))
 	}
-	// Round-trip: every ordinal resolves to its keyword.
 	res := seg.resolveOrds(map[uint32]struct{}{0: {}, 1: {}, 2: {}, 3: {}, 4: {}, 5: {}, 6: {}})
-	for i, kw := range kws {
+	for i, kw := range dictKws {
 		if res[uint32(i)] != kw {
 			t.Fatalf("ord %d resolved %q, want %q", i, res[uint32(i)], kw)
 		}
 	}
-	_ = binary.BigEndian // keep import if trimmed
 }
 ```
 
-- [ ] **Step 2 — Run; verify it fails (genuine red).**
+- [ ] **Step 2 — Run; verify the genuine red fails.**
 
-First wire the observer into the CURRENT `writeTermDict` (Step 3 will delete it): add
-`if finishDictReread != nil { finishDictReread() }` just before the per-block `mustReadAt(w.f, comp, …)`
-re-read (segment.go ~209). Run:
-`cd core && GOWORK=off go test ./invertedstore/ -run TestInlineDict_RegionByteIdenticalToReread -v`
-Expected: **FAIL** at `rereads != 0` (today `finish` re-reads one block per `[I]` block to build the
-dict). The byte-identity + round-trip assertions pass either way (they're the safety net); the
-re-read count is the behavioral red.
+First wire the observer into `codec.go` `decompress` (it stays permanently — it is the persistent
+guard): `func (c *codec) decompress(src []byte, rawLen int) []byte { if onDecompress != nil { onDecompress() }; … }`.
+Run: `cd core && GOWORK=off go test ./invertedstore/ -run TestInlineDict_FinishDecompressesNoDataBlocks -v`
+Expected: **FAIL** at `decompresses != 0` — today `finish` → `writeTermDict` decompresses every `[I]`
+data block to re-extract the keywords. (`TestInlineDict_RegionByteIdenticalToReread` passes already —
+it is the format net, not the red.)
 
 - [ ] **Step 3 — Implement inline accumulation; delete `writeTermDict`.**
 
