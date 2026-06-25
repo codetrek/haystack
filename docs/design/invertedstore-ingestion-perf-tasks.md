@@ -1949,8 +1949,9 @@ pool/`maxInflightSpills`/ordered-install/merge-deferral are GONE.
 - `core/invertedstore/update.go`: `applyBatch` over-cap → if `!spillInFlight` `dispatchSpill` else set
   `blockProducer`; `Update`/`Commit` `for blockProducer { spillCond.Wait() }` (under `s.mu`) BEFORE
   `q.AddFunc`.
-- `core/invertedstore/spilling.go`: `spillEntry.outId` → `tempN` (install assigns the id now);
-  update `injectSpillingHeadForTest` (export_test.go) accordingly.
+- `core/invertedstore/spilling.go`: `spillEntry.outId` → `tempN` (install assigns the id now —
+  **rewrite the field's doc comment**, currently "the segment id reserved at detach", to "temp-file
+  counter; the seg id is assigned at install"); update `injectSpillingHeadForTest` (export_test.go).
 - `core/invertedstore/spill_offworker_test.go` (new) + `export_test.go` (`encodeSpillBlock` hook fired
   at the top of `encodeSpill`; accessors for `len(s.spilling)`/`spillInFlight`).
 
@@ -1979,8 +1980,9 @@ pool/`maxInflightSpills`/ordered-install/merge-deferral are GONE.
     timeout + the doc is durable on reopen.
   - **install-failure give-up bound:** force `writeManifestBytes` to fail persistently (MANIFEST.tmp as
     a dir) → bounded retries → give-up drops the entry, clears `spillInFlight`/`blockProducer`,
-    re-dispatches; no spin, no producer-stuck, `len(s.spilling)` bounded; data is crash-volatile
-    (indexer replay recovers, §9).
+    re-dispatches; no spin, no producer-stuck, `len(s.spilling)` bounded; data is crash-volatile on a
+    PERSISTENTLY-failing disk only (a healthy-disk retry succeeds before Close returns → clean Close is
+    durable; indexer replay recovers a true give-up loss, §9).
   - **crash:** detached head lost (volatile) + no `seg-tmp-*` orphan after reopen + consistent.
 - [ ] **Step 5 — Gates + commit.** `cd core && GOWORK=off go test -count=1 ./invertedstore/` green;
   `go test -race ./invertedstore/ -run 'TestSpillF|TestSpilling' -count=5` clean; `go vet` clean;
