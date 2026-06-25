@@ -49,6 +49,12 @@ var (
 // the budget ceiling (the producer must block once the budget fills). nil in production.
 var applyGate func()
 
+// applyFastPathTaken, when non-nil, fires in applyBatch's len(ops)==1 branch (the 1-op fast path).
+// Test-only (C.1): a test asserts the fast path is actually taken for a 1-op apply and NOT for a
+// multi-op batch — the behavior test alone passes even without the fast path, so this hook is the
+// only thing that covers the optimization being taken. nil in production.
+var applyFastPathTaken func()
+
 // NewBatch starts an empty Batch bound to this store. It returns the
 // invertedindex.Batch interface (not the concrete *Batch) so *Store satisfies
 // invertedindex.Indexer's NewBatch() Batch — the drop-in seam both
@@ -120,6 +126,18 @@ func (s *Store) Update(tableId int, docid int64, keywords []string) {
 // op's head writes through the dedup yet), so we track the in-batch state per (tableId,docid). This
 // also means a cold-build batch — every docid new, never re-touched — takes NO forward read at all.
 func (s *Store) applyBatch(ops []updateOp) error {
+	// 1-op fast path (C.1): the hot Update path is always 1-op, and a 1-op batch cannot repeat a
+	// docid, so the inBatch/seen last-wins bookkeeping is dead weight and `old` always comes from the
+	// forward read. Skip the maps entirely and apply the single op directly.
+	if len(ops) == 1 {
+		if applyFastPathTaken != nil {
+			applyFastPathTaken() // test-only (C.1): proves the 1-op fast path is actually taken
+		}
+		op := ops[0]
+		old, _ := s.forwardKeywords(op.tableId, op.docid)
+		return s.applyOneOp(op, old)
+	}
+
 	// inBatch[(tableId,docid)] is the doc's keyword set as left by its latest op SO FAR in this
 	// batch; a nil entry that EXISTS means the last op deleted it. Presence (ok) means "seen this
 	// batch", so a later op for the same docid diffs against it instead of re-reading the forward.
@@ -143,58 +161,75 @@ func (s *Store) applyBatch(ops []updateOp) error {
 			old = words
 		}
 
-		s.mu.Lock()
-		h := s.head[op.tableId]
-		if h == nil {
-			h = newHeadTable()
-			s.head[op.tableId] = h
+		if err := s.applyOneOp(op, old); err != nil {
+			return err
 		}
 
-		// liveByTable delta (spec §4.2.2): live pairs change by (new distinct − old distinct). `old`
-		// may carry caller duplicates (the forward stores raw keywords), so dedup it — len(old) is not
-		// the distinct count. Runs under s.mu.Lock so deadFraction's RLock read is race-free.
-		oldN := int64(distinctStrings(old))
-
+		seen[key] = true
 		if len(op.keywords) == 0 {
-			// DELETE: tombstone the docid in ALL its old keywords + write a forward-tombstone, so
-			// no older non-empty segment can win and resurrect the doc (design §6).
-			for _, w := range old {
-				h.tombstonePosting(w, op.docid)
-			}
-			h.deleteForward(op.docid)
-			s.liveByTable[op.tableId] -= oldN
 			inBatch[key] = nil
 		} else {
-			// FULL RE-POST (term-id, §8): add EVERY current keyword (addPosting dedups in the head),
-			// then a per-keyword tombstone for each removed keyword (in old, not in new).
-			newSet := make(map[string]struct{}, len(op.keywords))
-			for _, w := range op.keywords {
-				newSet[w] = struct{}{}
-			}
-			for w := range newSet {
-				h.addPosting(w, op.docid)
-			}
-			for _, w := range old {
-				if _, ok := newSet[w]; !ok {
-					h.tombstonePosting(w, op.docid)
-				}
-			}
-			h.setForward(op.docid, op.keywords)
-			s.liveByTable[op.tableId] += int64(len(newSet)) - oldN
 			inBatch[key] = op.keywords
 		}
-		over := h.bytes >= int64(s.opts.CapBytes)
-		s.mu.Unlock()
-		seen[key] = true
+	}
+	return nil
+}
 
-		// 2. Spill if the head crossed its byte cap. The head + segment set are worker-owned and
-		//    this apply runs to completion before the next task, so a mid-batch spill is safe; the
-		//    spilled doc's later in-batch ops still diff against inBatch (their head re-posts land in
-		//    the fresh head). spill resets the table's head.
-		if over {
-			if err := s.spill(op.tableId); err != nil {
-				return err
+// applyOneOp applies a single op against its already-resolved `old` keyword set: it takes s.mu,
+// re-posts the doc into the head (DELETE ⇒ tombstone old keywords + forward-tombstone; otherwise
+// FULL RE-POST + tombstone removed keywords), updates the liveByTable delta, then spills the table
+// outside the lock if the head crossed CapBytes. The in-batch last-wins bookkeeping (inBatch/seen)
+// is NOT here — it closes over multi-op loop state and stays in applyBatch's loop. Returns the spill
+// error (the spill-on-`over` stays inside).
+func (s *Store) applyOneOp(op updateOp, old []string) error {
+	s.mu.Lock()
+	h := s.head[op.tableId]
+	if h == nil {
+		h = newHeadTable()
+		s.head[op.tableId] = h
+	}
+
+	// liveByTable delta (spec §4.2.2): live pairs change by (new distinct − old distinct). `old`
+	// may carry caller duplicates (the forward stores raw keywords), so dedup it — len(old) is not
+	// the distinct count. Runs under s.mu.Lock so deadFraction's RLock read is race-free.
+	oldN := int64(distinctStrings(old))
+
+	if len(op.keywords) == 0 {
+		// DELETE: tombstone the docid in ALL its old keywords + write a forward-tombstone, so
+		// no older non-empty segment can win and resurrect the doc (design §6).
+		for _, w := range old {
+			h.tombstonePosting(w, op.docid)
+		}
+		h.deleteForward(op.docid)
+		s.liveByTable[op.tableId] -= oldN
+	} else {
+		// FULL RE-POST (term-id, §8): add EVERY current keyword (addPosting dedups in the head),
+		// then a per-keyword tombstone for each removed keyword (in old, not in new).
+		newSet := make(map[string]struct{}, len(op.keywords))
+		for _, w := range op.keywords {
+			newSet[w] = struct{}{}
+		}
+		for w := range newSet {
+			h.addPosting(w, op.docid)
+		}
+		for _, w := range old {
+			if _, ok := newSet[w]; !ok {
+				h.tombstonePosting(w, op.docid)
 			}
+		}
+		h.setForward(op.docid, op.keywords)
+		s.liveByTable[op.tableId] += int64(len(newSet)) - oldN
+	}
+	over := h.bytes >= int64(s.opts.CapBytes)
+	s.mu.Unlock()
+
+	// 2. Spill if the head crossed its byte cap. The head + segment set are worker-owned and this
+	//    apply runs to completion before the next task, so a mid-batch spill is safe; the spilled
+	//    doc's later in-batch ops still diff against inBatch (their head re-posts land in the fresh
+	//    head). spill resets the table's head.
+	if over {
+		if err := s.spill(op.tableId); err != nil {
+			return err
 		}
 	}
 	return nil
