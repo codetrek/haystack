@@ -43,6 +43,12 @@ var (
 	_ invertedindex.Batch   = (*Batch)(nil)
 )
 
+// applyGate, when non-nil, is invoked at the START of an enqueued apply closure (on the worker),
+// BEFORE applyBatch runs — while the producer's acquired budget is still held. Test-only (E): a test
+// installs one that blocks so applies cannot drain, then observes the in-flight postings pile up at
+// the budget ceiling (the producer must block once the budget fills). nil in production.
+var applyGate func()
+
 // NewBatch starts an empty Batch bound to this store. It returns the
 // invertedindex.Batch interface (not the concrete *Batch) so *Store satisfies
 // invertedindex.Indexer's NewBatch() Batch — the drop-in seam both
@@ -72,7 +78,18 @@ func (b *Batch) Commit() {
 	ops := b.ops
 	b.ops = nil // a committed batch is spent; don't let a later Commit re-apply
 	s := b.s
-	s.q.AddFunc(func() error { return s.applyBatch(ops) })
+	var postings int64
+	for _, op := range ops {
+		postings += int64(len(op.keywords))
+	}
+	got := s.budget.acquire(postings) // producer backpressure (spec §7 E)
+	s.q.AddFunc(func() error {
+		defer s.budget.release(got)
+		if applyGate != nil {
+			applyGate()
+		}
+		return s.applyBatch(ops)
+	})
 }
 
 // Update is the single-item Batch: it enqueues ONE async apply task for one doc. keywords is the
@@ -83,7 +100,14 @@ func (s *Store) Update(tableId int, docid int64, keywords []string) {
 		kw = append([]string(nil), keywords...)
 	}
 	op := updateOp{tableId: tableId, docid: docid, keywords: kw}
-	s.q.AddFunc(func() error { return s.applyBatch([]updateOp{op}) })
+	got := s.budget.acquire(int64(len(kw))) // producer backpressure (spec §7 E)
+	s.q.AddFunc(func() error {
+		defer s.budget.release(got)
+		if applyGate != nil {
+			applyGate()
+		}
+		return s.applyBatch([]updateOp{op})
+	})
 }
 
 // applyBatch applies ops in order on the worker. For each op it diffs the doc's CURRENT keywords

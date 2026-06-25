@@ -23,6 +23,11 @@ type Options struct {
 	ChunkCacheBytes int  // Store-level dict-chunk LRU budget; default 32 MiB
 	InlineThreshold int  // value <= this is inline, else external; default 1 KiB
 
+	// MaxInflightPostings bounds the postings (Σ keyword copies) buffered between the producer and the
+	// worker — the memory bound (spec §7, item E). The producer blocks in Update/Commit until the
+	// budget frees; applyBatch releases via the enqueued closure's defer. 0 ⇒ default 4 × CapBytes.
+	MaxInflightPostings int
+
 	// AutoMerge enables the background tiered merger (P8): after each spill the worker enqueues a
 	// maybeMerge task (tiered fanout + covering-merge trigger). It defaults OFF so a test that asserts
 	// an exact segment count is not surprised by a merge collapsing segments; production wiring (and
@@ -61,6 +66,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.InlineThreshold <= 0 {
 		o.InlineThreshold = 1 << 10
+	}
+	if o.MaxInflightPostings <= 0 {
+		o.MaxInflightPostings = 4 * o.CapBytes // CapBytes already defaulted above
 	}
 	if o.BlockTarget <= 0 {
 		o.BlockTarget = 32 << 10
@@ -121,6 +129,10 @@ type Store struct {
 	// Search never touches it — and is purged of a segment's chunks when a merge retires it.
 	dictCache *chunkLRU
 
+	// budget bounds the in-flight postings buffered between the producer and the worker (spec §7, E).
+	// Update/Commit acquire before enqueuing an apply; applyBatch's enqueued closure releases via defer.
+	budget *postingBudget
+
 	// onForwardRead, if non-nil, is invoked by forwardKeywords whenever it performs a REAL
 	// forward read (a head-forward hit or a segment-I/O scan) — i.e. not on a cold-build miss.
 	// Test-only observability hook (P7) for the "cold build takes no forward read" assertion;
@@ -175,6 +187,7 @@ func Open(path string, q queue.Queue, opts Options) (*Store, error) {
 		liveByTable: map[int]int64{},
 	}
 	s.dictCache = newChunkLRU(int64(s.opts.ChunkCacheBytes))
+	s.budget = newPostingBudget(int64(s.opts.MaxInflightPostings))
 	for _, sm := range man.Segments {
 		seg := openSegment(filepath.Join(path, segFileName(sm.Id)))
 		seg.id = sm.Id                                        // P5: the chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
