@@ -40,7 +40,17 @@ func (c *codec) compress(src []byte) []byte {
 	}
 }
 
+// onDecompress, when non-nil, is invoked at the start of every codec.decompress. Test-only (F0): a
+// test counts data-block decompressions DURING finish() — the genuine red→green discriminator (old
+// writeTermDict re-reads+decompresses each [I] block; the inline build decompresses none) that a
+// byte-identical oracle cannot provide. nil in production (one predictable branch). A test that
+// installs it MUST NOT t.Parallel (same constraint as the merge observers).
+var onDecompress func()
+
 func (c *codec) decompress(src []byte, rawLen int) []byte {
+	if onDecompress != nil {
+		onDecompress()
+	}
 	switch c.id {
 	case codecSnappy:
 		d, err := snappy.Decode(make([]byte, 0, rawLen), src)

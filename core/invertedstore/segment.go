@@ -61,6 +61,13 @@ type segWriter struct {
 	blkRaw               []byte // current block's packed records
 	blkFirst             []byte
 	blkHave              bool
+
+	// inline term-dict accumulation (F0): built as [I] keys are added, written at finish — no
+	// re-read of own blocks. dictRaw is the current chunk; dictRegion is the compressed chunks so far.
+	dictRaw        []byte
+	dictRegion     []byte
+	dictOrd        uint32
+	dictChunkFirst uint32
 }
 
 func newSegWriter(path string, data, dict *codec, blockTarget, chunk, threshold int, termid bool, dictChunk int) *segWriter {
@@ -125,6 +132,18 @@ func (w *segWriter) addEntry(key []byte, value []byte) {
 	if len(w.blkRaw) >= w.blockTarget {
 		w.flushBlock()
 	}
+	if w.termid && key[0] == ktInverted {
+		if len(w.dictRaw) == 0 {
+			w.dictChunkFirst = w.dictOrd
+		}
+		kw := key[5:] // keyType(1) + tableId(4 BE) then keyword
+		w.dictRaw = appendUvarint(w.dictRaw, uint64(len(kw)))
+		w.dictRaw = append(w.dictRaw, kw...)
+		w.dictOrd++
+		if len(w.dictRaw) >= w.dictChunk {
+			w.flushDictChunk()
+		}
+	}
 }
 
 // flushBlock compresses the current packed block and appends it. (port spike main.go:646-660.)
@@ -150,9 +169,10 @@ func (w *segWriter) finish(path string) *segment {
 	w.flushBlock()
 	var dictOff int64
 	if w.termid {
-		w.bw.Flush() // blocks must be on disk before we re-read them
-		dictOff = w.off
-		w.writeTermDict() // re-reads own [I] blocks → ordinal-ordered strings, bounded memory
+		w.flushDictChunk() // flush the final partial chunk
+		dictOff = w.off    // == biOff when the region is empty (forward-only segment), as before
+		w.bw.Write(w.dictRegion)
+		w.off += int64(len(w.dictRegion))
 	}
 	biOff := w.off
 	var bi []byte
@@ -177,55 +197,18 @@ func (w *segWriter) finish(path string) *segment {
 	return openSegment(path)
 }
 
-// writeTermDict appends the ordinal-ordered term-dict region: the [I] keyword strings in
-// ordinal order, packed (uvarint(len) keyword)* and compressed in ~dictChunk chunks with
-// the dictCodec. It re-reads the segment's own (already-flushed) blocks one at a time so
-// only one block + one chunk is in memory. (port spike main.go:700-744: w.cod→w.dictCodec
-// for the chunk codec, w.blockTarget→w.dictChunk; block decompress stays on w.dataCodec.)
-func (w *segWriter) writeTermDict() {
-	var chunk []byte
-	var ord uint32        // running ordinal = terms emitted so far
-	var chunkFirst uint32 // ordinal of the first term in the current chunk
-	flush := func() {
-		if len(chunk) == 0 {
-			return
-		}
-		comp := w.dictCodec.compress(chunk)
-		var hdr []byte
-		hdr = appendUvarint(hdr, uint64(chunkFirst))
-		hdr = appendUvarint(hdr, uint64(len(chunk)))
-		hdr = appendUvarint(hdr, uint64(len(comp)))
-		w.bw.Write(hdr)
-		w.bw.Write(comp)
-		w.off += int64(len(hdr) + len(comp))
-		chunk = chunk[:0]
+// flushDictChunk compresses the current inline dict chunk and appends it to dictRegion (the same
+// uvarint(chunkFirst) uvarint(rawLen) uvarint(compLen) comp layout writeTermDict produced).
+func (w *segWriter) flushDictChunk() {
+	if len(w.dictRaw) == 0 {
+		return
 	}
-	for _, e := range w.idx {
-		hdr := make([]byte, 20)
-		w.f.ReadAt(hdr, e.off)
-		rl, n := binary.Uvarint(hdr)
-		cl, n2 := binary.Uvarint(hdr[n:])
-		comp := make([]byte, cl)
-		mustReadAt(w.f, comp, e.off+int64(n+n2))
-		blk := w.dataCodec.decompress(comp, int(rl))
-		scanBlock(blk, func(key, _ []byte, _ int64, _ int, _ bool) bool {
-			if key[0] != ktInverted {
-				return true
-			}
-			if len(chunk) == 0 {
-				chunkFirst = ord
-			}
-			kw := key[5:] // keyType(1) + tableId(4 BE) then keyword
-			chunk = appendUvarint(chunk, uint64(len(kw)))
-			chunk = append(chunk, kw...)
-			ord++
-			if len(chunk) >= w.dictChunk {
-				flush()
-			}
-			return true
-		})
-	}
-	flush()
+	comp := w.dictCodec.compress(w.dictRaw)
+	w.dictRegion = appendUvarint(w.dictRegion, uint64(w.dictChunkFirst))
+	w.dictRegion = appendUvarint(w.dictRegion, uint64(len(w.dictRaw)))
+	w.dictRegion = appendUvarint(w.dictRegion, uint64(len(comp)))
+	w.dictRegion = append(w.dictRegion, comp...)
+	w.dictRaw = w.dictRaw[:0]
 }
 
 // ---- segment reader --------------------------------------------------------
