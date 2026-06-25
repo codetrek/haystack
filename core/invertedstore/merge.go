@@ -64,6 +64,12 @@ var mergeRemapObserver func(remap [][]uint32)
 // safety constraint as mergeRemapObserver (no t.Parallel in a test that installs it).
 var mergeDroppedForwardTermObserver func()
 
+// mergeComputeBlock, when non-nil, is invoked at the START of mergeSegments (the off-worker compute).
+// Test-only (A): a test installs one that blocks on a channel, kicks a background merge, and asserts
+// the worker still drains an Update while the compute is parked — proving the compute is OFF the
+// worker. nil in production. Same no-t.Parallel constraint as the other merge observers.
+var mergeComputeBlock func()
+
 // mergeCursor streams one source segment's (key,value) records in sorted order, decoding external
 // values on the fly. Only ONE decompressed block is resident per cursor, so a k-way merge over K
 // sources holds K blocks — bounded memory regardless of segment size. (Port of the spike
@@ -145,6 +151,9 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 	curs := make([]*mergeCursor, len(segs))
 	for i, seg := range segs {
 		curs[i] = newMergeCursor(seg)
+	}
+	if mergeComputeBlock != nil {
+		mergeComputeBlock()
 	}
 	path := filepath.Join(s.dir, segFileName(outId))
 	w := newSegWriter(path,
@@ -481,29 +490,9 @@ func (s *Store) nextSegId() uint64 {
 	return id
 }
 
-// maybeMerge applies the tiered policy repeatedly: while some level L has >= Fanout segments, merge
-// ALL of that level's segments (oldest->newest) into one level-(L+1) segment. After the tiered loop
-// it checks the covering-merge trigger (bottom-level dead fraction >= the threshold) and fires one
-// if needed. MUST run on the worker. This is the production maybeMerge (the spike merges
-// synchronously inside spill; here it is a worker task enqueued after each spill).
-func (s *Store) maybeMerge() error {
-	for {
-		merged, err := s.mergeOneLevel()
-		if err != nil {
-			return err
-		}
-		if !merged {
-			break
-		}
-	}
-	return s.maybeCoveringMerge()
-}
-
-// mergeOneLevel finds the LOWEST level with >= Fanout live segments and merges all of them into one
-// next-level segment. Returns merged=false when no level qualifies. Segments are merged
-// oldest->newest (ascending id) so newest-wins reconciliation is correct.
-func (s *Store) mergeOneLevel() (bool, error) {
-	s.mu.RLock()
+// pickLowestQualifyingLevelLocked returns the lowest level with >= Fanout live segments + its metas
+// (oldest->newest), ok=false if none qualifies. Caller holds s.mu (R or W) — no lock taken here.
+func (s *Store) pickLowestQualifyingLevelLocked() (level int, metas []segMeta, ok bool) {
 	byLevel := map[int][]segMeta{}
 	maxL := 0
 	for _, sm := range s.man.Segments {
@@ -512,46 +501,140 @@ func (s *Store) mergeOneLevel() (bool, error) {
 			maxL = sm.Level
 		}
 	}
-	level := -1
 	for l := 0; l <= maxL; l++ {
 		if len(byLevel[l]) >= s.opts.Fanout {
-			level = l
-			break
+			m := byLevel[l]
+			sortSegMetasById(m)
+			return l, m, true
 		}
 	}
+	return 0, nil, false
+}
+
+// mergeOneLevel finds the LOWEST level with >= Fanout live segments and merges all of them into one
+// next-level segment. Returns merged=false when no level qualifies. Segments are merged
+// oldest->newest (ascending id) so newest-wins reconciliation is correct.
+func (s *Store) mergeOneLevel() (bool, error) {
+	s.mu.RLock()
+	level, metas, ok := s.pickLowestQualifyingLevelLocked()
 	s.mu.RUnlock()
-	if level < 0 {
+	if !ok {
 		return false, nil
 	}
-
-	metas := byLevel[level]
-	sortSegMetasById(metas)
 	inputIds := map[uint64]bool{}
 	for _, m := range metas {
 		inputIds[m.Id] = true
 	}
-	segs := s.segsByIds(inputIds) // oldest->newest
+	segs := s.segsByIds(inputIds) // raw handles; safe — the whole sync merge is one worker task
 	outId := s.nextSegId()
 	res := s.mergeSegments(segs, outId, level+1, s.opts.DataCodecMerged, false, nil)
 	return true, s.installMerge(inputIds, res)
 }
 
-// maybeCoveringMerge fires a full bottom-up covering merge when the dead fraction (tombstoned +
-// superseded postings / total written postings) crosses the threshold (design §6 default ~25%). It
-// compacts all live segments, reclaiming dangling tombstones, fully-tombstoned keys,
-// forward-tombstones and dead-tableId keys. Returns nil (no-op) when the index is small or clean.
-// MUST run on the worker.
-func (s *Store) maybeCoveringMerge() error {
-	s.mu.RLock()
-	nseg := len(s.man.Segments)
-	s.mu.RUnlock()
-	if nseg < 2 {
-		return nil // nothing to reclaim across (a single segment is already compact)
+// segsByIdsLocked returns the open handles whose ids are in ids, oldest->newest, with a READER REF
+// bumped on each (caller MUST releaseSnapshot them). Caller holds s.mu (Lock here — the plan reserves
+// outId in the same window). The incref-under-lock closes the load-then-retire race (spec §8).
+func (s *Store) segsByIdsLocked(ids map[uint64]bool) []*segment {
+	out := make([]*segment, 0, len(ids))
+	for _, seg := range s.segs {
+		if ids[seg.id] {
+			seg.refs.Add(1)
+			out = append(out, seg)
+		}
 	}
-	if s.deadFraction() < coveringDeadThreshold {
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j-1].id > out[j].id; j-- {
+			out[j-1], out[j] = out[j], out[j-1]
+		}
+	}
+	return out
+}
+
+// mergePlan is one off-worker merge pass decided on the worker under s.mu: ref-held inputs, a reserved
+// output id, and the mergeSegments parameters. The plan's input refs are released after install.
+type mergePlan struct {
+	inputIds   map[uint64]bool
+	segs       []*segment // ref-held (segsByIdsLocked); released by runMergePlan after install
+	outId      uint64
+	level      int
+	dataCodec  byte
+	covering   bool
+	liveTables map[int]bool
+}
+
+// selectTieredMergePlan picks the lowest qualifying level, increfs its inputs, and reserves outId —
+// ALL under one s.mu.Lock (no gap). Returns nil if no level qualifies. MUST run on the worker.
+func (s *Store) selectTieredMergePlan() *mergePlan {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	level, metas, ok := s.pickLowestQualifyingLevelLocked()
+	if !ok {
 		return nil
 	}
-	return s.coveringMerge()
+	inputIds := map[uint64]bool{}
+	for _, m := range metas {
+		inputIds[m.Id] = true
+	}
+	segs := s.segsByIdsLocked(inputIds)
+	outId := s.man.NextSegId
+	s.man.NextSegId++
+	return &mergePlan{inputIds: inputIds, segs: segs, outId: outId, level: level + 1,
+		dataCodec: s.opts.DataCodecMerged}
+}
+
+// selectCoveringMergePlan decides a covering pass (force, or the dead fraction crosses with >= 2
+// segments), increfs ALL live inputs, snapshots liveTables, and reserves outId — under one s.mu.Lock.
+// It fires coveringMergeHook here (counter parity with the synchronous coveringMerge). MUST run on the
+// worker. Returns nil if nothing to compact.
+func (s *Store) selectCoveringMergePlan(force bool) *mergePlan {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.man.Segments) == 0 {
+		return nil
+	}
+	if !force {
+		if len(s.man.Segments) < 2 || s.deadFractionLocked() < coveringDeadThreshold {
+			return nil
+		}
+	}
+	// NOTE (cross-review): coveringMergeHook fires at INSTALL time in runMergePlan (counting COMPLETED
+	// covering merges, parity with the synchronous coveringMerge), NOT here at plan time — a plan can
+	// still fail to install, and a test that reads the counter then asserts segment state must not race
+	// a not-yet-run install.
+	level := 0
+	inputIds := map[uint64]bool{}
+	for _, sm := range s.man.Segments {
+		inputIds[sm.Id] = true
+		if sm.Level > level {
+			level = sm.Level
+		}
+	}
+	liveTables := map[int]bool{}
+	for id := range s.man.Tables {
+		liveTables[id] = true
+	}
+	segs := s.segsByIdsLocked(inputIds)
+	outId := s.man.NextSegId
+	s.man.NextSegId++
+	return &mergePlan{inputIds: inputIds, segs: segs, outId: outId, level: level,
+		dataCodec: s.opts.DataCodecMerged, covering: true, liveTables: liveTables}
+}
+
+// runMergePlan runs the heavy compute OFF the worker, then installs ON the worker, then releases the
+// plan's input refs (so a retired input is torn down only after the compute AND every reader finish).
+// It RETURNS the install error so the tiered loop can break the pass on a persistent install failure
+// instead of immediately re-selecting the SAME still-qualifying level and re-running the heavy
+// compute forever (a hot livelock). installMerge rolls s.man back to the pre-merge set on a failed
+// MANIFEST write, so a returned error leaves the live set intact and the next trigger retries — the
+// pre-off-worker semantics ("give up the pass; the next trigger retries"), not a spin.
+func (s *Store) runMergePlan(p *mergePlan) error {
+	res := s.mergeSegments(p.segs, p.outId, p.level, p.dataCodec, p.covering, p.liveTables)
+	err := s.q.RunFunc(func() error { return s.installMerge(p.inputIds, res) })
+	if err == nil && p.covering && coveringMergeHook != nil {
+		coveringMergeHook() // count COMPLETED covering merges (parity); the hook is atomic (-race safe)
+	}
+	s.releaseSnapshot(p.segs)
+	return err
 }
 
 // deadFraction is the covering-merge trigger: the fraction of WRITTEN inverted postings a covering
@@ -564,6 +647,12 @@ func (s *Store) maybeCoveringMerge() error {
 // under the write lock in applyBatch). Spec §4.3.
 func (s *Store) deadFraction() float64 {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deadFractionLocked()
+}
+
+// deadFractionLocked is deadFraction's body; caller holds s.mu (R or W).
+func (s *Store) deadFractionLocked() float64 {
 	var written int64
 	for _, sm := range s.man.Segments {
 		written += sm.Postings
@@ -574,7 +663,6 @@ func (s *Store) deadFraction() float64 {
 			live += n
 		}
 	}
-	s.mu.RUnlock()
 	if written <= 0 {
 		return 0
 	}

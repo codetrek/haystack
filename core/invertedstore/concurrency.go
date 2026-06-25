@@ -177,11 +177,12 @@ func (s *Store) startMergeLoop() {
 	go s.mergeLoop()
 }
 
-// mergeLoop is the background merge goroutine. It waits for a trigger, then runs maybeMerge (and, if a
-// DeleteTable forced it, a covering merge) on the worker via RunFunc. It exits on mergeStop after a
-// final drain so a merge in flight at Close completes. Errors from a merge are dropped: a background
-// merge failing must not crash the process (it runs off any caller), and the live set is left
-// consistent by installMerge's persist-then-publish on every failure path.
+// mergeLoop is the background merge goroutine. It waits for a trigger, then runs the scheduled tiered
+// (and, if a DeleteTable forced it, covering) merge passes — each as plan (worker) -> compute
+// (off-worker, on THIS goroutine) -> install (worker). It exits on mergeStop after a final drain so a
+// merge in flight at Close completes. Errors from a merge are dropped: a background merge failing must
+// not crash the process (it runs off any caller), and the live set is left consistent by installMerge's
+// persist-then-publish on every failure path.
 func (s *Store) mergeLoop() {
 	defer close(s.mergeDone)
 	for {
@@ -195,23 +196,43 @@ func (s *Store) mergeLoop() {
 	}
 }
 
-// runScheduledMerge executes the tiered + covering merge passes on the worker. It snapshots the
-// current request sequence FIRST, runs the pass, then publishes that sequence as acked — so a
-// waitMergeIdle that sampled any reqSeq <= the snapshot sees it satisfied. forceCovering (set by
-// DeleteTable) guarantees a covering merge even when the dead-fraction trigger would not fire. The
-// whole pass runs inside ONE RunFunc so it is a single serialized worker task.
+// runScheduledMerge executes the tiered + covering merge passes. It snapshots the current request
+// sequence FIRST, runs the passes, then publishes that sequence as acked — so a waitMergeIdle that
+// sampled any reqSeq <= the snapshot sees it satisfied. forceCovering (set by DeleteTable) guarantees
+// a covering merge even when the dead-fraction trigger would not fire. Each pass is driven as
+// plan (worker) -> compute (off-worker) -> install (worker): only the plan selection + the install
+// swap touch shared state ON the worker (single-mutator invariant preserved, exactly one MANIFEST
+// writer); the heavy mergeSegments compute runs HERE on the merge goroutine, so it never blocks the
+// worker behind it (A).
 func (s *Store) runScheduledMerge() {
 	req := s.mergeReqSeq.Load()
 	force := s.forceCovering.Swap(false)
-	_ = s.q.RunFunc(func() error {
-		if err := s.maybeMerge(); err != nil {
-			return err
+	// Tiered passes: plan (worker) -> compute (off-worker) -> install (worker), until no level qualifies.
+	for {
+		var plan *mergePlan
+		_ = s.q.RunFunc(func() error { plan = s.selectTieredMergePlan(); return nil })
+		if plan == nil {
+			break
 		}
-		if force {
-			return s.coveringMerge()
+		// Break the pass on an install failure. installMerge rolls s.man back to the pre-merge set, so a
+		// persistent failure (disk full, MANIFEST.tmp unwritable) leaves the SAME level still >= Fanout;
+		// re-looping would immediately re-select it and re-run the heavy mergeSegments compute forever (a
+		// hot CPU/IO livelock). Giving up the pass restores the pre-off-worker "drop the pass; the next
+		// trigger retries" semantics — a background merge error is deliberately dropped here, and the
+		// final ackSeq.Store below still lets waitMergeIdle converge (the trigger was processed, even if
+		// the merge could not be installed). A transient failure is simply retried by the next trigger.
+		if err := s.runMergePlan(plan); err != nil {
+			break
 		}
-		return nil
-	})
+	}
+	// One covering pass if forced (DeleteTable) or the dead fraction crosses. A single covering pass is
+	// one-shot (no loop), so an install failure here cannot livelock — drop the error (a background
+	// covering merge that could not install is retried by the next trigger), exactly as the loop above.
+	var cplan *mergePlan
+	_ = s.q.RunFunc(func() error { cplan = s.selectCoveringMergePlan(force); return nil })
+	if cplan != nil {
+		_ = s.runMergePlan(cplan)
+	}
 	s.mergeAckSeq.Store(req)
 }
 

@@ -99,7 +99,9 @@ func uniqWord(n int) string { return "w" + strconv.Itoa(n) }
 
 // installCoveringCounter installs the package coveringMergeHook to count covering merges (covering
 // BOTH the dead-fraction-triggered and the DeleteTable/orphan forced paths). Read via .Load(). The
-// hook runs on the worker, so the atomic keeps it -race clean. Cleared on test cleanup.
+// hook may run on the worker (synchronous coveringMerge) OR on the merge goroutine (the off-worker
+// covering path fires it post-install in runMergePlan), so the atomic keeps it -race clean. Cleared on
+// test cleanup.
 func installCoveringCounter(t *testing.T) *atomic.Int64 {
 	t.Helper()
 	var n atomic.Int64
@@ -152,4 +154,20 @@ func (s *Store) forwardKeywordsForTest(tableId int, docid int64) (words []string
 		return nil
 	})
 	return
+}
+
+// segRefsByIdForTest returns the current refcount of the live segment handle with the given id, or -1
+// if no live handle has that id (it was already retired + torn down, or never existed). Used by the
+// off-worker merge tests (A) to assert each input segment is ref-held (>= 2: the published snapshot
+// ref + the plan's incref) across the off-worker mergeSegments compute, so a concurrent retire cannot
+// free an input mid-read. Reads s.segs under the lock; the refs themselves are atomic.
+func (s *Store) segRefsByIdForTest(id uint64) int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, seg := range s.segs {
+		if seg.id == id {
+			return seg.refs.Load()
+		}
+	}
+	return -1
 }
