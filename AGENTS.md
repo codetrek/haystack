@@ -13,10 +13,14 @@ NEVER skip a stage:
    spec; fix every blocker/major before proceeding.
 3. **Task breakdown** — decompose into bite-sized TDD tasks.
 4. **Multi-agent cross-review** — multiple agents cross-review the task breakdown; fix issues.
-5. **Implementation** — TDD (red → green) under an SDD workflow, **ONE item at a time**. After EACH
-   item is done (its tests green, gates pass), dispatch MULTIPLE independent review agents and loop
-   (fix → re-review) until that item returns zero blocker/major; only THEN commit it and move to the
-   next item. Never batch several items before reviewing.
+5. **Implementation — driven by a WORKFLOW, never by hand.** TDD (red → green), **ONE item at a
+   time**, orchestrated through the Workflow tool (multi-agent): the coordinator MUST NOT hand-edit
+   product code in the main loop — every code edit happens inside a workflow subagent. For each item
+   the workflow: writes the failing test → runs it red → implements → runs it green → runs the gates,
+   then dispatches MULTIPLE independent review agents and LOOPS (fix → re-review) until that item
+   returns zero blocker/major; only THEN commits it and moves to the next item. Never batch several
+   items before reviewing. If you catch yourself opening an editor on product code outside a workflow,
+   STOP — author the workflow instead.
 
 **The review stages are a LOOP, not a single pass — re-review until clean.** Whenever you fix
 findings from a review (stage 2, 4, or 5), you MUST dispatch a FRESH round of multiple independent
