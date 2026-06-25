@@ -16,6 +16,15 @@ NEVER skip a stage:
 5. **Implementation** — TDD (red → green) under an SDD workflow; cross-review each step with
    multiple agents.
 
+**The review stages are a LOOP, not a single pass — re-review until clean.** Whenever you fix
+findings from a review (stage 2, 4, or 5), you MUST dispatch a FRESH round of multiple independent
+review agents on the REVISED artifact and repeat — your own edits are unverified until a new review
+round confirms them, and a fix routinely introduces a new blocker (e.g. a deadlock fix that
+reintroduces the deadlock elsewhere). Keep iterating rounds until a full round returns **zero
+Blocking and zero Major** findings. Do NOT advance to the next stage, and do NOT report the artifact
+as done, after merely *applying* fixes — applied-but-not-re-reviewed is not done. Record each round's
+findings + resolutions in the artifact so the convergence is auditable.
+
 Do NOT jump straight to editing code, not even for a "quick prototype", a "let me just
 measure it" spike, or a one-line fix. Prototyping a change before the spec/review is still
 "writing code directly" and is forbidden. Measurement that requires new/changed product code
