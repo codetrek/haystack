@@ -280,11 +280,13 @@ recursive re-lock). Encode is strictly READ-ONLY over the detached head (M2).
 
 **Install (worker `RunFunc`, one `s.mu.Lock()`):** `id = NextSegId++`; rename temp → `seg-<id>.dat`;
 append `segMeta`; `publishSnapshotLocked()`; remove the entry from `s.spilling` (**publish before
-remove** — the lost direction is forbidden); `spillInFlight=false`; then re-check for an over-cap head
-and dispatch its detach (so a head that filled while this spill was in flight spills promptly). **This
-re-dispatch is LOAD-BEARING for liveness** (review R1): without it, a head that went over-cap while the
-spill was in flight is never detached once the producer re-blocks → permanent wedge; gate it with a
-fast-producer/slow-encode test. The dir-fsync in `writeManifestBytes` makes the rename + the new
+remove** — the lost direction is forbidden); `spillInFlight=false`; then re-check **ALL tables** for an
+over-cap head and dispatch one's detach (over-cap is per-table `h.bytes ≥ CapBytes` but one-in-flight
+is store-wide, so a table-B head that filled while a table-A spill was in flight must be found here —
+NOT just the just-installed table, or a multi-table workload wedges). **This re-dispatch is
+LOAD-BEARING for liveness** (review R1): without it, a head that went over-cap while the spill was in
+flight is never detached once the producer re-blocks → permanent wedge; gate it with a
+fast-producer/slow-encode test (single- AND multi-table). The dir-fsync in `writeManifestBytes` makes the rename + the new
 MANIFEST durable together; a crash before the rename leaves a `seg-tmp-*` orphan (G sweeps it), after
 the rename but before the MANIFEST an un-referenced `seg-<id>.dat` (G sweeps it). On install FAILURE,
 the entry stays in `s.spilling` (data preserved) and `spillInFlight` stays set; a bounded retry then a
@@ -303,10 +305,13 @@ goroutine's install `RunFunc` — it is never parked *waiting* for that install 
 UNCHANGED (tokens still released at applyBatch return — E bounds the QUEUE). The only unbounded-growth
 path F adds is `over-cap + spillInFlight` (the worker can't detach a 2nd spill, so the live head keeps
 growing). F adds its own gate for exactly that: when the worker hits over-cap while a spill is in
-flight, it sets `blockProducer` (under `s.mu`); `Update`/`Commit` wait on a `sync.Cond` while
-`blockProducer` is set, **BEFORE `q.AddFunc`** (a blocked producer holds ZERO queue slots — the
-property that keeps this deadlock-free). `installSpill` clears `blockProducer`, detaches the now-over-cap
-head, and broadcasts. **Release-at-install was REJECTED:** it pins a head's tokens for its whole
+flight, it sets `blockProducer` (under `s.mu`); `Update`/`Commit` evaluate **`for blockProducer {
+cond.Wait() }`** (a LOOP, not an `if` — `Broadcast` wakes all parked producers but each install relieves
+only one head's worth) **BEFORE `q.AddFunc`** (a blocked producer holds ZERO queue slots — the
+property that keeps this deadlock-free). **The `Cond`'s `L` MUST be the lock the worker sets/clears
+`blockProducer` under** (`sync.NewCond(&s.mu)` / its write-locker), with the producer checking the flag
+while holding it — else a lost wakeup (set-after-check-before-Wait) reintroduces a deadlock.
+`installSpill` clears `blockProducer`, detaches the now-over-cap head, and broadcasts. **Release-at-install was REJECTED:** it pins a head's tokens for its whole
 residency, and heads that NEVER spill — a partial steady-state head, the `CloseAndWait` flush, a
 `DeleteTable` head-drop, a spill-install give-up — would orphan their tokens and shrink the budget to a
 deadlock. The gate has none of that: it is set only on over-cap-with-spill-in-flight, cleared at
@@ -380,14 +385,21 @@ Per change, TDD; the concurrency ones gate on `-race`.
     — i.e. D is NOT searchable under the dropped keyword after install. This is the test that fails if
     forwardKeywords doesn't consult `spilling`. Run it WITHOUT any concurrent goroutine.
   - **B2/B3 atomicity:** `-race` stress (applies + blocked/unblocked encodes + Search) asserting a doc
-    is never invisible across the detach→install window (search finds it the whole time) and ids never
-    collide across overlapping spills.
-  - **spilling-skip:** a forward read for a docid outside a detached head's range does not scan it
-    (probe counter), so F doesn't undo B.
-  - **bound:** a fast producer with the encode artificially slowed blocks at `maxInflightSpills`
-    detached heads (peak `len(spilling)` ≤ bound).
-  - **ordering & crash:** two in-flight spills install in detach order; a crash with a detached head
-    loses it (volatile) and indexer replay recovers it; reopen consistent (+ G removes the orphan).
+    is never invisible across the detach→install window (search finds it the whole time — guaranteed by
+    publish-before-remove in install).
+  - **install-time id / newest-wins:** the one parked spill installs AFTER any concurrent merge and
+    gets the highest id (newest); a doc whose dropped keyword was tombstoned in the spill is NOT
+    resurrected by an older merge that installed during the parked window. (The old "spilling-skip"
+    docid-range test is now an optional micro-opt over a single parked head — de-scoped, not required.)
+  - **gate bound + liveness:** a fast producer with the encode artificially slowed parks at the
+    `blockProducer` gate (peak `len(spilling)` ≤ 1 — never a 2nd in-flight spill); when the spill
+    installs, the over-cap head is re-dispatched and the build CONVERGES (no wedge). Test BOTH single-
+    AND multi-table (a table-B over-cap head while a table-A spill is in flight must be re-dispatched).
+    `-race` clean (no lost wakeup / no worker-blocks-on-install cycle).
+  - **CloseAndWait drain:** with the in-flight encode blocked then released, `CloseAndWait` RETURNS
+    within a timeout (off-worker drain, no v4 self-deadlock) and the doc is durable on reopen.
+  - **crash:** a crash with a detached head loses it (volatile) and indexer replay recovers it; reopen
+    consistent (+ G removes the `seg-tmp-*` orphan).
 - **Whole:** existing differential / crash-recovery / merge-robustness suites green; `-race` clean;
   go-cov ≥ 90%; whole-workspace (both modules).
 
@@ -406,7 +418,9 @@ inserts shrink). Pebble's 61s is a reference line only.
 - Build CPU profile after F: NEITHER merge NOR spill encode on the worker; the worker is dominated by
   `addPosting` + ms installs + the `spilling`/forward read. GC cycles + peak heap down.
 - `hits` identical (2,414,505), `-race` clean, disk unchanged (~240 MiB), search not regressed.
-- Memory bounded: peak in-flight postings ≤ E budget; detached heads ≤ `maxInflightSpills × CapBytes`.
+- Memory bounded: peak in-flight postings ≤ E budget; **≤ 1 parked detached head (one-in-flight); peak
+  un-installed ≈ ~2 heads + bounded queue overshoot** (NOT a hard `×CapBytes` — postings≠bytes + the
+  depth-100 queue; §7a).
 
 ## 11. Sequencing & risk
 
