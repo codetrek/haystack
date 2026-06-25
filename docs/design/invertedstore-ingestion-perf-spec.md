@@ -39,19 +39,28 @@ I/O-bounded), but it exposes that the write-path backpressure bounds **task coun
 
 ---
 
-## 2. The changes (review-calibrated; D keep, F optional)
+## 2. The changes (review-calibrated v4; all ship, F last)
 
-| # | change | est. WALL win (review-calibrated) | risk |
+**Goal: the BEST achievable cold-build time** (drain everything reducible off the single worker;
+shrink the irreducible apply). Pebble's 61s is a reference only. Review found two FREE single-threaded
+wins the v1 plan jumped past (F0, head-fix), and that F is far more dangerous than first specced.
+
+| # | change | WALL effect (review-calibrated; RE-MEASURED per change) | risk |
 |---|---|---|---|
-| **A** | merge COMPUTE off-worker, install on-worker (§3) | ~30s → build **~55–62s ≈ pebble parity** | LOW (single mutator preserved) |
-| **B** | per-segment `[minDocid,maxDocid]` forward-read skip | **~6s** (not 8); + bounds forward-read as K grows (couples with A) | low |
-| **C** | cut per-op allocation churn | **~0–3s wall** — a MEMORY/GC-cycle play, not wall (GC is parallel-free; GOGC=400 was worse) | medium |
-| **D** | **keep zstd** for merged (off the critical path after A) | — | none |
-| **E** | write-path backpressure by in-flight **postings/bytes** | ~0 wall; bounds memory; fixes the batched blowup | medium |
-| **F** | (optional) move spill ENCODE off-worker (§7a) | the real lever PAST parity (spill ~28s is the post-A floor) | higher |
+| **F0** | build term dict INLINE — kill the `writeTermDict` re-read (§5a) | **−9s spill**, single-threaded, zero concurrency | **none** |
+| **B** | per-segment `[minDocid,maxDocid]` forward-read skip | ~6s; bounds forward-read as K grows | low |
+| **C-head** | lazy `dels` map + skip per-add `delete` in addPosting (§5) | **−5–8s** off the "19s floor" (it's ~12–14s real), single-threaded | low |
+| **A** | merge COMPUTE off-worker, install on-worker (§3) | ~30s off the worker | LOW (single mutator preserved; add input refcounts) |
+| **C-rest** | 1-op applyBatch fast path; per-cursor decompress scratch | ~0–3s wall + lower heap | medium |
+| **E** | write-path backpressure by in-flight **postings** | ~0 wall; bounds memory | medium |
+| **D** | keep zstd for merged | — | none |
+| **G** | Open sweeps orphan `seg-*.dat` (make the "GC'd on Open" claim true) | — (correctness/disk hygiene; matters under F) | low |
+| **F** | move residual spill encode (sort+snappy) off-worker (§7a) — **last, hardened** | drains the residual ~17s; partly offset by install-fsync + spilling-scan | **HIGH** |
 
-**Honest target:** A+B+C ≈ **match pebble (~55–65s)**, not a clear win. The untouched serial spill
-(~28s) is the floor; only F beats pebble. Every number is re-measured on real ext4 after each lands.
+**Realistic landing** after F0+head-fix+B+A+C+E+F ≈ **25–32s** (review-calibrated), well under pebble —
+but NOT ~20s: the per-spill MANIFEST fsync stays on the worker (~1s over ~43 spills), F's `spilling`
+read path adds cost, and at ~20s the **producer/gob-feed (`tLoad`) may become the co-floor** — acceptance
+must confirm the producer is < the post-F worker. Order: free wins (F0, head-fix, B) → A → C/E → G → F.
 
 ---
 
@@ -123,27 +132,41 @@ ranges) and for any docid outside all ranges; for an overlapping/edit workload i
 probes every segment whose range spans the docid (correct, just less optimal). Bloom is a possible
 follow-up; range is enough for the build win and is free (two int64 in the MANIFEST).
 
-## 5. (C) Cut per-op allocation churn — a MEMORY/GC play, ~0–3s wall
+## 4a. (F0) Build the term dict INLINE — kill the `writeTermDict` re-read
+
+The single highest win/risk item, missed by the first draft. `spill`/`mergeSegments` write the `[I]`
+data blocks, then `writeTermDict` (segment.go ~185–228) **re-reads and re-decompresses every one of
+those blocks** just to extract the keyword strings in ordinal order — strings the writer **already
+held** at `addEntry` time (the keyword is `key[5:]`). The re-read exists only to keep memory bounded
+to one block; but on the spill path the terms are ALREADY sorted in memory before the addEntry loop,
+and the merge emits them in order too. **Change:** accumulate the term-dict region INLINE as each `[I]`
+key is added (append the keyword to the current dict chunk in the writer), eliminating the entire
+re-read+re-decompress pass. **~9s off spill, single-threaded, zero concurrency risk** — and it shrinks
+F's residual target from ~28 to ~17s. Correctness: the dict bytes are byte-identical (same keywords,
+same ordinal order); guard with the existing differential + term-id round-trip tests. This is F0
+because it must land BEFORE F (F moves a SMALLER encode off-worker once the re-read is gone).
+
+## 5. (C) Cut per-op allocation churn — a MEMORY/GC play, ~0–3s wall (plus the head-fix, real wall)
 
 > **Review-calibrated:** GC is parallel-free (32 cores, build uses ~1.9); GOGC=400 was *worse*. So
 > reducing allocation cuts the **heap/GC-cycle count/peak memory**, but moves WALL time only to the
-> extent `mallocgc` is on the worker's serial path (partly — addPosting's map growth). Expect **~0–3s
-> wall, not 10s.** Measure each sub-item **AFTER A+B land** (C.1's decompress is mostly removed by A
-> (merge off-worker) + B (forward skip), so don't double-count). Keep only sub-items that move the
-> *worker serial* time; ship the rest as memory wins or drop them (AGENTS.md P1 — real wins only).
+> extent `mallocgc` is on the worker's serial path. Two EXCEPTIONS that DO move wall time (the head-fix
+> below + the 1-op fast path); the rest are memory wins. Measure each **AFTER A+B**; keep only real wins.
 
-1. **Skip the per-op `inBatch`/`seen` maps for a single-op apply** (the highest-value sub-item — hits
-   the hot `Update` path, which is always 1-op). `applyBatch` allocates two maps/call to track
-   in-batch repeats; a 1-op batch can't repeat a docid, so `seen` is always false and `old` always
-   comes from `forwardKeywords` — a fast path that skips both maps is behavior-identical. Guard
-   `len(ops)==1`. (Review-verified safe.)
-2. **Reuse decompress buffers — `mergeCursor`-scratch ONLY, never a global.** `c.key`/`c.val` are
-   slices INTO `c.blk`, and a k-way merge holds K cursors' blocks live simultaneously, so a shared
-   global buffer would alias them — **must be per-cursor scratch**, reused across `advance` (the prior
-   block's bytes are consumed before the next advance — review-verified). External-value buffers
-   likewise. (Most of this is removed by A+B; measure what remains on the worker.)
-3. **Reuse the spill/encode scratch** (`setToSlice`/`encodeDocs` temporaries, consumed immediately on
-   the single-threaded worker) where provably not retained.
+0. **head-fix (real wall, ~5–8s) — lazy `dels` map + skip the per-add `delete`.** `addPosting`
+   (head.go:38–50) allocates a `*postingDelta` with TWO `map[int64]struct{}` per first-seen keyword,
+   but on a cold build `dels` is ALWAYS empty (no deletes) → millions of wasted empty-map allocations;
+   and every add runs `delete(pd.dels, docid)` (latest-wins) hashing into that empty map pointlessly.
+   Fix: allocate `dels` lazily (nil until the first `tombstonePosting`); on the add path, skip the
+   `delete` when `dels == nil`. Review estimates ~30–50% of addPosting's 19s is this fat → the "floor"
+   is ~12–14s, not 19. Single-threaded, behavior-identical (a nil dels == empty dels).
+1. **Skip the per-op `inBatch`/`seen` maps for a 1-op apply** (hot `Update` path is always 1-op): a
+   1-op batch can't repeat a docid, so `seen` is always false and `old` always comes from
+   `forwardKeywords` — skip both maps. Guard `len(ops)==1`. (Review-verified safe.)
+2. **Reuse decompress buffers — `mergeCursor`-scratch ONLY, never a global** (`c.key`/`c.val` alias
+   `c.blk`; K cursors' blocks coexist). Most removed by A+B; measure the residual. **MUST NOT alias/
+   in-place-sort head storage** (interacts with F's read-only-detached-head invariant — §7a M2).
+3. Reuse spill/encode scratch where provably not retained.
 
 ## 6. (D) Keep zstd for merged segments — DECISION
 
@@ -187,14 +210,22 @@ serialized as today. The only new concurrency is the **read-only** merge compute
 - `mergeSegments` runs off-worker but **mutates nothing shared** — it reads its input segments
   (held via reader refcounts, like Search) and writes a NEW output file at a reserved `outId`. So it
   cannot race the worker's `s.man`/`s.segs`/MANIFEST mutations (it touches none of them).
-- **Input lifetime:** the merge goroutine acquires reader refcounts on its input segments for the
-  duration of `mergeSegments` (the existing acquire/release path). Only a merge retires a segment,
-  and merges are strictly serial in the one goroutine, so no input can be retired mid-compute. A
-  concurrent spill only APPENDS new segments — it never retires an input. ✓
-- **`outId` reservation** stays under `s.mu` (as today); a spill bumping `NextSegId` concurrently is
-  already `s.mu`-guarded. A crash between reserving `outId`+writing the file and the worker's install
-  leaves an orphan output file at a reserved id — the EXISTING single-writer crash case, GC'd on Open
-  (merge.go documents it); unchanged by A.
+- **Input lifetime (REVIEW CORRECTION — a required ADDITION, not existing).** The spec first claimed
+  the merge uses "the existing acquire/release [refcount] path" — it does NOT: `segsByIds` (merge.go)
+  returns RAW `*segment` handles with no `refs.Add(1)`, safe today only because the whole merge runs
+  in ONE `q.RunFunc` worker task. Off-worker, A MUST add real refcounting: acquire the input segments
+  via `acquireSnapshotLocked`-style incref under `s.mu`, hold across the off-worker `mergeSegments`,
+  `releaseSnapshot` after the install. (No concurrent retire can happen — spills only append, merges
+  are serial — but the refs make it robust against a future second merger / a `CloseAndWait`
+  `retireKeepFile` racing the compute.)
+- **`maybeMerge` loop interleaving (impl subtlety).** `maybeMerge` loops `mergeOneLevel` until no
+  level qualifies; each iteration selects inputs from the CURRENT `s.man.Segments` (only changed at
+  install, on the worker). So the loop CONTROL stays on the worker (decide-what-to-merge + install),
+  and each iteration's `mergeSegments` COMPUTE hops to the merge goroutine and back. Not a mechanical
+  extraction; the breakdown details it.
+- **`outId` reservation** stays under `s.mu`. A crash between reserving `outId`+writing the file and
+  the install leaves an orphan output file at a reserved id — handled by item **G** (Open sweeps
+  orphans; the existing "GC'd on Open" comment is currently false — see §7b).
 - **Readers** (Search/forwardKeywords) are unaffected — the segment set they snapshot only changes
   at `installMerge` on the worker, exactly as today.
 
@@ -202,67 +233,161 @@ This must still be proven by a `-race` stress test (concurrent applies + the off
 + searches) — §9 — but the proof obligation is small: confirm the merge compute never touches
 `s.man`/`s.segs` and its inputs stay ref-held.
 
-## 7a. (F) Beat pebble: move spill ENCODE off the worker (optional, the real lever past parity)
+## 7a. (F) Move RESIDUAL spill encode off the worker — REQUIRED, last, hardened
 
-Review's honest floor: after A, the worker's serial **spill ~28s** (encodeDocs sort 11 + writeTermDict
-re-read 9 + snappy 6) is untouched and is ~46% of pebble's whole build. A+B+C only reach pebble
-PARITY. To actually beat pebble, apply the SAME safe pattern to spill: build the sealed segment BYTES
-(sort terms, encode postings, compress blocks, build the term-dict region) **on a helper goroutine**,
-then do the cheap install (append `s.man`/`s.segs`, publish, write MANIFEST) on the worker. The head
-must be SNAPSHOT/detached at spill time (copy the maps out, or double-buffer the head) so the worker
-can keep applying into a fresh head while the old head's bytes encode off-worker. This is more
-involved than A (the head hand-off needs care) and is scoped as a SEPARATE, measured follow-up — only
-pursue if parity isn't enough. Without F, the honest target is "match pebble," not "beat it."
+After F0 (inline dict, −9s) and the head-fix, the spill's residual encode is **sort ~11 + snappy ~6 ≈
+17s** on the worker. F moves that off-worker via the "compute off-worker, install on-worker" pattern,
+but with a live **head hand-off** (vs A's immutable segments) — review found this is the highest-risk
+change and the first draft underspecced three correctness BLOCKERs. The hardened design:
+
+**Detach (one atomic `s.mu.Lock()` section — BLOCKER B2/B3):**
+```
+s.mu.Lock()
+  old := s.head[T]; s.head[T] = newHeadTable()          // double-buffer: worker keeps applying
+  old.minDocid, old.maxDocid = headDocidRange(old)       // for the spilling-skip (see below)
+  s.spilling = append(s.spilling, spillEntry{T, old})    // PUBLISH atomically with the swap
+  outId := s.man.NextSegId; s.man.NextSegId++            // RESERVE+BUMP here (today spill reads w/o bump
+                                                          //  → overlapping F spills would collide ids)
+s.mu.Unlock()
+// dispatch encode(old, outId) to a bounded helper pool (below)
+```
+The swap + `spilling` publish + id reserve MUST be ONE lock section, or a reader (or the worker's own
+`forwardKeywords`) sees the doc in NEITHER live head NOR `spilling` NOR a segment → lost/mis-diffed.
+
+**`forwardKeywords` MUST consult `spilling` — this is WORKER correctness, not just reader visibility
+(BLOCKER B1, the silent-corruption case):** `forwardKeywords` is the worker's OWN "read old keyword
+set" on every edit (applyBatch → update.go). After a doc detaches, its forward is in `spilling`. If a
+re-post diffs against an empty `old` (because forwardKeywords only checked the live head + segments),
+it writes NO tombstones for dropped keywords → they resurrect → silent corruption, with ZERO
+concurrency. So **all read paths (forwardKeywords, Search, GetDocs, ForwardDocids) resolve THREE tiers
+in strict newest→oldest order: live `s.head[T]` → `spilling` heads for T newest→oldest → segments.**
+`forwardKeywords` is first-hit-wins so the order is load-bearing; Search is `seen`-monotonic union so
+more tolerant, but uses the same order. A `spilling`-head hit fires `noteForwardRead`.
+
+**`spilling`-head docid-range skip (so F does NOT undo B):** each detached head carries
+`[minDocid,maxDocid]` (set at detach); a forward read skips a `spilling` head whose range can't contain
+the docid — the head analog of B. Without this, F re-introduces O(docs × K) forward reads on the head
+axis that B removed on the segment axis (review M-perf-2).
+
+**Head lifetime (BLOCKER M1) — copy-under-RLock, NO refcount, NO pool reuse:** readers COPY the
+deltas they need out of each `spilling` head WHILE holding `s.mu.RLock()` (exactly as they copy the
+live head today), then never retain the `*headTable`. So install can remove it from `spilling` under
+`s.mu.Lock()` with no use-after-free (RLock/Lock are exclusive). A detached head MUST NOT be pooled/
+reused/cleared while in `spilling`. (No segment-style refcount needed — heads are copied-under-lock,
+not scanned lock-free.)
+
+**Encode is strictly READ-ONLY over the detached head (BLOCKER M2):** the off-worker encode only reads
+`h.inv`/`h.fwd`/`h.delForward`; it must not in-place-sort or use scratch that aliases head storage
+(this constrains C.2/C.3 — they ship with F). Concurrent reads of the immutable detached head by the
+encode + readers are safe; gate on `-race`.
+
+**Install (one atomic `s.mu.Lock()` section — BLOCKER B3):** append `segMeta`, `publishSnapshotLocked`,
+AND remove the head from `spilling` in ONE lock window, so a reader never sees the doc in neither tier
+(lost) and a counter never double-counts it (briefly-in-both is fine for Search's newest-wins). On
+install FAILURE (marshal/fsync error), the detached head stays in `spilling` (data preserved,
+recoverable) — do not drop it.
+
+**Bounded detached heads (BLOCKER M5) — F's OWN bound, not E's:** E throttles producer postings, NOT
+the encode-vs-detach rate; a fast producer detaches 16 MiB heads faster than zstd encodes → unbounded
+`spilling` memory. F runs the encode on a **bounded pool** (`maxInflightSpills`, e.g. 2–4) and the
+worker BLOCKS the detach when the pool is full (backpressure). This caps peak memory at
+`maxInflightSpills × CapBytes`.
+
+**Crash:** a detached-but-not-installed head is volatile (lost on crash, like today's unspilled head);
+indexer replay recovers it. The segment file at the reserved id is an orphan until install — covered
+by item **G** (Open sweeps orphans). No cross-reopen double-visibility (`spilling` is in-memory).
+
+**Expected:** drains the residual ~17s off-worker → worker ≈ addPosting ~12–14s (post head-fix) + per-
+spill MANIFEST installs (~1s) + the `spilling` read path. Net build ~25–32s (review-calibrated). The
+per-spill install fsync stays on the worker and grows if F's memory bound forces more spills — measure.
+
+## 7b. (G) Open sweeps orphan segment files
+
+The `merge.go` "GC'd on next Open" comment is currently FALSE — Open opens only MANIFEST-listed
+segments and never removes stray `seg-*.dat`. Benign today (orphans are never opened; ids effectively
+not mis-reused), but F creates orphans on the common spill-crash path. **Change:** on Open, after
+reading the MANIFEST, sweep the dir and `os.Remove` any `seg-*.dat` whose id is not in `man.Segments`.
+Low-risk; makes the existing claim true; bounds disk under F. Gate: a crash-leaves-orphan → reopen →
+orphan removed test.
+
+---
 
 
 ## 9. Test plan
 
 Per change, TDD; the concurrency ones gate on `-race`.
 
+- **F0:** the inline term-dict bytes are byte-identical to the re-read version — assert via the
+  existing term-id round-trip + differential; a unit test compares an inline-built dict region to the
+  old re-read path on the same input.
+- **head-fix (C.0):** `dels` stays nil on a cold build (no deletes); a delete then re-add still
+  resolves correctly (the nil→alloc transition); behavior-identical to the eager-map version.
 - **B:** unit — three sealed segments with disjoint ascending docid ranges; a new high docid probes
   0 segments, an in-range docid probes only its segment (`forwardProbeHook` counter). Plus a
-  **2-table** case (the range is table-agnostic within a segment — pin it so nobody "optimizes" it
-  into per-table ranges) and a **covering output with `[I]` records but NO `[F]` records** (empty
-  range still always-skips). Differential test stays green.
-- **C:** unit per sub-item proving behavior identical (applyBatch 1-op fast path == multi-op on the
-  same input; mergeCursor per-cursor scratch round-trips a k-way merge unchanged). `-race`. Each
-  sub-item measured **after A+B**; keep only worker-serial wins.
-- **A:** (1) functional — build with AutoMerge on, merges still bound K, hits identical
-  (differential). (2) **`-race` stress** — applies+spills on the worker while the merge goroutine
-  runs the off-worker COMPUTE and M goroutines Search; assert no race, hits == a serial build,
-  MANIFEST round-trips on reopen. (3) a focused assertion/invariant that `mergeSegments` (off-worker)
-  touches **no** `s.man`/`s.segs` and holds reader refs on its inputs — the small proof obligation
-  §8 leaves. Crash-consistency is the EXISTING single-writer case (orphan output GC'd on Open).
-- **E:** unit — a producer firing more postings than the budget blocks until applies drain (peak
-  in-flight postings ≤ budget); a single batch > budget does NOT self-deadlock; `-race`.
+  **2-table** case (range is table-agnostic within a segment) and an **`[I]`-present, `[F]`-absent**
+  output (empty range still always-skips). Differential stays green.
+- **C:** unit per sub-item (applyBatch 1-op fast path == multi-op; mergeCursor per-cursor scratch
+  round-trips). `-race`. Measured **after A+B**; keep only worker-serial wins.
+- **A:** (1) functional — merges still bound K, hits identical (differential). (2) **`-race` stress** —
+  applies+spills on the worker while the merge goroutine runs the off-worker COMPUTE and Searches run;
+  no race, hits == serial build, MANIFEST round-trips. (3) the input segments are ref-held across the
+  off-worker compute (no teardown-during-read).
+- **E:** producer firing more postings than the budget blocks until applies drain (peak in-flight ≤
+  budget); a single batch > budget does NOT self-deadlock; `-race`.
+- **G:** crash leaves an orphan `seg-*.dat` (write file, skip MANIFEST) → reopen → orphan removed,
+  live segments intact.
+- **F (the BLOCKER guards — gate hardest):**
+  - **B1 silent-corruption (the critical one, ZERO concurrency):** with a small CapBytes, apply doc D,
+    force-detach (block its encode via a hook), then **re-post D with a DROPPED keyword on the same
+    worker**; assert the dropped keyword is tombstoned (forwardKeywords saw D's old set via `spilling`)
+    — i.e. D is NOT searchable under the dropped keyword after install. This is the test that fails if
+    forwardKeywords doesn't consult `spilling`. Run it WITHOUT any concurrent goroutine.
+  - **B2/B3 atomicity:** `-race` stress (applies + blocked/unblocked encodes + Search) asserting a doc
+    is never invisible across the detach→install window (search finds it the whole time) and ids never
+    collide across overlapping spills.
+  - **spilling-skip:** a forward read for a docid outside a detached head's range does not scan it
+    (probe counter), so F doesn't undo B.
+  - **bound:** a fast producer with the encode artificially slowed blocks at `maxInflightSpills`
+    detached heads (peak `len(spilling)` ≤ bound).
+  - **ordering & crash:** two in-flight spills install in detach order; a crash with a detached head
+    loses it (volatile) and indexer replay recovers it; reopen consistent (+ G removes the orphan).
 - **Whole:** existing differential / crash-recovery / merge-robustness suites green; `-race` clean;
   go-cov ≥ 90%; whole-workspace (both modules).
 
-## 10. Acceptance criteria (honest)
+## 10. Acceptance criteria — best achievable build
 
-- `idxbench -impl=store -batch=1` full lx build: **measured and reported after each change** (no
-  asserted numbers). Realistic landing after A+B+C ≈ **match pebble (~55–65s)**, NOT a guaranteed win.
-  A clear win over pebble's 61s requires **F** (spill-encode off-worker, §7a). State which target is
-  being pursued.
-- Build CPU profile: the merge COMPUTE no longer on the apply-worker critical path; forward-read
-  decompression (B) down; GC cycle count + peak heap down (C).
+**Goal: the lowest build time the design allows** (everything reducible leaves the worker; the head
+inserts shrink). Pebble's 61s is a reference line only.
+
+- `idxbench -impl=store -batch=1` full lx build: **measured and reported after EACH change** (no
+  asserted numbers; Principle 2 — measure on real ext4). Trajectory: 95s → F0 −9 → head-fix −5–8 →
+  B −6 → A −30(off-worker) → C/E → F drain residual ~17 → worker ≈ addPosting ~12–14 + ~1s installs.
+  Realistic build **~25–32s** (review-calibrated). Bar: "nothing reducible left on the worker."
+- **Confirm the producer is not the new floor:** at a ~20s worker, the gob feed + `Update` keyword
+  copy + `Commit` (`tLoad` + producer cost) must be < the worker time, else the build floor is the
+  producer — measure and report.
+- Build CPU profile after F: NEITHER merge NOR spill encode on the worker; the worker is dominated by
+  `addPosting` + ms installs + the `spilling`/forward read. GC cycles + peak heap down.
 - `hits` identical (2,414,505), `-race` clean, disk unchanged (~240 MiB), search not regressed.
-- Memory bounded under a fast producer (E): peak in-flight postings ≤ budget; batched 2.8 GB blowup
-  gone.
+- Memory bounded: peak in-flight postings ≤ E budget; detached heads ≤ `maxInflightSpills × CapBytes`.
 
 ## 11. Sequencing & risk
 
-Order (each independently measured + committed; re-measure on real ext4 after each — no asserted wins):
-1. **B** (low risk, clean) — already prototyped; re-validate vs this spec + add the 2-table /
-   forward-absent tests; bump/confirm FormatVersion (a stale `[0,0]` default would mis-skip).
-2. **A** (now LOW risk in the compute-off-worker form, §3) — the dominant lever; gate on the `-race`
-   stress test. Measure: does it actually reach ~55–62s?
-3. **C** (measure AFTER A+B; keep only worker-serial wins — likely just the 1-op fast path).
-4. **E** (memory-correctness; postings budget; after A).
-5. **F** (optional) — only if the user wants to beat pebble, not just match it.
+All ship; each independently measured + committed; **re-measure on real ext4 after each** (no asserted
+wins). Order — FREE single-threaded wins first, F last:
+1. **F0** (inline dict, −9s, zero concurrency) — re-derive via breakdown+TDD.
+2. **head-fix / C.0** (lazy dels, −5–8s, single-threaded).
+3. **B** (forward range-skip; bump FormatVersion — a stale `[0,0]` default mis-skips).
+4. **A** (merge compute off-worker; ADD input refcounts; gate `-race`). Measure.
+5. **C.1–3, E** (after A+B; keep real wins; E memory-correctness).
+6. **G** (Open orphan sweep — prerequisite-hygiene for F).
+7. **F** (highest risk, last) — the head double-buffer + 3 atomic lock sections + `spilling` as a
+   first-class tier in **forwardKeywords** (the B1 silent-corruption fix) + spilling-skip + bound.
+   Gate hardest on the B1 zero-concurrency corruption test + the `-race` stress before committing.
 
-A no longer touches the single-mutator invariant (the compute is read-only; the install stays on the
-worker), so the first draft's two-writer hazards (four MANIFEST writers, lock-order, manifestMu) are
-all gone — that was the key review outcome.
+A and F both keep the single-mutator invariant (compute/encode read-only on detached/immutable data;
+installs on the worker). F's new shared state is the `spilling` head list (slice under `s.mu`, NOT a
+refcount — readers copy-under-RLock). The first draft's two-writer/manifestMu hazards are gone.
+
 
 
