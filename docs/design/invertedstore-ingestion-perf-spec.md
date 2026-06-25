@@ -233,73 +233,86 @@ This must still be proven by a `-race` stress test (concurrent applies + the off
 + searches) — §9 — but the proof obligation is small: confirm the merge compute never touches
 `s.man`/`s.segs` and its inputs stay ref-held.
 
-## 7a. (F) Move RESIDUAL spill encode off the worker — REQUIRED, last, hardened
+## 7a. (F) Move RESIDUAL spill encode off the worker — REQUIRED, last (v5: simplified)
 
 After F0 (inline dict, −9s) and the head-fix, the spill's residual encode is **sort ~11 + snappy ~6 ≈
-17s** on the worker. F moves that off-worker via the "compute off-worker, install on-worker" pattern,
-but with a live **head hand-off** (vs A's immutable segments) — review found this is the highest-risk
-change and the first draft underspecced three correctness BLOCKERs. The hardened design:
+17s** on the worker. F moves that off-worker via a live **head hand-off**: detach the head, encode it
+off-worker, install the resulting segment on the worker.
 
-**Detach (one atomic `s.mu.Lock()` section — BLOCKER B2/B3):**
-```
-s.mu.Lock()
-  old := s.head[T]; s.head[T] = newHeadTable()          // double-buffer: worker keeps applying
-  old.minDocid, old.maxDocid = headDocidRange(old)       // for the spilling-skip (see below)
-  s.spilling = append(s.spilling, spillEntry{T, old})    // PUBLISH atomically with the swap
-  outId := s.man.NextSegId; s.man.NextSegId++            // RESERVE+BUMP here (today spill reads w/o bump
-                                                          //  → overlapping F spills would collide ids)
-s.mu.Unlock()
-// dispatch encode(old, outId) to a bounded helper pool (below)
-```
-The swap + `spilling` publish + id reserve MUST be ONE lock section, or a reader (or the worker's own
-`forwardKeywords`) sees the doc in NEITHER live head NOR `spilling` NOR a segment → lost/mis-diffed.
+> **v5 — the install-ordering defect (found by the 7B implementation; missed by spec v4 + R1–R4).**
+> The read order is `live head → spilling (newest→oldest) → segments`, and segments are ordered by
+> their **seal-sequence id** (higher id = newer = wins). v4 reserved a spill's id at **detach** but
+> installed it **late**, and async encodes install **out of order**. Two inversions result:
+> (1) **spill-vs-spill** — a newer spill (#11) finishes encoding and installs as a segment before an
+> older parked spill (#10); the still-parked #10 ranks above seg#11 (spilling is read above all
+> segments) and its older data shadows the newer segment → a dropped keyword resurrects. (2)
+> **merge-vs-spill** — a merge reserves a higher id than a parked spill but installs older content,
+> outranking it. v4's pool/`maxInflightSpills`/ordered-install all tried to patch this and either
+> deadlocked or broke the memory bound. **v5 removes the root cause with two changes.**
 
-**`forwardKeywords` MUST consult `spilling` — this is WORKER correctness, not just reader visibility
-(BLOCKER B1, the silent-corruption case):** `forwardKeywords` is the worker's OWN "read old keyword
-set" on every edit (applyBatch → update.go). After a doc detaches, its forward is in `spilling`. If a
-re-post diffs against an empty `old` (because forwardKeywords only checked the live head + segments),
-it writes NO tombstones for dropped keywords → they resurrect → silent corruption, with ZERO
-concurrency. So **all read paths (forwardKeywords, Search, GetDocs, ForwardDocids) resolve THREE tiers
-in strict newest→oldest order: live `s.head[T]` → `spilling` heads for T newest→oldest → segments.**
-`forwardKeywords` is first-hit-wins so the order is load-bearing; Search is `seen`-monotonic union so
-more tolerant, but uses the same order. A `spilling`-head hit fires `noteForwardRead`.
+**Two changes that eliminate the inversions (no ordered-install, no merge deferral, no multi-slot):**
 
-**`spilling`-head docid-range skip (so F does NOT undo B):** each detached head carries
-`[minDocid,maxDocid]` (set at detach); a forward read skips a `spilling` head whose range can't contain
-the docid — the head analog of B. Without this, F re-introduces O(docs × K) forward reads on the head
-axis that B removed on the segment axis (review M-perf-2).
+1. **At most ONE in-flight spill** (the detach→install window holds ≤ 1 detached head). With only one
+   spill outstanding there is never a same-table spill to install out of order → **(1) is impossible**.
 
-**Head lifetime (BLOCKER M1) — copy-under-RLock, NO refcount, NO pool reuse:** readers COPY the
-deltas they need out of each `spilling` head WHILE holding `s.mu.RLock()` (exactly as they copy the
-live head today), then never retain the `*headTable`. So install can remove it from `spilling` under
-`s.mu.Lock()` with no use-after-free (RLock/Lock are exclusive). A detached head MUST NOT be pooled/
-reused/cleared while in `spilling`. (No segment-style refcount needed — heads are copied-under-lock,
-not scanned lock-free.)
+2. **Assign the seg id at INSTALL, not at detach.** Installs run on the single worker, serialized, so
+   the id reflects **install order**. The one parked spill — the newest head — installs *after* any
+   concurrent merge or earlier work, so it gets the **highest id = correctly newest** → **(2) is
+   impossible, with no merge deferral.** The off-worker encode can't know the id, so it writes a
+   **temp file** (`seg-tmp-<n>.dat`, `n` from a private counter); install does `id = NextSegId++` then
+   `os.Rename(temp, seg-<id>.dat)` (atomic, same dir; an already-open fd survives rename).
 
-**Encode is strictly READ-ONLY over the detached head (BLOCKER M2):** the off-worker encode only reads
-`h.inv`/`h.fwd`/`h.delForward`; it must not in-place-sort or use scratch that aliases head storage
-(this constrains C.2/C.3 — they ship with F). Concurrent reads of the immutable detached head by the
-encode + readers are safe; gate on `-race`.
+**Detach (worker, one `s.mu.Lock()`):** swap `s.head[T]` → fresh, append the old head to `s.spilling`
+(now ≤ 1 entry), set `spillInFlight=true`. **No id reserved, no NextSegId bump.** Dispatch the encode
+of the old head to a background goroutine writing the temp file.
 
-**Install (one atomic `s.mu.Lock()` section — BLOCKER B3):** append `segMeta`, `publishSnapshotLocked`,
-AND remove the head from `spilling` in ONE lock window, so a reader never sees the doc in neither tier
-(lost) and a counter never double-counts it (briefly-in-both is fine for Search's newest-wins). On
-install FAILURE (marshal/fsync error), the detached head stays in `spilling` (data preserved,
-recoverable) — do not drop it.
+**Reads consult `spilling` (7A, the B1 fix — DONE, committed `85d30aa`):** `forwardKeywords` is the
+worker's OWN "read old keyword set" on every edit; after a doc detaches, its forward is in `spilling`,
+so a re-post that diffed against an empty `old` would resurrect dropped keywords (silent corruption,
+zero concurrency). All four read paths (forwardKeywords, Search, GetDocs, ForwardDocids) resolve
+`live head → s.spilling (newest→oldest) → segments`. The single parked head is genuinely the newest
+data (detached after every installed segment), so reading it above all segments is correct. Deltas are
+COPIED under `s.mu.RLock()` (M1, no refcount); the spilling loop stays in the same RLock window (no
+recursive re-lock). Encode is strictly READ-ONLY over the detached head (M2).
 
-**Bounded detached heads (BLOCKER M5) — F's OWN bound, not E's:** E throttles producer postings, NOT
-the encode-vs-detach rate; a fast producer detaches 16 MiB heads faster than zstd encodes → unbounded
-`spilling` memory. F runs the encode on a **bounded pool** (`maxInflightSpills`, e.g. 2–4) and the
-worker BLOCKS the detach when the pool is full (backpressure). This caps peak memory at
-`maxInflightSpills × CapBytes`.
+**Install (worker `RunFunc`, one `s.mu.Lock()`):** `id = NextSegId++`; rename temp → `seg-<id>.dat`;
+append `segMeta`; `publishSnapshotLocked()`; remove the entry from `s.spilling` (**publish before
+remove** — the lost direction is forbidden); `spillInFlight=false`; then re-check for an over-cap head
+and dispatch its detach (so a head that filled while this spill was in flight spills promptly). On
+install FAILURE, the entry stays in `s.spilling` (data preserved) and `spillInFlight` stays set; a
+bounded retry then a give-up that treats it as crash-volatile.
 
-**Crash:** a detached-but-not-installed head is volatile (lost on crash, like today's unspilled head);
-indexer replay recovers it. The segment file at the reserved id is an orphan until install — covered
-by item **G** (Open sweeps orphans). No cross-reopen double-visibility (`spilling` is in-memory).
+**One-in-flight enforcement (no worker block, no deadlock):** in `applyBatch`, on over-cap: if
+`spillInFlight`, do NOT detach a second spill — the head simply keeps the data (bounded by producer
+backpressure below) until the in-flight spill installs and `installSpill` dispatches it. The worker
+**never blocks** waiting for an install: the install is a worker `RunFunc`, so when the producer is
+backpressured and the worker runs out of applies, it goes **idle** and naturally picks up the encode
+goroutine's install `RunFunc` — it is never parked *waiting* for that install (the deadlock v4's
+"worker blocks the detach" had). Single-mutator preserved (install runs on the worker).
 
-**Expected:** drains the residual ~17s off-worker → worker ≈ addPosting ~12–14s (post head-fix) + per-
-spill MANIFEST installs (~1s) + the `spilling` read path. Net build ~25–32s (review-calibrated). The
-per-spill install fsync stays on the worker and grows if F's memory bound forces more spills — measure.
+**Producer backpressure (bounds the un-installed data to ~2 heads):** extend E so a head's acquired
+postings tokens are RELEASED at **spill install** (not at applyBatch return): the head accumulates the
+tokens its ops acquired, and `installSpill` releases that exact sum (acquire/release stay balanced
+regardless of in-head dedup). Size the budget at ~2–3 × CapBytes-worth of postings, so while one spill
+is parked (~1 head of tokens held) the producer can fill ~1 more head, then blocks until the parked
+spill installs. This caps peak un-installed memory at ~2 heads and rate-matches the producer to the
+install rate — the realization of "if the next buffer fills before the current spill lands, the
+producer waits."
+
+**Crash:** a detached-but-not-installed head is volatile (lost on crash, like today's unspilled head;
+indexer replay recovers it). The temp file is an orphan swept by **G** (extend G to also remove
+`seg-tmp-*`). No cross-reopen double-visibility (`spilling` is in-memory).
+
+**Dropped from v4 (no longer needed):** the bounded encode **pool** + `maxInflightSpills` multi-slot,
+the **detach-time id reserve**/NextSegId bump-at-detach, the **ordered-install** state machine, the
+**merge-vs-spill deferral**, and the deadlock-prone non-blocking-reserve dispatch. The `spilling`
+docid-range skip (old 7C) is now at most a micro-opt over a single parked head — optional.
+
+**Expected:** drains the residual ~17s off-worker when the encode overlaps filling the next head →
+worker ≈ addPosting ~12–14s (post head-fix) + per-spill installs + the `spilling` read; producer
+backpressure caps the overlap to ~1 head, so the win is bounded by encode-vs-fill rate (measure). Net
+build ~25–32s (review-calibrated). Memory ≤ ~2 × CapBytes.
+
 
 ## 7b. (G) Open sweeps orphan segment files
 
