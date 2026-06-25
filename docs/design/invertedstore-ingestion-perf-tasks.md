@@ -16,7 +16,7 @@ Pebble's 61s is a reference line only; realistic landing ~25–32s (review-calib
 concurrency model rests on). Two items move *read-only compute* off the worker and *install on* the
 worker (A: merge compute; F: spill encode over a detached, immutable head) — never a second MANIFEST
 writer. The rest are single-threaded wins (F0 inline dict, head-fix lazy dels) or bounded-memory
-guards (E backpressure, F's `maxInflightSpills`).
+guards (E backpressure, F's one-in-flight `blockProducer` gate).
 
 **Tech stack:** Go (module `./core`, `GOWORK=off go test ./invertedstore/`); `core/cmd/idxbench`
 harness; `-race` gates on every concurrency item; `go-cov` TOTAL ≥ 90%.
@@ -1679,34 +1679,28 @@ needs only `s.man`; opening only ever touches live, MANIFEST-listed files):
 
 ---
 
-## Task 7 — F: move the RESIDUAL spill encode off the worker (LAST, hardened)
+## Task 7 — F: move the RESIDUAL spill encode off the worker (LAST)
 
-**Spec §7a.** After F0 + head-fix, the spill's residual encode is sort ~11 + snappy ~6 ≈ 17s on the
-worker. Move it off-worker via a **detached head double-buffer** + a `spilling` read tier. Highest
-risk: the first draft underspecced three correctness BLOCKERs. Gate hardest on the **B1 zero-
-concurrency silent-corruption test** before committing.
+> **⚠ F WAS REDESIGNED TO v5 (spec §7a "(F) … v5: simplified", 3 review rounds R1–R3).** The 7B
+> *implementation* surfaced a defect v4 + the breakdown R1–R4 all missed: async out-of-order installs
+> invert newest-wins (a parked older spill shadows a newer installed segment; a merge outranks a parked
+> spill). **v5 removes the root cause with two changes** — (1) at most ONE in-flight spill, (2) assign
+> the seg id at INSTALL (encode→temp file, install→rename). No pool, no `maxInflightSpills` multi-slot,
+> no ordered-install, no merge-deferral. **The v4 material below in the historical R1/R2/R3 resolutions
+> (and the §10 "detached heads ≤ MaxInflightSpills × CapBytes" line) is SUPERSEDED** — implement
+> **Task 7B-v5** per spec §7a v5. **7A (the spilling read tier) is committed (`85d30aa`) and unchanged.**
 
-> ### ⚠ Spec correction found while breaking this down — RAISE IN CROSS-REVIEW
-> Spec §7a M5 says *"the worker BLOCKS the detach when the pool is full."* That **deadlocks**: the
-> detach runs inside `applyBatch` **on the worker**; the encode pool drains by calling
-> `RunFunc(installSpill)` **back onto the worker**; a blocked worker can't run those installs → the
-> pool never frees → the detach never unblocks. **Corrected mechanism (used below): when the pool is
-> full, the worker does NOT block — it falls back to a synchronous on-worker spill** (`spillSync`, the
-> classic path), which is bounded and deadlock-free. This still caps peak memory at
-> `maxInflightSpills × CapBytes` (the `spilling` list never exceeds the bound) and degrades gracefully
-> to old behavior exactly when the producer outpaces encoding (the harness artifact, not production).
-> Confirm this correction in the task-breakdown cross-review before implementing 7B.
+**Recap (full design in spec §7a v5):** move the ~17s spill encode off-worker via a detached-head
+hand-off + the committed `spilling` read tier. One in-flight spill; install-time id; a worker-controlled
+`blockProducer` gate; E unchanged. Gate hardest on the **B1 zero-concurrency silent-corruption test**.
 
-**Three BLOCKERs the design must satisfy (spec §7a):**
-- **B1 (silent corruption, ZERO concurrency):** `forwardKeywords` is the worker's OWN "read old
-  keyword set" on every edit. After a doc detaches, its forward is in `spilling`; a re-post that diffs
-  against an empty `old` writes NO tombstones for dropped keywords → they resurrect. **All four read
-  paths must consult the `spilling` tier.**
-- **B2/B3 (atomicity):** detach (swap head + publish to `spilling` + reserve/bump outId) is ONE
-  `s.mu.Lock()`; install (append segMeta + publish snapshot + remove from `spilling`) is ONE
-  `s.mu.Lock()`. So a reader never sees a doc in neither tier.
-- **M1/M2 (lifetime + read-only):** readers COPY deltas under `s.mu.RLock()` (no refcount, no pool
-  reuse of a detached head); the encode is strictly READ-ONLY over the detached head.
+**Invariants that survive into v5 (the rest is superseded):**
+- **B1 (silent corruption, ZERO concurrency):** all four read paths consult `spilling` (DONE in 7A).
+- **Atomicity:** detach is ONE `s.mu.Lock` (swap + push spilling + set spillInFlight, **no id**);
+  install is ONE `s.mu.Lock` (assign id + rename + append segMeta + publish + remove, **publish before
+  remove**). A reader never sees a doc in neither tier.
+- **M1/M2 (lifetime + read-only):** readers COPY deltas under `s.mu.RLock()` (no refcount); the encode
+  is strictly READ-ONLY over the detached head.
 
 ### Task 7A — the `spilling` tier + three-tier reads (the B1 fix), with a test-injected head
 
@@ -1927,349 +1921,89 @@ does NOT yield one tombstoned in spilling. Run → PASS. Full suite + `-race` gr
 
 `git commit -m "feat(invertedstore): spilling read tier across all four read paths (F: B1 fix)"`
 
-### Task 7B — detach / encode-off-worker / install, with the deadlock-safe bound
+### Task 7B — F (v5): detach + encode off-worker + install-time id, with the producer gate
 
-**Files:** `head.go` (split `spill`), `store.go` (Options `MaxInflightSpills`, the pool, Open/Close),
-`update.go` (applyBatch over-cap dispatch); test `core/invertedstore/spill_offworker_test.go` (new).
+**AUTHORITATIVE DESIGN: spec `invertedstore-ingestion-perf-spec.md` §7a "(F) … v5: simplified"** (3
+review rounds — R1 ordering, R2 deadlock/backpressure, R3 consistency; converged). Implement strictly
+per it. One-paragraph recap: **one in-flight spill**; the seg id is assigned at **install** (encode
+writes a temp file `seg-tmp-<n>.dat`, install does `id=NextSegId++` + `os.Rename`); a worker-controlled
+**`blockProducer` gate** (`sync.NewCond(&s.mu)`, producer loops `for blockProducer { Wait() }` BEFORE
+`q.AddFunc`) bounds the live head only on `over-cap + spillInFlight`; **E is unchanged**. The v4
+pool/`maxInflightSpills`/ordered-install/merge-deferral are GONE.
 
-- [ ] **Step 1 — Split `spill` into detach / encode / install.**
+**Files:**
+- `core/invertedstore/head.go`: split `spill` into `detachHeadLocked` (one `s.mu.Lock`: swap head →
+  fresh, append old to `s.spilling`, set `spillInFlight`, allocate temp counter `n`; the over-cap
+  check + `spillInFlight` read are in the SAME section) / `encodeSpill` (off-worker, READ-ONLY over the
+  detached head, writes `seg-tmp-<n>.dat`) / `installSpill` (worker `RunFunc`, one `s.mu.Lock`:
+  `id=NextSegId++`, rename temp→`seg-<id>.dat`, append segMeta, `publishSnapshotLocked`, remove entry
+  **publish-before-remove**, `spillInFlight=false`, clear `blockProducer`+broadcast, **re-check ALL
+  tables** for an over-cap head and re-dispatch); `dispatchSpill` (spawn the encode goroutine + the
+  bounded install retry → give-up). Keep a synchronous `spill` for `spillForTest`/Close-flush.
+- `core/invertedstore/store.go`: `Store.spillInFlight bool`, `blockProducer bool`, `spillCond
+  *sync.Cond` (`L=&s.mu`), `spillWG sync.WaitGroup`, `spillTempCtr`; `Options.MaxInstallRetries`
+  (default 5) in `withDefaults`; `CloseAndWait` drain (§7a — clear+broadcast FIRST, quiesce, drain the
+  encode OFF the worker via `spillWG.Wait()`/a done-chan on the CALLER goroutine, install-first, then
+  flush, then `stopMergeLoop`+teardown); `Open` inits the cond; extend `parseSegFileName`/
+  `sweepOrphanSegments` (G) to also remove `seg-tmp-*`.
+- `core/invertedstore/update.go`: `applyBatch` over-cap → if `!spillInFlight` `dispatchSpill` else set
+  `blockProducer`; `Update`/`Commit` `for blockProducer { spillCond.Wait() }` (under `s.mu`) BEFORE
+  `q.AddFunc`.
+- `core/invertedstore/spilling.go`: `spillEntry.outId` → `tempN` (install assigns the id now);
+  update `injectSpillingHeadForTest` (export_test.go) accordingly.
+- `core/invertedstore/spill_offworker_test.go` (new) + `export_test.go` (`encodeSpillBlock` hook fired
+  at the top of `encodeSpill`; accessors for `len(s.spilling)`/`spillInFlight`).
 
-Refactor `head.go` `spill` (lines 89–223) into three functions, preserving the byte-identical segment
-output (F0's inline dict already removed the re-read):
+- [ ] **Step 1 — THE B1 gate (write first; gate hardest).** `TestSpillF_B1_RepostAfterDetachTombstonesDropped`
+  (ZERO concurrency): `Options{CapBytes:64}`; `s.Update(tbl,1,[alpha,beta])`; the tiny cap forces an
+  async detach — park the encode via `encodeSpillBlock`; **assert the async branch was taken**
+  (`len(s.spilling)==1` right after the encode parks — fail loud if it silently took a sync path);
+  `s.Update(tbl,1,[alpha])` (drop beta) on the worker; release the encode; drain; assert
+  `searchDocidsForTest(t,s,tbl,"beta")` is empty (forwardKeywords saw D's old set via the spilling
+  tier). Run `-count=20`. It MUST be a real discriminator (would fail if forwardKeywords stopped
+  consulting spilling — 7A).
+- [ ] **Step 2 — Run RED.** Before 7B the async machinery (`dispatchSpill`/`encodeSpill`/
+  `encodeSpillBlock`/`spillInFlight`) doesn't exist → the test can't force the parked-detach → FAIL.
+  Confirm a genuine red.
+- [ ] **Step 3 — Implement per §7a.** detach / encodeSpill(temp) / installSpill(install-time id,
+  rename, publish-before-remove, re-dispatch-all-tables) / dispatchSpill(retry→give-up) / the
+  `blockProducer` gate (`Cond.L==&s.mu`, `for`-loop) / CloseAndWait off-worker drain / G `seg-tmp-*`
+  sweep. `spillForTest` stays synchronous (so existing tests keep passing). B1 test → GREEN.
+- [ ] **Step 4 — The other v5 gates** (spec §9 F bullets):
+  - **install-time-id newest-wins:** with a concurrent merge parked via `mergeComputeBlock`, assert the
+    parked spill installs with a HIGHER id than the merge and a dropped keyword is NOT resurrected.
+  - **gate bound + liveness (single AND multi-table):** fast producer + slowed encode → peak
+    `len(s.spilling) ≤ 1`, the producer parks at the gate; after install the over-cap head — including
+    one on a DIFFERENT table — is re-dispatched → the build CONVERGES (timeout-guarded, no wedge).
+  - **CloseAndWait drain:** in-flight encode blocked then released → `CloseAndWait` returns within a
+    timeout + the doc is durable on reopen.
+  - **install-failure give-up bound:** force `writeManifestBytes` to fail persistently (MANIFEST.tmp as
+    a dir) → bounded retries → give-up drops the entry, clears `spillInFlight`/`blockProducer`,
+    re-dispatches; no spin, no producer-stuck, `len(s.spilling)` bounded; data is crash-volatile
+    (indexer replay recovers, §9).
+  - **crash:** detached head lost (volatile) + no `seg-tmp-*` orphan after reopen + consistent.
+- [ ] **Step 5 — Gates + commit.** `cd core && GOWORK=off go test -count=1 ./invertedstore/` green;
+  `go test -race ./invertedstore/ -run 'TestSpillF|TestSpilling' -count=5` clean; `go vet` clean;
+  `go-cov` ≥ 90%. Commit `feat(invertedstore): detach + encode spill off the worker, install-time id (F v5)`.
 
-```go
-// detachHeadLocked swaps in a fresh head, publishes the old into s.spilling, and reserves+bumps the
-// segment id — ATOMICALLY (caller holds s.mu.Lock). Returns the entry to encode, or nil if the head
-// is empty. The atomic swap+publish+reserve is BLOCKER B2/B3: a reader (or the worker's own
-// forwardKeywords) must never see the doc in neither the live head nor spilling nor a segment.
-func (s *Store) detachHeadLocked(tableId int) *spillEntry {
-	h := s.head[tableId]
-	if h == nil || (len(h.inv) == 0 && len(h.fwd) == 0 && len(h.delForward) == 0) {
-		return nil
-	}
-	s.head[tableId] = newHeadTable()
-	minD, maxD := headForwardRange(h) // Task 7C
-	outId := s.man.NextSegId
-	s.man.NextSegId++
-	e := &spillEntry{tableId: tableId, head: h, outId: outId, minDocid: minD, maxDocid: maxD}
-	s.spilling = append(s.spilling, e)
-	return e
-}
+### Task 7C — (DE-SCOPED) spilling-head docid-range skip
 
-// encodeSpill writes entry.head as one immutable L0 segment at entry.outId and returns the opened
-// segment + its segMeta. READ-ONLY over entry.head (BLOCKER M2: no in-place sort, no scratch aliasing
-// head storage). This is the old spill body's steps 1–4 + finish, minus the head swap/publish/reset
-// (those moved to detach/install). Safe to run OFF the worker (touches only the detached head + a new
-// file).
-func (s *Store) encodeSpill(e *spillEntry) (*segment, segMeta) { /* ...old spill steps 1–4 + finish... */ }
+Per spec §7a v5: with a single parked head this is at most a micro-opt over one head's forward scan.
+**No task** unless a measurement later shows the single-head scan matters. (The old `onSpillingProbe`
+machinery is not needed.)
 
-// installSpillLocked-then-publish appends the segMeta, publishes the snapshot, and removes the entry
-// from s.spilling — ATOMICALLY enough that a reader never loses the doc (BLOCKER B3). It mirrors the
-// old spill's MANIFEST persist-then-publish (marshal under the lock; fsync OUTSIDE; re-lock to append
-// s.segs + publish + remove from spilling). On install FAILURE the entry STAYS in spilling (data
-// preserved). MUST run on the worker.
-func (s *Store) installSpill(e *spillEntry, seg *segment, sm segMeta) error { /* ... */ }
-```
+### Task 7E — final `-race` stress + acceptance measure
 
-- [ ] **Step 2 — Two drivers: synchronous (worker) and off-worker (pool).**
-
-```go
-// spillSync runs the whole spill on the CURRENT worker goroutine (detach + encode + install inline).
-// The classic path: used by spillForTest, CloseAndWait, and the deadlock-safe overflow fallback. NO
-// RunFunc nesting (it is already on the worker — install runs directly).
-func (s *Store) spill(tableId int) error {
-	s.mu.Lock()
-	e := s.detachHeadLocked(tableId)
-	s.mu.Unlock()
-	if e == nil {
-		return nil
-	}
-	seg, sm := s.encodeSpill(e)
-	if err := s.installSpill(e, seg, sm); err != nil {
-		return err
-	}
-	s.triggerMerge(false)
-	return nil
-}
-
-// dispatchSpill is the off-worker hot path. DEADLOCK-SAFE ORDER (cross-review BLOCKER-1/-3): reserve
-// an encode slot NON-BLOCKINGLY *first*; only then detach; the worker NEVER sends on a channel and
-// NEVER blocks. On overflow (no slot) it returns false WITHOUT detaching, so the caller takes the
-// fully-synchronous spill. The slot is held from reserve until install completes (bounds detached
-// heads to MaxInflightSpills). The encode runs on a fresh goroutine; only THAT goroutine does the
-// blocking RunFunc(install) — the worker is never the one waiting, so there is no worker⇄pool cycle.
-func (s *Store) dispatchSpill(tableId int) bool {
-	select {
-	case s.spillSem <- struct{}{}: // reserve a slot (cap = MaxInflightSpills); non-blocking
-	default:
-		return false // pool full → caller falls back to synchronous spill (no detach, no deadlock)
-	}
-	s.mu.Lock()
-	e := s.detachHeadLocked(tableId)
-	s.mu.Unlock()
-	if e == nil {
-		<-s.spillSem // head empty: release the slot, nothing to encode
-		return true
-	}
-	s.spillWG.Add(1)
-	go func() {
-		defer s.spillWG.Done()
-		seg, sm := s.encodeSpill(e) // OFF the worker (read-only over the detached head)
-		// Retry the install on transient MANIFEST-write failure (R2 BLOCKER-2): the entry stays
-		// read-correct in s.spilling until it installs, so a failed install must NOT silently strand
-		// it (that would leak the head + answer reads from a never-sealed tier forever). Release the
-		// slot ONLY after a SUCCESSFUL install; on give-up, KEEP the slot held (bounded backpressure,
-		// no leak past the bound). A give-up entry is then CRASH-EQUIVALENT volatile (see below).
-		for attempt := 0; attempt < s.opts.MaxInstallRetries; attempt++ {
-			if err := s.q.RunFunc(func() error { return s.installSpill(e, seg, sm) }); err == nil {
-				<-s.spillSem // success: release the slot
-				s.triggerMerge(false)
-				return
-			}
-			time.Sleep(installBackoff)
-		}
-		// Persistent failure: leave e in s.spilling (read-correct) and HOLD the slot. Further dispatches
-		// then take the synchronous fallback, which also surfaces the error up applyBatch → the store.
-	}()
-	return true
-}
-```
-
-> **Give-up durability (R3 MAJOR):** a give-up entry is **crash-equivalent volatile** — it only
-> happens under PERSISTENT MANIFEST-write/fsync failure (the disk is dying), and on that path the data
-> is lost exactly like an unspilled head on a crash (indexer replay recovers it). `CloseAndWait` does
-> NOT re-drain `s.spilling` (it flushes only `s.head`); on a HEALTHY disk every in-flight encode
-> retry-succeeds and removes itself from `s.spilling` before `spillWG.Wait()` returns, so a clean Close
-> IS durable — the clean-Close drain test (7E) runs the healthy (blocked-then-released, install
-> SUCCEEDS) path. Do NOT claim CloseAndWait drains a give-up entry; it is reclassified as crash loss.
-
-> **`installSpill` atomicity (R2 MAJOR-1) — pin the publish-then-remove ordering:** under ONE final
-> `s.mu.Lock()`, do `s.segs = append(...)` → `publishSnapshotLocked()` → remove `e` from `s.spilling`,
-> in THAT order (publish the segment BEFORE removing the spilling tier, mirroring `installMerge`'s
-> "publish before retire", merge.go:437–445). The LOST direction — remove-from-spilling before the
-> segment is in the published snapshot — leaves a reader seeing the doc in NEITHER tier and MUST be
-> forbidden. The MANIFEST marshal+fsync stays split (marshal under the first lock, fsync OUTSIDE, the
-> append+publish+remove under this second lock), exactly as today's `spill`. Add a B3 ordering test
-> (Task 7E): a reader spinning on the doc's keyword across the install finds it in EVERY snapshot.
-> `Options.MaxInstallRetries` (default ~5) + an `installBackoff` const cap the retry loop.
-
-> **Why this is deadlock-free (BLOCKER-1/-2/-3 resolved):** the worker's `dispatchSpill` only does a
-> non-blocking `select` send to the semaphore + the cheap detach — it never blocks. The blocking
-> `RunFunc(install)` runs on the spawned goroutine; the worker is never parked waiting for that
-> goroutine, so the worker keeps draining its queue and the install always lands (latency, not
-> deadlock — even when the depth-100 queue is full of producer tasks). The detach happens strictly
-> AFTER the slot is secured, so a head is never published to `spilling` with no encoder (BLOCKER-3).
-> **`s.spillSem chan struct{}` (buffered `MaxInflightSpills`) replaces the broken `spillCh`/`inflightSpills`
-> counter; `s.spillWG sync.WaitGroup` lets Close drain in-flight encodes.**
-
-`applyBatch` (update.go) over-cap dispatch:
-
-```go
-	if over {
-		if !s.dispatchSpill(op.tableId) {
-			if err := s.spill(op.tableId); err != nil { // pool full: deadlock-safe synchronous fallback
-				return err
-			}
-		}
-	}
-```
-
-`store.go`: add `Options.MaxInflightSpills` (default 3) and `Options.MaxInstallRetries` (default 5) —
-both MUST be defaulted in `withDefaults` (a zero `MaxInstallRetries` makes the retry loop `for attempt
-< 0` a NO-OP → instant strand):
-
-```go
-	if o.MaxInflightSpills <= 0 {
-		o.MaxInflightSpills = 3
-	}
-	if o.MaxInstallRetries <= 0 {
-		o.MaxInstallRetries = 5
-	}
-```
-
-Add `Store.spillSem chan struct{}` (`make(chan struct{}, MaxInflightSpills)` in Open); `Store.spillWG
-sync.WaitGroup`; and a package const `const installBackoff = 50 * time.Millisecond`. No long-lived pool
-goroutines — each dispatch spawns one (bounded by the semaphore). **`dispatchSpill` (with
-`time.Sleep(installBackoff)`) lands in `head.go`, which must add `"time"` to its imports.**
-`CloseAndWait`: after the final head flush and BEFORE closing segment fds, `s.spillWG.Wait()` so every
-in-flight encode installs (durable on a healthy disk) — see the exact sequence in Task 7D.
-
-> **`spillForTest` stays synchronous** — it already runs `s.spill(tableId)` via `RunFunc`, which now
-> uses the inline `spill` (detach+encode+install on the worker). So every existing test that calls
-> `spillForTest` then asserts `SegmentsForTest()` keeps passing — the `spilling` tier is empty again by
-> the time `spillForTest` returns. The async path is exercised only by the new F tests + `idxbench`.
-
-- [ ] **Step 3 — The CRITICAL B1 zero-concurrency silent-corruption test.**
-
-`spill_offworker_test.go` — the gate. Block the encode via a hook, re-post on the SAME worker, assert
-the dropped keyword is tombstoned:
-
-```go
-package invertedstore
-
-import (
-	"testing"
-	"time"
-
-	"github.com/codetrek/haystack/core/queue"
-)
-
-// B1: with the encode of a detached head blocked, a re-post of the SAME doc on the worker must diff
-// against the doc's keywords IN THE SPILLING TIER (forwardKeywords reads spilling) and tombstone the
-// dropped keyword. If forwardKeywords ignored spilling, "beta" would resurrect — ZERO concurrency.
-func TestSpillF_B1_RepostAfterDetachTombstonesDropped(t *testing.T) {
-	q := queue.NewMpsc("spillf-b1")
-	q.Start()
-	s, err := Open(t.TempDir(), q, Options{CapBytes: 64, MaxInflightSpills: 2})
-	if err != nil {
-		t.Fatal(err)
-	}
-	tbl, _ := s.CreateTable("files")
-
-	release := make(chan struct{})
-	encoded := make(chan struct{}, 1)
-	encodeSpillBlock = func() { select { case encoded <- struct{}{}: default: }; <-release }
-	t.Cleanup(func() { encodeSpillBlock = nil; close(release) })
-
-	// Post doc 1 with [alpha,beta]; a tiny CapBytes forces a detach via the async path (encode parks).
-	s.Update(tbl, 1, []string{"alpha", "beta"})
-	select {
-	case <-encoded:
-	case <-time.After(5 * time.Second):
-		t.Fatal("detached-head encode never started (no async detach happened)")
-	}
-	// Re-post doc 1 dropping "beta" — on the worker, while the old head is parked in spilling.
-	s.Update(tbl, 1, []string{"alpha"})
-	s.q.RunFunc(func() error { return nil }) // drain the apply
-	close(release)                            // let the encode + install finish
-	s.q.RunFunc(func() error { return nil })
-
-	// "beta" must NOT be searchable for doc 1 (it was tombstoned because the re-post saw the spilling set).
-	if got := searchDocidsForTest(t, s, tbl, "beta"); len(got) != 0 {
-		t.Fatalf("beta resurrected for %v — forwardKeywords did not consult the spilling tier (B1)", got)
-	}
-}
-```
-
-(Add `var encodeSpillBlock func()` fired at the top of `encodeSpill`, nil in prod.)
-
-- [ ] **Step 4 — Run; verify it fails; implement 7B; re-run until the B1 test passes.**
-
-Expected initial FAIL: until `applyBatch` uses `dispatchSpill` AND `forwardKeywords` consults
-`spilling` (7A), the re-post diffs against an empty `old`. Implement 7B; the B1 test must go GREEN.
-This is the hardest gate — do not proceed until it passes deterministically (run `-count=20`).
-
-- [ ] **Step 5 — Commit 7B.** `feat(invertedstore): detach head + encode spill off the worker (F)`
-
-### Task 7C — spilling-head docid-range skip (so F does not undo B)
-
-- [ ] **Step 1 — `headForwardRange` + the skip + test.**
-
-`spilling.go`:
-
-```go
-// headForwardRange is the docid span of a head's forward records (live fwd + delForward) — the
-// spilling-head analog of segMeta's [MinDocid,MaxDocid] (B). An empty head ⇒ the always-skip range.
-func headForwardRange(h *headTable) (min, max int64) {
-	min, max = emptyDocidRange()
-	note := func(d int64) {
-		if d < min { min = d }
-		if d > max { max = d }
-	}
-	for d := range h.fwd {
-		note(d)
-	}
-	for d := range h.delForward {
-		note(d)
-	}
-	return
-}
-```
-
-Wire the skip in `forwardKeywords`'s spilling loop (the comment placeholder from 7A Step 3):
-`if docid < e.minDocid || docid > e.maxDocid { continue }`. (Search/GetDocs are prefix/keyword reads,
-not single-docid — no range skip there.) Replace the 7A `injectSpillingHeadForTest` stub's
-full-span with the real `headForwardRange`.
-
-Test: inject two spilling heads with disjoint docid ranges; a `forwardKeywordsForTest` for a docid in
-one range must not scan the other head. **The existing `onForwardProbe` hook observes only SEGMENT
-probes — add a distinct `onSpillingProbe func()` fired in `forwardKeywords`' spilling loop (just
-before `headForwardLookup`, after the range check passes) + an `installSpillingProbeCounter` test
-seam** (do NOT reuse the non-existent `forwardProbeHook`). Confirms F keeps B's O(1)-on-cold-build
-property on the head axis. Commit:
-`perf(invertedstore): docid-range skip for spilling heads (F, keeps B)`.
-
-### Task 7D — Close drain + crash/orphan consistency
-
-- [ ] **Step 1 — Drain in-flight spills at Close; crash test.**
-
-**`CloseAndWait` drain — EXACT ordering (cross-review R2 BLOCKER-1: `spillWG.Wait()` on the worker
-deadlocks against the in-flight install `RunFunc`).** The Wait MUST run on the Close CALLER goroutine
-while the worker is still draining `m.q`, never inside a worker `RunFunc` task. Sequence:
-
-```go
-func (s *Store) CloseAndWait() {
-	s.q.RunFunc(func() error { /* final head flush: spill every non-empty head SYNCHRONOUSLY */ })
-	s.spillWG.Wait() // CALLER goroutine: worker still alive + draining, so each in-flight install
-	                 // RunFunc lands and every dispatch goroutine reaches Done(). NEVER on the worker.
-	s.stopMergeLoop() // safe now: encodes done; a triggerMerge raised during the drain is caught by drainMerge
-	// ... existing: lock, publish emptySnapshot, retireKeepFile each segment ...
-}
-```
-
-A dispatch goroutine raises `triggerMerge(false)` after its install + before `Done()`, so a merge may
-be signaled during the drain; `stopMergeLoop` AFTER `Wait()` (worker still alive) catches it via
-`drainMerge`. **Add a Close-drain test (Task 7E):** dispatch a spill, block its encode via
-`encodeSpillBlock`, call `CloseAndWait` from a goroutine, release the encode, assert `CloseAndWait`
-RETURNS within a timeout AND the doc is durable on reopen — the 7D crash test does NOT exercise the
-clean-Close drain.
-
-On a CRASH (no clean Close), a detached-but-not-installed head is volatile (lost, like today's
-unspilled head — indexer replay recovers it) and its reserved-id file is an orphan swept by **G**
-(Task 6). **Extend `dropHeadCloseSegmentsForTest` (cross-review): the crash stub must abandon in-flight
-encode goroutines without hanging** — it must NOT `spillWG.Wait()` (that would wait out the very
-encodes the crash is meant to lose); drop the head map, stop the merge loop, retireKeepFile the
-segments, and let any in-flight encode goroutine finish into the torn-down store harmlessly (its
-`RunFunc(install)` returns once the queue stops; assert no panic on a stopped queue). Test: dispatch a
-spill, block the install, simulate crash → reopen → the doc is absent (volatile) AND no orphan
-`seg-*.dat` remains (G swept it) AND the store is consistent (differential vs a re-applied reference).
-Commit: `fix(invertedstore): drain in-flight spills on Close; F crash-consistency`.
-
-### Task 7E — full `-race` atomicity stress + acceptance measure
-
-- [ ] **Step 1 — B2/B3 atomicity + bound + ordering, all under `-race`.**
-
-`spill_offworker_test.go` add: (B2/B3) concurrent `Update`s + `Search`es while encodes are
-blocked/unblocked, asserting a doc is NEVER invisible across the detach→install window (a Search for
-its keyword finds it the whole time) and ids never collide. (bound) a fast producer with the encode
-artificially slowed never exceeds `MaxInflightSpills` detached heads (peak `len(s.spilling)` ≤ bound
-via an export_test accessor; the rest take the synchronous fallback) — and never deadlocks. **(install-
-failure bound — R2 BLOCKER-2)** a forced-install-failure (`beforeManifestFsync` errors N times) must
-keep `len(s.spilling)` bounded (the slot is held, not leaked) and the entry stays read-correct; once
-the failure clears, it installs. **(queue saturation — R2 BLOCKER-2/MAJOR)** a variant that floods the
-depth-100 mpsc queue with producer `AddFunc`s WHILE an off-worker encode's install `RunFunc` is
-pending must still drain (no wedge). **(B3 publish-then-remove — R2 MAJOR-1)** a reader spinning on a
-doc's keyword across the detach→install handoff finds it in EVERY snapshot. **(clean-Close drain — R2
-BLOCKER-1)** `CloseAndWait` with a blocked-then-released encode RETURNS within a timeout + the doc is
-durable on reopen. (ordering) two in-flight spills install in detach order. Run
-`go test -race ./invertedstore/ -run TestSpillF -count=10` → clean.
-
-- [ ] **Step 2 — Whole-suite gates + read-regression + acceptance measure; commit.**
-
-`cd core && GOWORK=off go test -race ./invertedstore/` clean; `go-cov` TOTAL ≥ 90%; whole-workspace
-(`make coverage` root AND `cd core && go-cov` — both gate, per the go-cov gotcha). `idxbench` final
-build: capture a CPU profile and confirm **NEITHER merge NOR spill encode is on the worker**; the
-worker is `addPosting` (~12–14s post head-fix) + ms installs + the `spilling`/forward reads. **Confirm
-the producer (`tLoad` + `Update` keyword copy + `Commit`) is < the worker time** (spec §10 — else the
-producer is the new floor). **READ-REGRESSION + DISK (cross-review R2 MAJOR-3 — F's three-tier read
-adds per-read work):** add a Go benchmark (`BenchmarkSearch`/`BenchmarkForwardKeywords` over a built
-index with N sealed segments) run BEFORE F (capture a baseline ns/op) and AFTER F; assert no material
-regression on the steady-state read path (spilling empty in steady state ⇒ the tier loop is a cheap
-`len(s.spilling)==0` skip). Record on-disk size (`du -sb` the store dir) after F vs the ~240 MiB
-baseline. Record the final build (~25–32s target, measured). Commit:
-`perf(invertedstore): F complete — residual spill encode off the worker`.
-
----
+- [ ] **Step 1 — `-race` stress.** Concurrent `Update` + `Search` + a parked-then-released merge +
+  parked-then-released spills, `-race -count=10`: clean; hits identical to a serial reference build; a
+  doc is never invisible across detach→install (publish-before-remove). Plus the queue-saturation
+  variant (flood the depth-100 queue while an install `RunFunc` is pending) — must still drain.
+- [ ] **Step 2 — Whole-suite gates + acceptance.** `-race` clean; `go-cov` ≥ 90%; whole-workspace
+  (`make coverage` root AND `cd core && go-cov`). `idxbench` final build (REQUIRES the lx.gob corpus —
+  if unavailable, DEFER + note in the commit, do NOT assert a number): CPU profile shows NEITHER merge
+  NOR spill encode on the worker; confirm the producer (`tLoad`) is < the worker; record build time +
+  `du -sb` disk + a Search/forwardKeywords benchmark vs a pre-F baseline (the 3-tier read adds work).
+  Commit `perf(invertedstore): F complete — residual spill encode off the worker (v5)`.
 
 ## Acceptance criteria (spec §10) — checked after F
 
@@ -2282,8 +2016,8 @@ baseline. Record the final build (~25–32s target, measured). Commit:
 - [ ] Build CPU profile after F: NEITHER merge NOR spill encode on the worker; worker dominated by
   `addPosting` + ms installs + the `spilling`/forward read. GC cycles + peak heap down.
 - [ ] `hits` identical (**2,414,505**); `-race` clean; disk unchanged (~240 MiB); search not regressed.
-- [ ] Memory bounded: peak in-flight postings ≤ E budget; detached heads ≤ `MaxInflightSpills ×
-  CapBytes`.
+- [ ] Memory bounded: peak in-flight postings ≤ E budget; **≤ 1 parked detached head (one-in-flight);
+  peak un-installed ≈ ~2 heads + bounded queue overshoot** (NOT a hard `×CapBytes`; spec §7a v5).
 
 ## Cross-cutting reminders (apply to EVERY task)
 
