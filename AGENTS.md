@@ -3,6 +3,25 @@
 Mandatory working principles for any AI agent (Claude Code, etc.) operating in this
 repository. They override default behavior. **Read them at the start of every session.**
 
+## 0. NEVER write code directly — the SDD flow is mandatory, no exceptions
+
+For any code change, however small or "obvious", you MUST follow this pipeline IN ORDER and
+NEVER skip a stage:
+
+1. **Spec** — write the design/spec first (chunked per Principle 3).
+2. **Multi-agent review** — dispatch MULTIPLE independent review agents to cross-review the
+   spec; fix every blocker/major before proceeding.
+3. **Task breakdown** — decompose into bite-sized TDD tasks.
+4. **Multi-agent cross-review** — multiple agents cross-review the task breakdown; fix issues.
+5. **Implementation** — TDD (red → green) under an SDD workflow; cross-review each step with
+   multiple agents.
+
+Do NOT jump straight to editing code, not even for a "quick prototype", a "let me just
+measure it" spike, or a one-line fix. Prototyping a change before the spec/review is still
+"writing code directly" and is forbidden. Measurement that requires new/changed product code
+follows the same flow. If you catch yourself opening an editor before the spec is written and
+reviewed, STOP and go back to stage 1.
+
 ## 1. Infrastructure: ship any real benefit, however small
 
 This work is infrastructure. If a change produces a **real, correct benefit — even a
