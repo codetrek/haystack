@@ -320,13 +320,14 @@ install (or give-up). Bound: peak un-installed ≈ the one parked head (≤ CapB
 harness race-ahead artifact, small for the I/O-bound production producer) ≈ **~2 heads + bounded queue
 overshoot** (NOT a hard 2×CapBytes; state it honestly).
 
-**CloseAndWait — the v4 deadlock site, now specified (review R1):** quiesce producers, then drain the
-in-flight encode **OFF the worker** — wait on a `spillDone` channel / `WaitGroup` from the **caller**
-goroutine (exactly like `stopMergeLoop`'s `<-mergeDone`), NEVER a `Wait()` inside a worker `RunFunc`
-(that deadlocks against the install `RunFunc` — the v4 regression). Order: let the in-flight spill
-**install first** (preserves seal order), THEN flush any remaining live head synchronously, THEN
-`stopMergeLoop` + teardown. Clear `blockProducer` + broadcast so a producer parked at the gate is
-released.
+**CloseAndWait — the v4 deadlock site, now specified (review R1):** FIRST clear `blockProducer` +
+broadcast (so any producer parked at the gate is released and can finish/observe the close — broadcast
+BEFORE joining producers, or a producer stuck in `cond.Wait()` can never be quiesced), quiesce
+producers, then drain the in-flight encode **OFF the worker** — wait on a `spillDone` channel /
+`WaitGroup` from the **caller** goroutine (exactly like `stopMergeLoop`'s `<-mergeDone`), NEVER a
+`Wait()` inside a worker `RunFunc` (that deadlocks against the install `RunFunc` — the v4 regression).
+Order: let the in-flight spill **install first** (preserves seal order), THEN flush any remaining live
+head synchronously, THEN `stopMergeLoop` + teardown.
 
 **Crash:** a detached-but-not-installed head is volatile (lost on crash, like today's unspilled head;
 indexer replay recovers it). The temp file is an orphan swept by **G** (extend G + `parseSegFileName`
@@ -340,7 +341,7 @@ docid-range skip (old 7C) is now at most a micro-opt over a single parked head �
 **Expected:** drains the residual ~17s off-worker when the encode overlaps filling the next head →
 worker ≈ addPosting ~12–14s (post head-fix) + per-spill installs + the `spilling` read; producer
 backpressure caps the overlap to ~1 head, so the win is bounded by encode-vs-fill rate (measure). Net
-build ~25–32s (review-calibrated). Memory ≤ ~2 × CapBytes.
+build ~25–32s (review-calibrated). Memory ≈ ~2 heads + bounded queue overshoot (NOT a hard 2×CapBytes).
 
 
 ## 7b. (G) Open sweeps orphan segment files
