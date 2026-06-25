@@ -264,7 +264,10 @@ off-worker, install the resulting segment on the worker.
 
 **Detach (worker, one `s.mu.Lock()`):** swap `s.head[T]` → fresh, append the old head to `s.spilling`
 (now ≤ 1 entry), set `spillInFlight=true`. **No id reserved, no NextSegId bump.** Dispatch the encode
-of the old head to a background goroutine writing the temp file.
+of the old head to a background goroutine writing the temp file. The over-cap check, the `spillInFlight`
+read, and the swap/append/set MUST be ONE `s.mu` section, so two applies (or an apply + an install's
+re-dispatch) can never both detach → one-in-flight stays race-free. `spillEntry` carries the **temp
+counter `n`** (the v4 `outId` field is gone — install assigns the id), not a reserved seg id.
 
 **Reads consult `spilling` (7A, the B1 fix — DONE, committed `85d30aa`):** `forwardKeywords` is the
 worker's OWN "read old keyword set" on every edit; after a doc detaches, its forward is in `spilling`,
@@ -278,9 +281,15 @@ recursive re-lock). Encode is strictly READ-ONLY over the detached head (M2).
 **Install (worker `RunFunc`, one `s.mu.Lock()`):** `id = NextSegId++`; rename temp → `seg-<id>.dat`;
 append `segMeta`; `publishSnapshotLocked()`; remove the entry from `s.spilling` (**publish before
 remove** — the lost direction is forbidden); `spillInFlight=false`; then re-check for an over-cap head
-and dispatch its detach (so a head that filled while this spill was in flight spills promptly). On
-install FAILURE, the entry stays in `s.spilling` (data preserved) and `spillInFlight` stays set; a
-bounded retry then a give-up that treats it as crash-volatile.
+and dispatch its detach (so a head that filled while this spill was in flight spills promptly). **This
+re-dispatch is LOAD-BEARING for liveness** (review R1): without it, a head that went over-cap while the
+spill was in flight is never detached once the producer re-blocks → permanent wedge; gate it with a
+fast-producer/slow-encode test. The dir-fsync in `writeManifestBytes` makes the rename + the new
+MANIFEST durable together; a crash before the rename leaves a `seg-tmp-*` orphan (G sweeps it), after
+the rename but before the MANIFEST an un-referenced `seg-<id>.dat` (G sweeps it). On install FAILURE,
+the entry stays in `s.spilling` (data preserved) and `spillInFlight` stays set; a bounded retry then a
+give-up that drops the entry, clears `spillInFlight`/`blockProducer`, and re-dispatches — treating the
+lost head as crash-volatile.
 
 **One-in-flight enforcement (no worker block, no deadlock):** in `applyBatch`, on over-cap: if
 `spillInFlight`, do NOT detach a second spill — the head simply keeps the data (bounded by producer
@@ -290,18 +299,33 @@ backpressured and the worker runs out of applies, it goes **idle** and naturally
 goroutine's install `RunFunc` — it is never parked *waiting* for that install (the deadlock v4's
 "worker blocks the detach" had). Single-mutator preserved (install runs on the worker).
 
-**Producer backpressure (bounds the un-installed data to ~2 heads):** extend E so a head's acquired
-postings tokens are RELEASED at **spill install** (not at applyBatch return): the head accumulates the
-tokens its ops acquired, and `installSpill` releases that exact sum (acquire/release stay balanced
-regardless of in-head dedup). Size the budget at ~2–3 × CapBytes-worth of postings, so while one spill
-is parked (~1 head of tokens held) the producer can fill ~1 more head, then blocks until the parked
-spill installs. This caps peak un-installed memory at ~2 heads and rate-matches the producer to the
-install rate — the realization of "if the next buffer fills before the current spill lands, the
-producer waits."
+**Producer backpressure — a worker-controlled GATE, NOT release-at-install (review R1):** E is
+UNCHANGED (tokens still released at applyBatch return — E bounds the QUEUE). The only unbounded-growth
+path F adds is `over-cap + spillInFlight` (the worker can't detach a 2nd spill, so the live head keeps
+growing). F adds its own gate for exactly that: when the worker hits over-cap while a spill is in
+flight, it sets `blockProducer` (under `s.mu`); `Update`/`Commit` wait on a `sync.Cond` while
+`blockProducer` is set, **BEFORE `q.AddFunc`** (a blocked producer holds ZERO queue slots — the
+property that keeps this deadlock-free). `installSpill` clears `blockProducer`, detaches the now-over-cap
+head, and broadcasts. **Release-at-install was REJECTED:** it pins a head's tokens for its whole
+residency, and heads that NEVER spill — a partial steady-state head, the `CloseAndWait` flush, a
+`DeleteTable` head-drop, a spill-install give-up — would orphan their tokens and shrink the budget to a
+deadlock. The gate has none of that: it is set only on over-cap-with-spill-in-flight, cleared at
+install (or give-up). Bound: peak un-installed ≈ the one parked head (≤ CapBytes) + the live head
+(≤ CapBytes + the applies already enqueued in the depth-100 mpsc queue when the gate engaged — a
+harness race-ahead artifact, small for the I/O-bound production producer) ≈ **~2 heads + bounded queue
+overshoot** (NOT a hard 2×CapBytes; state it honestly).
+
+**CloseAndWait — the v4 deadlock site, now specified (review R1):** quiesce producers, then drain the
+in-flight encode **OFF the worker** — wait on a `spillDone` channel / `WaitGroup` from the **caller**
+goroutine (exactly like `stopMergeLoop`'s `<-mergeDone`), NEVER a `Wait()` inside a worker `RunFunc`
+(that deadlocks against the install `RunFunc` — the v4 regression). Order: let the in-flight spill
+**install first** (preserves seal order), THEN flush any remaining live head synchronously, THEN
+`stopMergeLoop` + teardown. Clear `blockProducer` + broadcast so a producer parked at the gate is
+released.
 
 **Crash:** a detached-but-not-installed head is volatile (lost on crash, like today's unspilled head;
-indexer replay recovers it). The temp file is an orphan swept by **G** (extend G to also remove
-`seg-tmp-*`). No cross-reopen double-visibility (`spilling` is in-memory).
+indexer replay recovers it). The temp file is an orphan swept by **G** (extend G + `parseSegFileName`
+to also remove `seg-tmp-*`). No cross-reopen double-visibility (`spilling` is in-memory).
 
 **Dropped from v4 (no longer needed):** the bounded encode **pool** + `maxInflightSpills` multi-slot,
 the **detach-time id reserve**/NextSegId bump-at-detach, the **ordered-install** state machine, the
