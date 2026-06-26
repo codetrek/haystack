@@ -164,9 +164,26 @@ because it must land BEFORE F (F moves a SMALLER encode off-worker once the re-r
    1-op batch can't repeat a docid, so `seen` is always false and `old` always comes from
    `forwardKeywords` — skip both maps. Guard `len(ops)==1`. (Review-verified safe.)
 2. **Reuse decompress buffers — `mergeCursor`-scratch ONLY, never a global** (`c.key`/`c.val` alias
-   `c.blk`; K cursors' blocks coexist). Most removed by A+B; measure the residual. **MUST NOT alias/
-   in-place-sort head storage** (interacts with F's read-only-detached-head invariant — §7a M2).
-3. Reuse spill/encode scratch where provably not retained.
+   `c.blk`; K cursors' blocks coexist). Measured **1.95 GB** alloc cum. **MUST NOT alias/in-place-sort
+   head storage** (interacts with F's read-only-detached-head invariant — §7a M2).
+3. **Reuse spill/merge ENCODE scratch in `segWriter`** where provably not retained: `encodeDocs` /
+   `encodeForward` / `appendUvarint` / `flushDictChunk` allocate a fresh `[]byte` per record — measured
+   `encodeDocs` 2.3 GB + `appendUvarint` 1.2 GB + `flushDictChunk` 2.3 GB cum + `encodeForward` 1.1 GB.
+   `addEntry` copies into `blkRaw` immediately, so a per-writer scratch is safe (the value is not
+   retained after the copy). Encode output scratch is NOT head storage, so it does not violate M2.
+4. **(BIGGEST — v6, measured) `mergeSegments` per-keyword `adds`/`dels` map reuse.** merge.go:275–276
+   allocates TWO `map[int64]struct{}` **per keyword** across the whole merge → **2.1 GB flat / the merge
+   is 44% of alloc + 31% of build CPU**, and the resulting GC (`scanobject` 25%, `findObject` 10%) is
+   the top CPU cost. Fix: hoist the two maps out of the per-key loop and `clear()`+reuse them each key
+   (the maps are fully consumed — encoded into the output record — before the next key, so reuse is
+   safe). Cuts the largest single alloc source. Since the merge runs OFF the worker (A), this is an
+   **RSS/GC win, not a build-wall win** (the goal here: shrink the ~1 GB build peak RSS, which is the
+   one axis where store loses to pebble's 610 MiB).
+
+> **MEASURED (lx, 94.5k docs, post-F): build 45s (BEATS pebble 64s), disk 238 MiB (2.7× < pebble), but
+> build peak RSS ~1 GB (pebble 610 MiB) from 30 GB alloc churn → ~25% CPU in GC.** Items 2–4 target the
+> churn (merge 44% + encode/decompress scratch) to lower peak RSS. The head `addPosting`/`posting` maps
+> (5.1+1.5 GB) are live until spill (can't trivially pool) → out of scope. **Keep only measured wins.**
 
 ## 6. (D) Keep zstd for merged segments — DECISION
 
