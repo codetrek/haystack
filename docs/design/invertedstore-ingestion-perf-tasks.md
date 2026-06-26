@@ -2007,6 +2007,113 @@ machinery is not needed.)
   `du -sb` disk + a Search/forwardKeywords benchmark vs a pre-F baseline (the 3-tier read adds work).
   Commit `perf(invertedstore): F complete — residual spill encode off the worker (v5)`.
 
+### Task 8 — H: compact head postings (per-keyword map → ordered ops slice)
+
+**AUTHORITATIVE DESIGN: spec §5b "(H) Compact head postings"** (2 review rounds; converged). Implement
+strictly per it. Goal: cut the build's HEAD-dominated peak live heap (`addPosting` map[int64] = 66% of
+peak) → lower build RSS below pebble's 610 with NO GOMEMLIMIT. `postingDelta{adds,dels map[int64]struct{}}`
+→ `postingDelta{ops []int64}` (`docid<<1 | isAdd`, append); `resolveOps` at spill + Search/GetDocs.
+
+**Files:**
+- `core/invertedstore/head.go`: `postingDelta{ops []int64}`; `addPosting`/`tombstonePosting` → O(1)
+  append with the `0 ≤ docid < 1<<62` assert; `posting()` helper (drop the `+16` two-map estimate to a
+  slice-header charge; `h.bytes += 8` per op); `resolveOps(ops []int64) (adds, dels []int64)` (NEW,
+  pure, non-mutating — `sort.SliceStable` keyed on `v>>1`, last-op-per-docid wins, FRESH scratch per
+  call); the spill encode (`encodeHeadToFile`) uses `resolveOps` instead of `setToSlice(pd.adds/dels)`.
+  Remove/replace `setToSlice` if no longer used.
+- `core/invertedstore/search.go`: `Search` (live head + spilling tier) and `GetDocs` (live head +
+  spilling tier) use `resolveOps` instead of `setToSlice(pd.adds/dels)` — copy `ops` under the RLock,
+  resolve on the copy.
+- `core/invertedstore/head_lazy_dels_test.go`: REWRITE (it reads `pd.adds`/`pd.dels` as maps → won't
+  compile) — re-express the lazy/behavior intent against `ops`/`resolveOps`, or fold into the new test.
+- `core/invertedstore/resolve_ops_test.go` (new): the `resolveOps` unit test.
+
+- [ ] **Step 1 — Write the failing `resolveOps` unit test (the genuine red + the discriminator).**
+
+`resolve_ops_test.go`: a table-driven test feeding op sequences and asserting `(adds, dels)`. MUST
+include the **`add→del` case (latest = del → docid in dels, NOT adds)** — this is the case the WRONG
+full-packed-value sort fails — plus `del→add`, `add→del→add`, repeated-add (dedup to one), interleaved
+docids, and the cold-build append-only case. Encode op = `docid<<1 | isAdd`.
+
+```go
+package invertedstore
+
+import (
+	"reflect"
+	"testing"
+)
+
+func op(docid int64, isAdd bool) int64 {
+	v := docid << 1
+	if isAdd {
+		v |= 1
+	}
+	return v
+}
+
+func TestResolveOps_LatestWinsMatchesMap(t *testing.T) {
+	cases := []struct {
+		name       string
+		ops        []int64
+		adds, dels []int64
+	}{
+		{"add only", []int64{op(5, true)}, []int64{5}, nil},
+		{"del only", []int64{op(5, false)}, nil, []int64{5}},
+		{"add then del (latest=del)", []int64{op(5, true), op(5, false)}, nil, []int64{5}},
+		{"del then add (latest=add)", []int64{op(5, false), op(5, true)}, []int64{5}, nil},
+		{"add del add (latest=add)", []int64{op(5, true), op(5, false), op(5, true)}, []int64{5}, nil},
+		{"repeated add dedups", []int64{op(5, true), op(5, true)}, []int64{5}, nil},
+		{"interleaved", []int64{op(1, true), op(2, false), op(1, false), op(2, true)}, []int64{2}, []int64{1}},
+		{"cold-build append-only", []int64{op(3, true), op(7, true), op(1, true)}, []int64{1, 3, 7}, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			adds, dels := resolveOps(append([]int64(nil), c.ops...))
+			sortInt64(adds)
+			sortInt64(dels)
+			if !eqInt64(adds, c.adds) || !eqInt64(dels, c.dels) {
+				t.Fatalf("resolveOps(%v) = adds %v dels %v, want adds %v dels %v", c.ops, adds, dels, c.adds, c.dels)
+			}
+		})
+	}
+}
+
+// resolveOps MUST NOT mutate its input (concurrent Search + the read-only detached-head encode).
+func TestResolveOps_DoesNotMutateInput(t *testing.T) {
+	in := []int64{op(2, true), op(1, false), op(2, false)}
+	cp := append([]int64(nil), in...)
+	resolveOps(in)
+	if !reflect.DeepEqual(in, cp) {
+		t.Fatalf("resolveOps mutated its input: %v != %v", in, cp)
+	}
+}
+```
+
+(`sortInt64`/`eqInt64` — tiny local helpers, or inline.) The "does not mutate" test guards the
+copy-before-sort requirement (M2 + concurrent Search).
+
+- [ ] **Step 2 — Run RED.** `resolveOps` doesn't exist → FAIL (compile). Confirm.
+
+- [ ] **Step 3 — Implement per spec §5b.** `postingDelta{ops}`; append in addPosting/tombstonePosting
+  (with the assert); `resolveOps` (SliceStable by `v>>1`, last-per-docid, fresh scratch, non-mutating);
+  wire spill + Search + GetDocs; rewrite `head_lazy_dels_test.go`; drop `posting() +16`. → GREEN.
+
+- [ ] **Step 4 — Behavior-preservation gates (the real guard).** `cd core && GOWORK=off go test
+  -count=1 ./invertedstore/` (ALL green — the **differential hits-identical (2,414,505)** + crash-
+  recovery + merge-robustness suites are the proof the on-disk behavior is unchanged); `go test -race
+  ./invertedstore/` clean (Search resolving a copied `ops` under the RLock); `go vet` clean; `go-cov` ≥ 90%.
+
+- [ ] **Step 5 — Measure RSS, then commit.** `cd core && go build -o /tmp/idxbench ./cmd/idxbench &&
+  /tmp/idxbench -impl=store -tokens=/workspace/blugespike/lx.gob -data=/workspace/idxbench-store-H
+  -batch=1 -peakheap=/tmp/store-H.heap` → record build/buildPeakRSS/disk/hits; confirm hits 2,414,505,
+  RSS materially DOWN (expected ~400 MiB, below pebble's 610), build ≈ unchanged. Inspect
+  `go tool pprof -inuse_space /tmp/store-H.heap` → `addPosting` no longer dominates. Commit
+  `perf(invertedstore): compact head postings — ordered ops slice (H)` with the measured RSS in the body.
+
+### Task 8 — done-check (acceptance for H)
+- [ ] hits identical (2,414,505); on-disk format byte-identical (differential green); RSS measurably
+  reduced (report the number); `-race`/go-cov green; build time not regressed.
+
 ## Acceptance criteria (spec §10) — checked after F
 
 - [ ] `idxbench -impl=store -batch=1` full lx build measured + reported after EACH task (no asserted
