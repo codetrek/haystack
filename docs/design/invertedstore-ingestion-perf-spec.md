@@ -212,44 +212,58 @@ RSS because peak RSS = the live working set, and the head IS the live working se
 - **cross add-vs-del latest-wins** (a re-add cancels a pending del, so a docid is in exactly one of
   adds/dels) — the ONLY non-redundant job; moved to a cheap resolve-at-consume.
 
-**Change:** `postingDelta { ops []int64 }`, each op `= docid<<1 | isAdd`, **APPENDED in action order**.
-**Packing precondition (REQUIRED — review):** docids are non-negative and `< 2^62` (idtable allocates a
-monotonic positive counter from 1, verified) so `docid<<1` never overflows the sign bit; assert
-`docid >= 0 && docid < 1<<62` in `addPosting`/`tombstonePosting`. If that invariant ever changes, the
-fallback is `struct{docid int64; isAdd bool}` (16 B) or parallel `[]int64`+bitset — still ~3–6× smaller
-than the map. `addPosting`/`tombstonePosting` become an O(1) append — no lookup, no per-keyword map, no
-dedup. `h.bytes += 8` per op (now ≈ ACTUAL memory, so CapBytes becomes honest; also drop the
-`posting()` per-keyword `+16` two-map estimate to a slice-header-sized charge). At spill AND in
-`Search`/`GetDocs`, `resolveOps(ops) → (adds, dels)`: **`sort.SliceStable` keyed on `docid` ONLY
-(`v>>1`)** — NOT the full packed value — then the LAST op per docid decides add-vs-del. **CRITICAL
-(review): sorting the whole packed `int64` is WRONG** (the `isAdd` low bit becomes the tiebreaker, so
-an add always sorts last → `add→del` mis-resolves to add); the sort MUST be STABLE and keyed on `v>>1`
-so equal docids keep insertion order and the last is the true latest action. The sort is the one
-`appendDeltaDocs` already performs, so **no new asymptotic cost** (O(N log N) either way).
+**Change (v3 — REVISED per the implementation; Principle 0 "reality diverges → amend the spec"):**
+`postingDelta { docids []int64; isAdd []uint64 }` — a parallel ordered op log: `docids[i]` is op `i`'s
+docid; bit `i` of the `isAdd` bitset is set iff op `i` is an add (else a tombstone). `addPosting`/
+`tombstonePosting` → O(1) `appendOp(docid, isAdd)` (one `docids` append + one bit set; the bitset grows
+a `uint64` word per 64 ops). **WHY the parallel-bitset, NOT the `docid<<1 | isAdd` packing (v1/v2):**
+the store's docid is the FULL `int64` range — `TestDifferential_Int64DocidFullRange` deliberately feeds
+`1<<62`, `MaxInt64-1`, `MaxInt64` — so the packing's `docid < 2^62` precondition is **UNSATISFIABLE**
+(it would panic/corrupt on that existing test). The bitset form handles the full range AND gives the
+SAME memory: `docids` 8 B/op + the bitset ~0.125 B/op ≈ **8.1 B/op**, vs the map's 48–96 B/entry. No
+lookup, no per-keyword map, no dedup-on-insert, no overflow assert. `h.bytes += 8` per op; `posting()`'s
+fixed per-keyword charge → +24 (one struct + two EMPTY/nil slice headers; no backing array until the
+first `appendOp`). At spill AND in `Search`/`GetDocs`, `resolveOps(pd) → (adds, dels)`: build a
+COPY of the op indices and **stable-sort by `docid`** (preserving insertion order within a docid), then
+the LAST op per docid decides add-vs-del. **CRITICAL: the sort must be STABLE on `docid` (so equal
+docids keep insertion order and the last is the true latest action);** a non-stable sort can reorder
+3+ same-docid ties and pick the wrong final op → `add→del` would mis-resolve. Same O(N log N) the
+encoder's `appendDeltaDocs` already performs — no new asymptotic cost.
 
-**`resolveOps` MUST be non-mutating — copy-before-sort.** It works on a scratch copy of `ops`, never
-sorting the head's slice in place: (1) the F detached head is READ-ONLY during off-worker encode (§7a
-M2); (2) `Search` reads the head under `s.mu.RLock()` concurrently with the worker. Both copy `ops`
-(under the RLock for Search; the encode owns the detached head) and resolve on the copy. **`resolveOps`
-allocates a FRESH scratch per call** (no shared/pooled scratch — two concurrent Searches + the encode
-must not alias). The resolve allocations are read-time churn, not live.
+**`resolveOps` MUST be non-mutating — copy-before-sort.** It resolves on a COPY of the op log (the
+`docids`/`isAdd` it reads), never sorting the head's slices in place: (1) the F detached head is
+READ-ONLY during off-worker encode (§7a M2); (2) `Search` reads the head under `s.mu.RLock()`
+concurrently with the worker appending. **`resolveOps` allocates a FRESH scratch per call** (no
+shared/pooled scratch — two concurrent Searches + the encode must not alias). The resolve allocations
+are read-time churn, not live.
 
-**Memory:** ~8 B/op + one slice header per keyword, vs the map's ~48–96 B/entry + the `*postingDelta`'s
-two map headers. ~5–6× smaller for the common small-keyword case; a 1-doc long-tail keyword drops from
-a whole map to an 8-byte slice. **Expected: head live ~290 → ~60 MB, peak live ~467 → ~200, build RSS
-→ ~400 MB (BELOW pebble's 610, no GOMEMLIMIT).** Measure with `-peakheap` and report.
+**Memory:** ~8.1 B/op (a docid int64 + the bitset bit) + two nil slice headers per keyword, vs the
+map's 48–96 B/entry + the two map headers. ~6–8× smaller; a 1-doc long-tail keyword drops from a whole
+map to an 8-byte slice element. **Measured (lx, bitset impl, `-peakheap`): peak `inuse` 156 MB (vs ~284
+baseline); `addPosting`'s map — the old 188 MB hog — is GONE (`posting`+`appendOp` ≈ 26 MB head).
+Unperturbed build RSS reported separately.**
 
-**Scope:** `head.go` (`postingDelta`, `addPosting`/`tombstonePosting`, the `posting()` helper, the
-`h.bytes` accounting, spill's per-keyword encode via `resolveOps`) + the readers `search.go`
-`Search`/`GetDocs` (`resolveOps` replacing `setToSlice(pd.adds/dels)`). **UNCHANGED:** the forward map
-`h.fwd` (separate; `forwardKeywords` never touches `inv`), `liveByTable`, `segMeta.Postings`, and the
-on-disk segment format (byte-identical — same encoder, same sorted-dedup'd output).
+**`-race` (REVISED — the implementation surfaced this):** H's `h.bytes += 8`/op accounting shifts spill
+cadence vs the old map's `+4`, which surfaces a LATENT ordering bug in the **F B1 test's cleanup**
+(`spill_offworker_test.go`): `t.Cleanup` runs LIFO, so it nils the `encodeSpillBlock` global BEFORE the
+`WaitSpillsForTest` drain, and a re-dispatched spill goroutine reads it → DATA RACE. **Fix as part of
+H (a 5th file):** make the cleanup drain in-flight spills FIRST, then nil the hook (or guard the hook).
+No product data race — test-only ordering — but the `-race` gate must be green.
+
+**Scope:** `head.go` (`postingDelta`, `appendOp`, `addPosting`/`tombstonePosting`, the `posting()`
+helper, the `h.bytes` accounting, spill's per-keyword encode via `resolveOps`, delete `setToSlice`) +
+the readers `search.go` `Search`/`GetDocs` (ALL FOUR `setToSlice(pd.adds/dels)` sites → `resolveOps`)
++ `spill_offworker_test.go` (the F B1 test cleanup-ordering `-race` fix) + `head_lazy_dels_test.go`
+(rewrite). **UNCHANGED:** the forward map `h.fwd` (separate; `forwardKeywords` never touches `inv`),
+`liveByTable`, `segMeta.Postings`, and the on-disk segment format (byte-identical — same encoder).
 
 **Correctness — `resolveOps` must EXACTLY match the map** (a docid ∈ adds iff its LAST op is an add).
-Gated by: the differential **hits-identical (2,414,505)** + crash-recovery + merge-robustness suites;
-a focused `resolveOps` unit test that MUST include the discriminating `add→del` case (latest = del, so
-the wrong full-packed-value sort fails it) plus del→add, add→del→add, repeated-add dedup, interleaved
-docids, and the cold-build append-only case; and `-race` (Search resolving a copied `ops` under the
+Gated by: the differential **hits-identical (2,414,505)** + crash-recovery + merge-robustness suites
+(incl. `TestDifferential_Int64DocidFullRange` — `MaxInt64` docids, which the bitset handles and the
+packing could not); a focused `resolveOps` unit test that MUST include the discriminating `add→del`
+case (latest = del, so a NON-STABLE sort fails it) plus del→add, add→del→add, repeated-add dedup,
+interleaved docids, and the cold-build append-only case; and `-race` (Search resolving a copied op log
+under the
 RLock). **`head_lazy_dels_test.go` reads `pd.adds`/`pd.dels` as maps → it will NOT compile under the
 slice change and MUST be rewritten/replaced** (in scope). Risk is contained to one pure function + its
 two call sites.
