@@ -213,17 +213,26 @@ RSS because peak RSS = the live working set, and the head IS the live working se
   adds/dels) — the ONLY non-redundant job; moved to a cheap resolve-at-consume.
 
 **Change:** `postingDelta { ops []int64 }`, each op `= docid<<1 | isAdd`, **APPENDED in action order**.
-`addPosting`/`tombstonePosting` become an O(1) append — no lookup, no per-keyword map, no dedup.
-`h.bytes += 8` per op (now ≈ ACTUAL memory, so CapBytes becomes honest). At spill AND in `Search`/
-`GetDocs`, `resolveOps(ops) → (adds, dels)`: **stable-sort by `docid`** (preserves insertion order
-within a docid), then the LAST op per docid decides add-vs-del — exactly the map's latest-wins. The
-sort is the one `appendDeltaDocs` already performs, so **no new asymptotic cost** (O(N log N) either way).
+**Packing precondition (REQUIRED — review):** docids are non-negative and `< 2^62` (idtable allocates a
+monotonic positive counter from 1, verified) so `docid<<1` never overflows the sign bit; assert
+`docid >= 0 && docid < 1<<62` in `addPosting`/`tombstonePosting`. If that invariant ever changes, the
+fallback is `struct{docid int64; isAdd bool}` (16 B) or parallel `[]int64`+bitset — still ~3–6× smaller
+than the map. `addPosting`/`tombstonePosting` become an O(1) append — no lookup, no per-keyword map, no
+dedup. `h.bytes += 8` per op (now ≈ ACTUAL memory, so CapBytes becomes honest; also drop the
+`posting()` per-keyword `+16` two-map estimate to a slice-header-sized charge). At spill AND in
+`Search`/`GetDocs`, `resolveOps(ops) → (adds, dels)`: **`sort.SliceStable` keyed on `docid` ONLY
+(`v>>1`)** — NOT the full packed value — then the LAST op per docid decides add-vs-del. **CRITICAL
+(review): sorting the whole packed `int64` is WRONG** (the `isAdd` low bit becomes the tiebreaker, so
+an add always sorts last → `add→del` mis-resolves to add); the sort MUST be STABLE and keyed on `v>>1`
+so equal docids keep insertion order and the last is the true latest action. The sort is the one
+`appendDeltaDocs` already performs, so **no new asymptotic cost** (O(N log N) either way).
 
 **`resolveOps` MUST be non-mutating — copy-before-sort.** It works on a scratch copy of `ops`, never
 sorting the head's slice in place: (1) the F detached head is READ-ONLY during off-worker encode (§7a
 M2); (2) `Search` reads the head under `s.mu.RLock()` concurrently with the worker. Both copy `ops`
-(under the RLock for Search; the encode owns the detached head) and resolve on the copy. The resolve
-allocations are read-time churn, not live.
+(under the RLock for Search; the encode owns the detached head) and resolve on the copy. **`resolveOps`
+allocates a FRESH scratch per call** (no shared/pooled scratch — two concurrent Searches + the encode
+must not alias). The resolve allocations are read-time churn, not live.
 
 **Memory:** ~8 B/op + one slice header per keyword, vs the map's ~48–96 B/entry + the `*postingDelta`'s
 two map headers. ~5–6× smaller for the common small-keyword case; a 1-doc long-tail keyword drops from
@@ -238,9 +247,12 @@ on-disk segment format (byte-identical — same encoder, same sorted-dedup'd out
 
 **Correctness — `resolveOps` must EXACTLY match the map** (a docid ∈ adds iff its LAST op is an add).
 Gated by: the differential **hits-identical (2,414,505)** + crash-recovery + merge-robustness suites;
-a focused `resolveOps` unit test (add/del/add/del sequences; the cold-build append-only case; duplicate
-appends; interleaved docids); and `-race` (Search resolving a copied `ops` under the RLock). Risk is
-contained to one pure function + its two call sites.
+a focused `resolveOps` unit test that MUST include the discriminating `add→del` case (latest = del, so
+the wrong full-packed-value sort fails it) plus del→add, add→del→add, repeated-add dedup, interleaved
+docids, and the cold-build append-only case; and `-race` (Search resolving a copied `ops` under the
+RLock). **`head_lazy_dels_test.go` reads `pd.adds`/`pd.dels` as maps → it will NOT compile under the
+slice change and MUST be rewritten/replaced** (in scope). Risk is contained to one pure function + its
+two call sites.
 
 ## 6. (D) Keep zstd for merged segments — DECISION
 
