@@ -2020,10 +2020,13 @@ peak) → lower build RSS below pebble's 610 with NO GOMEMLIMIT. `postingDelta{a
   slice-header charge; `h.bytes += 8` per op); `resolveOps(ops []int64) (adds, dels []int64)` (NEW,
   pure, non-mutating — `sort.SliceStable` keyed on `v>>1`, last-op-per-docid wins, FRESH scratch per
   call); the spill encode (`encodeHeadToFile`) uses `resolveOps` instead of `setToSlice(pd.adds/dels)`.
-  Remove/replace `setToSlice` if no longer used.
-- `core/invertedstore/search.go`: `Search` (live head + spilling tier) and `GetDocs` (live head +
-  spilling tier) use `resolveOps` instead of `setToSlice(pd.adds/dels)` — copy `ops` under the RLock,
-  resolve on the copy.
+  **`setToSlice` has no maps left to flatten → DELETE it** (its only callers are the spill + the four
+  search.go sites, all converted).
+- `core/invertedstore/search.go`: replace **ALL FOUR** `setToSlice(pd.adds/dels)` call sites with a
+  copy-of-`pd.ops` + `resolveOps` — (1) `Search` live head, (2) `Search` spilling tier, (3) `GetDocs`
+  live head, (4) `GetDocs` spilling tier (the spilling-tier sites read a DETACHED head's `inv` and must
+  resolve identically — an `add→del` there must yield del). Copy `ops` under the RLock, resolve on the
+  copy. Refresh the now-stale `adds/dels` doc comments (e.g. search.go ~204).
 - `core/invertedstore/head_lazy_dels_test.go`: REWRITE (it reads `pd.adds`/`pd.dels` as maps → won't
   compile) — re-express the lazy/behavior intent against `ops`/`resolveOps`, or fold into the new test.
 - `core/invertedstore/resolve_ops_test.go` (new): the `resolveOps` unit test.
@@ -2040,6 +2043,7 @@ package invertedstore
 
 import (
 	"reflect"
+	"sort"
 	"testing"
 )
 
@@ -2069,9 +2073,9 @@ func TestResolveOps_LatestWinsMatchesMap(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			adds, dels := resolveOps(append([]int64(nil), c.ops...))
-			sortInt64(adds)
-			sortInt64(dels)
-			if !eqInt64(adds, c.adds) || !eqInt64(dels, c.dels) {
+			sort.Slice(adds, func(i, j int) bool { return adds[i] < adds[j] })
+			sort.Slice(dels, func(i, j int) bool { return dels[i] < dels[j] })
+			if !eqInt64s(adds, c.adds) || !eqInt64s(dels, c.dels) { // reuse the existing eqInt64s; do NOT add eqInt64
 				t.Fatalf("resolveOps(%v) = adds %v dels %v, want adds %v dels %v", c.ops, adds, dels, c.adds, c.dels)
 			}
 		})
