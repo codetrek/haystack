@@ -123,7 +123,10 @@ func (c *mergeCursor) advance() {
 			c.done = true
 			return
 		}
-		c.blk = c.s.blockBytes(c.bi)
+		// Reuse this cursor's previous block buffer as the decompress destination (C.2): one buffer
+		// per cursor, not one per block. The previous block's records are fully consumed by this
+		// cursor before we advance to the next block.
+		c.blk = c.s.blockBytesInto(c.blk, c.bi)
 		c.p = 0
 	}
 }
@@ -189,6 +192,19 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 		}
 		haveTable = true
 	}
+
+	// C.4: per-keyword reconciliation maps hoisted OUT of the merge loop and clear()+reused each
+	// inverted key — they were the single largest alloc source (2.1 GB flat, merge = 44% of alloc).
+	// Each key fully consumes both maps (encoded into the output record / drained into addList/delList)
+	// before the next key, so reuse is safe. They MUST be clear()ed UNCONDITIONALLY at the top of every
+	// inverted-key iteration — including the dropped-key (keep==false) path — so a prior key's docids
+	// never leak into the next.
+	adds := map[int64]struct{}{}
+	dels := map[int64]struct{}{}
+
+	// C.3: one reusable encode-scratch for the whole merge — addEntry copies each value into blkRaw
+	// immediately, so the assembled value/sort buffers are reused record-to-record (never retained).
+	var enc encodeScratch
 
 	for {
 		// Find the minimum key across all live cursors (byte-wise). first guards "no min yet".
@@ -261,7 +277,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 					if dropped && len(out) == 0 {
 						// drop the forward entirely
 					} else {
-						w.addEntry(min, encodeForward(out))
+						w.addEntry(min, enc.encodeForwardInto(out))
 						noteTable(tid)
 						noteDocid(int64(binary.BigEndian.Uint64(min[5:13]))) // B: live forward counts toward the skip range
 					}
@@ -272,8 +288,11 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 			// maps docid -> latest action (true=add, false=del); insertion-ordered isn't needed, the
 			// encoders sort. We walk hit in cursor order, which IS oldest->newest, so a later source's
 			// add or del overwrites an earlier one for the same docid.
-			adds := map[int64]struct{}{}
-			dels := map[int64]struct{}{}
+			//
+			// C.4: clear() the reused maps UNCONDITIONALLY here — before any keep/drop decision — so a
+			// prior key's content never leaks (incl. the keep==false dropped-key path below).
+			clear(adds)
+			clear(dels)
 			for _, i := range hit {
 				ab, db := splitInvertedValue(curs[i].val)
 				// A spilled/merged value never holds both an add and a del for the same docid, but
@@ -306,7 +325,7 @@ func (s *Store) mergeSegments(segs []*segment, outId uint64, level int, dataCode
 			}
 
 			if keep {
-				w.addEntry(min, encodeInvertedValue(addList, delList))
+				w.addEntry(min, enc.encodeInvertedValueInto(addList, delList))
 				postings += int64(len(addList) + len(delList)) // segMeta.Postings (only emitted keys count)
 				noteTable(tid)
 				for _, i := range hit {

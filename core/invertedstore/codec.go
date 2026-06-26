@@ -48,23 +48,41 @@ func (c *codec) compress(src []byte) []byte {
 var onDecompress func()
 
 func (c *codec) decompress(src []byte, rawLen int) []byte {
+	return c.decompressInto(make([]byte, 0, rawLen), src, rawLen)
+}
+
+// decompressInto decompresses src into a buffer reusing dst's backing array when it has room for the
+// rawLen decompressed bytes (C.2: the mergeCursor hands its previous block buffer so a k-way merge
+// over K sources allocates O(K) block buffers, not one per block). dst may be nil. The returned slice
+// may alias dst's storage, so a caller that REUSES the same dst across calls MUST NOT retain bytes
+// from a previous decompressInto into it (the mergeCursor's blkFirst-copy in segment.go addEntry
+// enforces this for the writer; readers that retain bytes already copy out). rawLen is the
+// decompressed length; the buffer is sized to it up front so snappy/zstd reuse it in place.
+func (c *codec) decompressInto(dst, src []byte, rawLen int) []byte {
 	if onDecompress != nil {
 		onDecompress()
 	}
+	// Present a zero-length slice with rawLen capacity so the decoders reuse dst in place (snappy's
+	// Decode reuses only when len(dst) >= decodedLen, zstd's DecodeAll appends into dst[:0]).
+	if cap(dst) >= rawLen {
+		dst = dst[:0]
+	} else {
+		dst = make([]byte, 0, rawLen)
+	}
 	switch c.id {
 	case codecSnappy:
-		d, err := snappy.Decode(make([]byte, 0, rawLen), src)
+		d, err := snappy.Decode(dst[:rawLen], src)
 		if err != nil {
 			panic(err)
 		}
 		return d
 	case codecZstd:
-		d, err := c.dec.DecodeAll(src, make([]byte, 0, rawLen))
+		d, err := c.dec.DecodeAll(src, dst)
 		if err != nil {
 			panic(err)
 		}
 		return d
 	default:
-		return src
+		return append(dst, src...)
 	}
 }

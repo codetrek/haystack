@@ -116,7 +116,11 @@ func (w *segWriter) writeExternalValue(raw []byte) (int64, int) {
 // (port spike main.go:622-644; key is now []byte.)
 func (w *segWriter) addEntry(key []byte, value []byte) {
 	if !w.blkHave {
-		w.blkFirst, w.blkHave = key, true
+		// Copy the block's first key at capture (C.2): it is retained as blockEntry.firstKey through
+		// finish, but `key` may alias a mergeCursor's reusable decompress buffer (blockBytesInto), so a
+		// later advance() that crosses a block boundary would overwrite the bytes and corrupt the
+		// persisted block-index first-key. One small copy per block; also hardens the writer generally.
+		w.blkFirst, w.blkHave = append([]byte(nil), key...), true
 	}
 	w.blkRaw = appendUvarint(w.blkRaw, uint64(len(key)))
 	w.blkRaw = append(w.blkRaw, key...)
@@ -288,13 +292,23 @@ func (s *segment) close() { s.f.Close() }
 
 // blockBytes reads & decompresses data block i. (port spike main.go:799-807.)
 func (s *segment) blockBytes(i int) []byte {
+	return s.blockBytesInto(nil, i)
+}
+
+// blockBytesInto reads & decompresses data block i, reusing dst's backing array for the decompressed
+// output when it fits (C.2: the mergeCursor hands its previous block buffer so a k-way merge over K
+// sources allocates O(K) block buffers, not one per block). The returned slice may alias dst, so the
+// caller MUST NOT retain bytes from a prior block into the same dst (the writer's blkFirst-copy in
+// addEntry enforces this for the merge path). The compressed-read scratch (comp) is still allocated
+// per call — only the larger decompressed buffer is reused.
+func (s *segment) blockBytesInto(dst []byte, i int) []byte {
 	hdr := make([]byte, 20)
 	s.f.ReadAt(hdr, s.idx[i].off)
 	rl, n := binary.Uvarint(hdr)
 	cl, n2 := binary.Uvarint(hdr[n:])
 	comp := make([]byte, cl)
 	mustReadAt(s.f, comp, s.idx[i].off+int64(n+n2))
-	return s.dataCodec.decompress(comp, int(rl))
+	return s.dataCodec.decompressInto(dst, comp, int(rl))
 }
 
 // blockDiskSize returns the on-disk (compressed) size of data block i. (port spike main.go:808-814.)
