@@ -6,16 +6,45 @@ import (
 	"sort"
 )
 
-// postingDelta is a keyword's pending head state for one spill window: the set of docids added
-// to the keyword and the set tombstoned (removed) from it. Keeping these as sets enforces the
-// "latest action per (keyword,docid)" rule and dedups docids in memory (design §6) — a later
-// add cancels a pending delete and vice-versa, so a spilled value never holds both for a docid.
-// Both sets are allocated LAZILY (nil until the first add/tombstone of that kind): a cold build
-// has no deletes, so the del-set stays nil and the per-add cross-delete is skipped. A nil set is
-// semantically an empty set (setToSlice handles nil), so spill output is unchanged.
+// postingDelta is a keyword's pending head state for one spill window: an ORDERED log of the
+// (add|del) operations applied to (keyword, docid) pairs, APPENDED in action order (item H, spec
+// §5b). docids are stored RAW in `ops` (one int64 each) and the per-op isAdd flag in a parallel
+// bitset `isAdd` (one BIT each, 64 ops per uint64 word) — ~8 B/op + ~0.125 B/op for the flag, far
+// below the per-keyword Go map the eager adds/dels sets cost (~48–96 B/entry + two map headers).
+//
+// Raw int64 docids + a parallel bitset (spec §5b's named full-range fallback) replace the earlier
+// `docid<<1 | isAdd` single-int64 packing: that packing stole the low bit, so it could only carry
+// docids in [0, 2^62) and the spec's full-int64-range invariant (the §11 owed re-measure, which
+// round-trips docids up to math.MaxInt64) was unrepresentable. The raw-docid+bitset form costs the
+// same ~8 B/op yet carries the WHOLE int64 range — no out-of-range case to assert away.
+//
+// The two jobs the old maps did are recovered at CONSUME time by resolveOps: dedup-on-insert is
+// redundant (the on-disk encode appendDeltaDocs sort+dedups anyway), and the cross add-vs-del
+// "latest action wins" rule is resolved by a STABLE sort keyed on docid only — the LAST op per
+// docid is the survivor.
 type postingDelta struct {
-	adds map[int64]struct{}
-	dels map[int64]struct{}
+	docids []int64  // raw docid per op, APPENDED in action order
+	isAdd  []uint64 // parallel bitset: bit i is set iff ops[i] is an add (else a tombstone)
+}
+
+// nOps returns the number of ops appended to pd.
+func (pd *postingDelta) nOps() int { return len(pd.docids) }
+
+// opAt returns the docid and isAdd flag of the i-th op.
+func (pd *postingDelta) opAt(i int) (docid int64, isAdd bool) {
+	return pd.docids[i], pd.isAdd[i>>6]&(1<<uint(i&63)) != 0
+}
+
+// appendOp appends one op (docid, isAdd) in action order, growing the bitset by a word every 64 ops.
+func (pd *postingDelta) appendOp(docid int64, isAdd bool) {
+	i := len(pd.docids)
+	if i>>6 >= len(pd.isAdd) {
+		pd.isAdd = append(pd.isAdd, 0)
+	}
+	if isAdd {
+		pd.isAdd[i>>6] |= 1 << uint(i&63)
+	}
+	pd.docids = append(pd.docids, docid)
 }
 
 // headTable is the per-table in-memory head buffer (worker-owned; read under the Store RWMutex).
@@ -23,7 +52,7 @@ type postingDelta struct {
 // strings, encoded to segment-local term-ids at spill), the set of docids whose forward is a
 // tombstone (deleted docs), and a running logical byte estimate that drives spill.
 type headTable struct {
-	inv        map[string]*postingDelta // keyword -> latest adds/dels (per (kw,docid))
+	inv        map[string]*postingDelta // keyword -> ordered add/del op log (resolved latest-wins at consume)
 	fwd        map[int64][]string       // docid -> keyword strings (-> ordinals at spill)
 	delForward map[int64]struct{}       // docids whose forward is a tombstone
 	bytes      int64                    // logical byte estimate (matches the spike's accounting)
@@ -37,48 +66,40 @@ func newHeadTable() *headTable {
 	}
 }
 
-// posting returns keyword's postingDelta, creating an empty one (both sets nil/lazy) on first sight
-// and charging the same logical byte estimate the eager version did (so spill cadence is unchanged).
+// posting returns keyword's postingDelta, creating an empty one (nil ops slices) on first sight and
+// charging a slice-header-sized estimate (item H, spec §5b: the old eager version charged +16 for its
+// two map headers; the per-keyword fixed charge is +24). The struct now holds TWO slices (docids +
+// isAdd), but both headers are EMPTY/nil at creation — no backing array is allocated until the first
+// appendOp — so the fixed charge stays at one slice-header (24 B): the docids array's per-op growth is
+// the +8 charged below, and the isAdd bitset's growth (one uint64 word per 64 ops, ~0.125 B/op) is
+// folded into that same +8. The per-op cost (h.bytes += 8) is charged in addPosting/tombstonePosting,
+// so h.bytes ≈ the actual memory (slightly UNDER-counting by the bitset's amortized word: ~8.125 B/op
+// actual vs +8 charged) and CapBytes is honest. Keeping +24 (not +48) matches the spec §5b PRIMARY single-`ops`-slice cadence, so
+// the fallback's spill cadence is the one the spec measured.
 func (h *headTable) posting(keyword string) *postingDelta {
 	pd := h.inv[keyword]
 	if pd == nil {
 		pd = &postingDelta{}
 		h.inv[keyword] = pd
-		h.bytes += int64(len(keyword)) + 16
+		h.bytes += int64(len(keyword)) + 24 // keyword string + one ops slice header (spec §5b cadence)
 	}
 	return pd
 }
 
-// addPosting records that docid is a member of keyword (latest action wins, in-memory dedup). The
-// del-set is allocated lazily (nil on a cold build), so the cross-delete is skipped when dels==nil.
+// addPosting records that docid is a member of keyword (item H): an O(1) append of (docid, isAdd=true)
+// in ACTION order — no lookup, no per-keyword map, no in-memory dedup (resolveOps recovers latest-wins
+// + dedup at consume time). docids are stored RAW alongside a parallel isAdd bitset, so the FULL int64
+// range round-trips (spec §5b's named full-range representation); there is no packable-range precondition.
 func (h *headTable) addPosting(keyword string, docid int64) {
-	pd := h.posting(keyword)
-	if pd.dels != nil {
-		delete(pd.dels, docid) // latest action wins: a re-add cancels a pending tombstone
-	}
-	if pd.adds == nil {
-		pd.adds = make(map[int64]struct{})
-	}
-	if _, ok := pd.adds[docid]; !ok {
-		pd.adds[docid] = struct{}{}
-		h.bytes += 4
-	}
+	h.posting(keyword).appendOp(docid, true)
+	h.bytes += 8
 }
 
-// tombstonePosting records that docid is removed from keyword (latest action wins). Symmetric to
-// addPosting: the add-set is consulted only if allocated.
+// tombstonePosting records that docid is removed from keyword (item H). Symmetric to addPosting: an
+// O(1) append of (docid, isAdd=false) in action order. Full int64 range, no precondition.
 func (h *headTable) tombstonePosting(keyword string, docid int64) {
-	pd := h.posting(keyword)
-	if pd.adds != nil {
-		delete(pd.adds, docid) // latest action wins: a delete cancels a pending add
-	}
-	if pd.dels == nil {
-		pd.dels = make(map[int64]struct{})
-	}
-	if _, ok := pd.dels[docid]; !ok {
-		pd.dels[docid] = struct{}{}
-		h.bytes += 4
-	}
+	h.posting(keyword).appendOp(docid, false)
+	h.bytes += 8
 }
 
 // setForward records the doc's current full keyword set (clears any pending tombstone for it).
@@ -227,8 +248,7 @@ func (s *Store) encodeHeadToFile(h *headTable, tableId int, path string) spillRe
 	var postings int64 // count add+del entries for segMeta.Postings (the deadFraction `written` term)
 	for _, t := range terms {
 		pd := h.inv[t]
-		adds := setToSlice(pd.adds)
-		dels := setToSlice(pd.dels)
+		adds, dels := resolveOps(pd)
 		postings += int64(len(adds) + len(dels))
 		w.addEntry(invertedKey(tid, t), encodeInvertedValue(adds, dels))
 	}
@@ -383,7 +403,7 @@ func (s *Store) installSpill(e *spillEntry, res spillResult) error {
 
 	s.mu.Lock()
 	s.segs = append(s.segs, seg)
-	sortSegmentsById(s.segs) // the new id is the highest, so this is O(n) tail-insert — keep oldest->newest
+	sortSegmentsById(s.segs)  // the new id is the highest, so this is O(n) tail-insert — keep oldest->newest
 	s.publishSnapshotLocked() // PUBLISH the new segment BEFORE removing the spilling entry (the doc is in
 	s.removeSpillingLocked(e) // both tiers for an instant, never in neither — the forbidden direction)
 	s.spillInFlight = false
@@ -460,13 +480,53 @@ func (s *Store) findOverCapHeadLocked() *spillEntry {
 	return nil
 }
 
-// setToSlice flattens a docid set to a slice (encodeDocs sorts+dedups, so order is irrelevant).
-func setToSlice(m map[int64]struct{}) []int64 {
-	out := make([]int64, 0, len(m))
-	for d := range m {
-		out = append(out, d)
+// resolveOps reduces a keyword's ordered op log (raw docid in pd.docids + isAdd in the parallel
+// pd.isAdd bitset, APPENDED in action order) to the per-docid survivors: a docid is in adds iff its
+// LAST op is an add, else in dels (item H, spec §5b). It recovers EXACTLY the eager adds/dels maps'
+// result.
+//
+// It is pure and NON-MUTATING: it copies the ops into a FRESH scratch slice and sorts the scratch
+// (never pd's slices — the detached-head encode and concurrent Search both share the head's pd), so
+// two concurrent callers can never alias. The CALLER must hold the appropriate lock (the Store RLock
+// for a live head; ownership for a detached head) across this call so the copy is consistent with the
+// worker's appends. resolveOps allocates a fresh scratch per call (no shared/pooled scratch).
+//
+// The sort is sort.SliceStable keyed on docid ONLY — NOT a value that folds in isAdd: a key that lets
+// isAdd break ties makes an add always sort last, so `add->del` mis-resolves to add. Stable +
+// docid-keyed keeps equal docids in insertion order, so the last op for a docid is its true latest
+// action.
+func resolveOps(pd *postingDelta) (adds, dels []int64) {
+	n := pd.nOps()
+	if n == 0 {
+		return nil, nil
 	}
-	return out
+	// scratch packs (docid, isAdd) per op into a struct so the stable docid-keyed sort carries the
+	// flag along; raw int64 docids (full range) need a side flag rather than the old low-bit steal.
+	type scratchOp struct {
+		docid int64
+		isAdd bool
+	}
+	scratch := make([]scratchOp, n)
+	for i := 0; i < n; i++ {
+		d, a := pd.opAt(i)
+		scratch[i] = scratchOp{docid: d, isAdd: a}
+	}
+	sort.SliceStable(scratch, func(i, j int) bool { return scratch[i].docid < scratch[j].docid })
+	// Equal docids are adjacent (and in insertion order); the LAST op of each run decides add vs del.
+	for i := 0; i < n; {
+		j := i + 1
+		for j < n && scratch[j].docid == scratch[i].docid {
+			j++
+		}
+		last := scratch[j-1]
+		if last.isAdd {
+			adds = append(adds, last.docid)
+		} else {
+			dels = append(dels, last.docid)
+		}
+		i = j
+	}
+	return adds, dels
 }
 
 // fileSize returns the on-disk size of path (0 on error — only used for the segMeta size field).

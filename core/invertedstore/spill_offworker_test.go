@@ -77,7 +77,16 @@ func TestSpillF_B1_RepostAfterDetachTombstonesDropped(t *testing.T) {
 		}
 		<-release
 	}
-	t.Cleanup(func() { encodeSpillBlock = nil })
+	// DRAIN-FIRST cleanup (-race): under H's +8/op accounting the head re-caps sooner, so a re-dispatched
+	// spill goroutine may still be reading encodeSpillBlock at head.go:346. Drain every in-flight spill
+	// FIRST (the test body has close(release)d, so a re-dispatched encode returns immediately), THEN nil
+	// the hook — never nil it while a spill goroutine reads it. Registering this in the SAME t.Cleanup
+	// keeps the two steps ordered (a bare `encodeSpillBlock = nil` cleanup runs LIFO before the store's
+	// own WaitSpillsForTest drain and races the live read).
+	t.Cleanup(func() {
+		s.WaitSpillsForTest()
+		encodeSpillBlock = nil
+	})
 
 	// First post: [alpha, beta]. The tiny cap over-caps the head ⇒ async detach (encode parks).
 	s.Update(tbl, 1, []string{"alpha", "beta"})
@@ -473,8 +482,8 @@ func TestSpillF_CrashLosesDetachedHeadNoOrphan(t *testing.T) {
 
 	// Crash: abandon the store + the parked encode goroutine without installing. The temp file (if the
 	// parked encode already created it) is an orphan; nothing is in the MANIFEST.
-	unpark()       // let the parked goroutine proceed so it isn't leaked into the next test (it will fail
-	q.Stop()       // to install against the stopped queue, harmlessly)
+	unpark() // let the parked goroutine proceed so it isn't leaked into the next test (it will fail
+	q.Stop() // to install against the stopped queue, harmlessly)
 	time.Sleep(100 * time.Millisecond)
 
 	// Reopen on a fresh queue: the detached head is GONE (no segment), and G removed any seg-tmp-* orphan.

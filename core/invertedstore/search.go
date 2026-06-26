@@ -97,10 +97,10 @@ func (s *Store) Search(tableId int, query string, limit int, filterKeyword func(
 	}
 
 	// 1. Snapshot. The head is mutated only on the worker under s.mu.Lock(), so we MUST read its
-	//    matching deltas (range h.inv + setToSlice of the per-keyword add/del sets) WHILE holding
-	//    the RLock — copying them into local slices — and acquire the segment snapshot's reader refs
-	//    in the SAME RLock window (P9 acquireSnapshotLocked), so the head-copy and the segment set are
-	//    a single consistent point (a spill that moves a posting head->segment can never make it
+	//    matching deltas (range h.inv + resolveOps of each keyword's copied ordered op log) WHILE
+	//    holding the RLock — copying them into local slices — and acquire the segment snapshot's reader
+	//    refs in the SAME RLock window (P9 acquireSnapshotLocked), so the head-copy and the segment set
+	//    are a single consistent point (a spill that moves a posting head->segment can never make it
 	//    vanish from BOTH). The segment FILES are immutable so the scan runs lock-free after RUnlock;
 	//    releaseSnapshot drops the refs (and unlinks a merged-away file once this was its last reader).
 	q := strings.ToLower(query)
@@ -112,7 +112,8 @@ func (s *Store) Search(tableId int, query string, limit int, filterKeyword func(
 			if !strings.HasPrefix(kw, q) {
 				continue
 			}
-			headHits = append(headHits, headPosting{kw: kw, adds: setToSlice(pd.adds), dels: setToSlice(pd.dels)})
+			adds, dels := resolveOps(pd) // copy ops into scratch under the RLock, resolve on the copy (item H)
+			headHits = append(headHits, headPosting{kw: kw, adds: adds, dels: dels})
 		}
 	}
 	// Spilling tier (item F, B1): heads DETACHED for off-worker encode, between the live head and the
@@ -128,7 +129,8 @@ func (s *Store) Search(tableId int, query string, limit int, filterKeyword func(
 			if !strings.HasPrefix(kw, q) {
 				continue
 			}
-			headHits = append(headHits, headPosting{kw: kw, adds: setToSlice(pd.adds), dels: setToSlice(pd.dels)})
+			adds, dels := resolveOps(pd) // copy ops into scratch under the RLock, resolve on the copy (item H)
+			headHits = append(headHits, headPosting{kw: kw, adds: adds, dels: dels})
 		}
 	}
 	segs := s.acquireSnapshotLocked()
@@ -200,10 +202,12 @@ func (s *Store) GetDocs(tableId int, key string) SearchResult {
 		}
 	}
 
-	// Snapshot. Copy the head's matching deltas out of the live maps WHILE holding the RLock (the
-	// worker mutates h.inv[key].adds/dels under s.mu.Lock()), and acquire the segment snapshot's
-	// reader refs in the SAME RLock window (P9). Segment files are immutable, so the segment scan
-	// below runs lock-free on the refcounted snapshot; releaseSnapshot drops the refs afterward.
+	// Snapshot. resolveOps the head's matching ordered op log WHILE holding the RLock — it copies the
+	// keyword's ops (raw docids + the isAdd bitset) into a fresh scratch and resolves on the copy, so
+	// the worker's concurrent appends (h.inv[key].appendOp under s.mu.Lock()) never race the read — and
+	// acquire the segment snapshot's reader refs in the SAME RLock window (P9). Segment files are
+	// immutable, so the segment scan below runs lock-free on the refcounted snapshot; releaseSnapshot
+	// drops the refs afterward.
 	s.mu.RLock()
 	h := s.head[tableId]
 	var headAdds, headDels []int64
@@ -211,8 +215,7 @@ func (s *Store) GetDocs(tableId int, key string) SearchResult {
 	if h != nil {
 		if pd := h.inv[key]; pd != nil {
 			headHit = true
-			headAdds = setToSlice(pd.adds)
-			headDels = setToSlice(pd.dels)
+			headAdds, headDels = resolveOps(pd) // copy ops into scratch under the RLock, resolve on the copy (item H)
 		}
 	}
 	// Spilling tier (item F, B1): copy each detached head's deltas for this exact key, newest -> oldest,
@@ -225,7 +228,8 @@ func (s *Store) GetDocs(tableId int, key string) SearchResult {
 			continue
 		}
 		if pd := e.head.inv[key]; pd != nil {
-			spillHits = append(spillHits, spillHit{adds: setToSlice(pd.adds), dels: setToSlice(pd.dels)})
+			adds, dels := resolveOps(pd) // copy ops into scratch under the RLock, resolve on the copy (item H)
+			spillHits = append(spillHits, spillHit{adds: adds, dels: dels})
 		}
 	}
 	segs := s.acquireSnapshotLocked()
