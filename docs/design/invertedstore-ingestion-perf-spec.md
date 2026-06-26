@@ -165,8 +165,15 @@ because it must land BEFORE F (F moves a SMALLER encode off-worker once the re-r
    `forwardKeywords` — skip both maps. Guard `len(ops)==1`. (Review-verified safe.)
 2. **Reuse decompress buffers — `mergeCursor`-scratch ONLY, never a global** (`c.key`/`c.val` alias
    `c.blk`; K cursors' blocks coexist). Measured **1.95 GB** alloc cum. **MUST NOT alias/in-place-sort
-   head storage** (interacts with F's read-only-detached-head invariant — §7a M2).
-3. **Reuse spill/merge ENCODE scratch in `segWriter`** where provably not retained: `encodeDocs` /
+   head storage** (§7a M2). **UNSAFE NAIVELY (review): `segWriter.addEntry` retains the cursor's key
+   bytes via `blkFirst → blockEntry.firstKey → finish` UNCOPIED, and `advance()` crossing a block
+   boundary would overwrite a reused block → corrupt persisted block-index first-key. The differential
+   hits-test MISSES this (a too-early `sort.Search` start still finds the key). REQUIRED FIX: copy the
+   first-key at capture — `w.blkFirst = append([]byte(nil), key...)` (segment.go:119; one copy per
+   block, trivial, also independently hardens the writer) — THEN a per-cursor `c.blk` reuse is safe.**
+   Add a dedicated **block-index-integrity test** (after a merge+reopen, every `idx[i].firstKey` ==
+   block i's true first record key) — differential + `-race` do NOT cover this class.
+3. **Reuse spill/merge ENCODE scratch in `segWriter`** (value/encode scratch ONLY — NOT the key buffer): `encodeDocs` /
    `encodeForward` / `appendUvarint` / `flushDictChunk` allocate a fresh `[]byte` per record — measured
    `encodeDocs` 2.3 GB + `appendUvarint` 1.2 GB + `flushDictChunk` 2.3 GB cum + `encodeForward` 1.1 GB.
    `addEntry` copies into `blkRaw` immediately, so a per-writer scratch is safe (the value is not
@@ -176,7 +183,9 @@ because it must land BEFORE F (F moves a SMALLER encode off-worker once the re-r
    is 44% of alloc + 31% of build CPU**, and the resulting GC (`scanobject` 25%, `findObject` 10%) is
    the top CPU cost. Fix: hoist the two maps out of the per-key loop and `clear()`+reuse them each key
    (the maps are fully consumed — encoded into the output record — before the next key, so reuse is
-   safe). Cuts the largest single alloc source. Since the merge runs OFF the worker (A), this is an
+   safe). **`clear()` BOTH maps UNCONDITIONALLY at the top of every inverted-key iteration — including
+   the dropped-key (`keep==false`) path — so a prior key's content never leaks.** Cuts the largest
+   single alloc source. Since the merge runs OFF the worker (A), this is an
    **RSS/GC win, not a build-wall win** (the goal here: shrink the ~1 GB build peak RSS, which is the
    one axis where store loses to pebble's 610 MiB).
 
