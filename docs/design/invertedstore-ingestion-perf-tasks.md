@@ -2009,10 +2009,20 @@ machinery is not needed.)
 
 ### Task 8 — H: compact head postings (per-keyword map → ordered ops slice)
 
-**AUTHORITATIVE DESIGN: spec §5b "(H) Compact head postings"** (2 review rounds; converged). Implement
-strictly per it. Goal: cut the build's HEAD-dominated peak live heap (`addPosting` map[int64] = 66% of
-peak) → lower build RSS below pebble's 610 with NO GOMEMLIMIT. `postingDelta{adds,dels map[int64]struct{}}`
-→ `postingDelta{ops []int64}` (`docid<<1 | isAdd`, append); `resolveOps` at spill + Search/GetDocs.
+> **⚠ v3 (implementation-revised, spec §5b v3).** The primary representation is the parallel
+> **`postingDelta{docids []int64; isAdd []uint64}` bitset**, NOT the `docid<<1|isAdd` packing — the
+> store's docid is the FULL int64 range (`TestDifferential_Int64DocidFullRange` feeds `MaxInt64`), so
+> the packing's `<2^62` precondition is unsatisfiable. `resolveOps(pd *postingDelta)`. Same ~8 B/op
+> memory win (measured: peak inuse 156 MB, the `addPosting` map hog GONE). The packing-specific text
+> below (the `op()` test helper, the `<2^62` assert) is SUPERSEDED — the working tree has the verified
+> bitset impl + its `resolve_ops_test.go`. **Remaining work: the `-race` fix** — H's `+8`/op accounting
+> shifts spill cadence and surfaces a latent F B1 test cleanup-ordering race (`spill_offworker_test.go`:
+> LIFO `t.Cleanup` nils `encodeSpillBlock` before `WaitSpillsForTest` drains) → make the cleanup drain
+> in-flight spills FIRST, then nil the hook (a 5th file).
+
+**AUTHORITATIVE DESIGN: spec §5b "(H) Compact head postings"** (3 review rounds incl. v3; converged).
+Goal: cut the build's HEAD-dominated peak live heap (`addPosting` map[int64] = 66% of peak) → lower
+build RSS below pebble's 610 with NO GOMEMLIMIT.
 
 **Files:**
 - `core/invertedstore/head.go`: `postingDelta{ops []int64}`; `addPosting`/`tombstonePosting` → O(1)
