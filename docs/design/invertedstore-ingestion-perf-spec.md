@@ -194,6 +194,54 @@ because it must land BEFORE F (F moves a SMALLER encode off-worker once the re-r
 > churn (merge 44% + encode/decompress scratch) to lower peak RSS. The head `addPosting`/`posting` maps
 > (5.1+1.5 GB) are live until spill (can't trivially pool) → out of scope. **Keep only measured wins.**
 
+## 5b. (H) Compact head postings — per-keyword `map[int64]` → ordered ops slice
+
+**Measured (lx, post-F, peak `inuse_space` via `idxbench -peakheap`).** The build's peak LIVE heap
+(~467 MB → ~1 GB RSS at GOGC=100) is **HEAD-DOMINATED**: `addPosting` 188 MB (66%) + `Batch.Update`
+43 MB (in-flight `op.keywords`) + `posting` 34 MB ≈ **290 MB is the head buffer**. The hog is
+`postingDelta.adds map[int64]struct{}` — **ONE Go map per keyword**, ~48–96 B header+bucket overhead
+each, paid even for a keyword in a single doc (the long tail). THIS is why store needs ~1 GB build RSS
+while pebble (compact skiplist memtable) needs 610 — a representation problem, not a tuning knob
+(GOMEMLIMIT=600MiB caps RSS to 607 at +2s build, but only MASKS it). C.2–4 (churn) did NOT move peak
+RSS because peak RSS = the live working set, and the head IS the live working set.
+
+**The map's two jobs — a slice loses nothing on either:**
+- **dedup-on-insert — REDUNDANT.** The on-disk encode `appendDeltaDocs` (keys.go) already sort+dedups
+  each list (`if d == prev { continue }` after `sort`). The map pays ~48 B/keyword to avoid dups the
+  spill sort removes anyway.
+- **cross add-vs-del latest-wins** (a re-add cancels a pending del, so a docid is in exactly one of
+  adds/dels) — the ONLY non-redundant job; moved to a cheap resolve-at-consume.
+
+**Change:** `postingDelta { ops []int64 }`, each op `= docid<<1 | isAdd`, **APPENDED in action order**.
+`addPosting`/`tombstonePosting` become an O(1) append — no lookup, no per-keyword map, no dedup.
+`h.bytes += 8` per op (now ≈ ACTUAL memory, so CapBytes becomes honest). At spill AND in `Search`/
+`GetDocs`, `resolveOps(ops) → (adds, dels)`: **stable-sort by `docid`** (preserves insertion order
+within a docid), then the LAST op per docid decides add-vs-del — exactly the map's latest-wins. The
+sort is the one `appendDeltaDocs` already performs, so **no new asymptotic cost** (O(N log N) either way).
+
+**`resolveOps` MUST be non-mutating — copy-before-sort.** It works on a scratch copy of `ops`, never
+sorting the head's slice in place: (1) the F detached head is READ-ONLY during off-worker encode (§7a
+M2); (2) `Search` reads the head under `s.mu.RLock()` concurrently with the worker. Both copy `ops`
+(under the RLock for Search; the encode owns the detached head) and resolve on the copy. The resolve
+allocations are read-time churn, not live.
+
+**Memory:** ~8 B/op + one slice header per keyword, vs the map's ~48–96 B/entry + the `*postingDelta`'s
+two map headers. ~5–6× smaller for the common small-keyword case; a 1-doc long-tail keyword drops from
+a whole map to an 8-byte slice. **Expected: head live ~290 → ~60 MB, peak live ~467 → ~200, build RSS
+→ ~400 MB (BELOW pebble's 610, no GOMEMLIMIT).** Measure with `-peakheap` and report.
+
+**Scope:** `head.go` (`postingDelta`, `addPosting`/`tombstonePosting`, the `posting()` helper, the
+`h.bytes` accounting, spill's per-keyword encode via `resolveOps`) + the readers `search.go`
+`Search`/`GetDocs` (`resolveOps` replacing `setToSlice(pd.adds/dels)`). **UNCHANGED:** the forward map
+`h.fwd` (separate; `forwardKeywords` never touches `inv`), `liveByTable`, `segMeta.Postings`, and the
+on-disk segment format (byte-identical — same encoder, same sorted-dedup'd output).
+
+**Correctness — `resolveOps` must EXACTLY match the map** (a docid ∈ adds iff its LAST op is an add).
+Gated by: the differential **hits-identical (2,414,505)** + crash-recovery + merge-robustness suites;
+a focused `resolveOps` unit test (add/del/add/del sequences; the cold-build append-only case; duplicate
+appends; interleaved docids); and `-race` (Search resolving a copied `ops` under the RLock). Risk is
+contained to one pure function + its two call sites.
+
 ## 6. (D) Keep zstd for merged segments — DECISION
 
 With A moving the merge COMPUTE off-worker (§3), the zstd re-compression cost is **off the apply
