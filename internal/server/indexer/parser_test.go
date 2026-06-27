@@ -10,7 +10,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedstore"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
@@ -34,10 +34,18 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 		t.Fatalf("idtable.Open: %v", err)
 	}
 	SetIdAllocator(alloc)
-	idx, err := invertedstore.Open(filepath.Join(env.TempDir, "index", storage.StorageVersion, "invertedstore"), env.Mpsc, invertedstore.Options{})
+	indexdb, err := storage.Open(filepath.Join(env.TempDir, "index"), 0)
 	if err != nil {
-		t.Fatalf("invertedstore.Open: %v", err)
+		t.Fatalf("storage.Open(index): %v", err)
 	}
+	index, err := invertedindex.New(indexdb, env.Mpsc, invertedindex.Options{})
+	if err != nil {
+		t.Fatalf("invertedindex.New: %v", err)
+	}
+	// Wrap the pebble-backed *Index in the adapter so the test exercises the
+	// SAME live backend the production server wires (invertedindex.New +
+	// NewIndexerAdapter).
+	idx := invertedindex.NewIndexerAdapter(index)
 	st, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
 	if err != nil {
 		t.Fatalf("documents.New: %v", err)
@@ -59,6 +67,7 @@ func setupTestEnv(t *testing.T) (env *testutil.Env, teardown func()) {
 		symbols.CloseAndWait()
 		st.CloseAndWait()
 		idx.CloseAndWait()
+		indexdb.Close()
 		alloc.Close()
 		env.TeardownBase()
 	}

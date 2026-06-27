@@ -12,7 +12,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedstore"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
@@ -46,7 +46,15 @@ func setupMCPTestEnv(t *testing.T) {
 		// Configure
 		conf.Get().Global.DataPath = filepath.Join(tempDir, "mcp_test_data")
 		conf.Get().Server.CacheSize = 8 * 1024 * 1024
-		iiOpts := invertedstore.Options{AutoMerge: true}
+		// Fast-flush options so indexed docs become searchable promptly: the
+		// pebble Search reads only flushed rows, so the test must not wait the
+		// 1s production flush ticker for each assertion.
+		iiOpts := invertedindex.Options{
+			FlushTicker:        50 * time.Millisecond,
+			FlushWaitTimeout:   1 * time.Microsecond,
+			FlushWaitBatchSize: 10,
+			FlushCooldown:      50 * time.Millisecond,
+		}
 
 		// Create test files
 		testFiles := map[string]string{
@@ -92,13 +100,22 @@ This is a test project.`,
 			return
 		}
 
-		mpsc := queue.NewMpsc("MCPTestDBQueue")
-		mpsc.Start()
-
-		idx, err := invertedstore.Open(filepath.Join(conf.Get().Global.DataPath, "index", storage.StorageVersion, "invertedstore"), mpsc, iiOpts)
+		indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
 		if !assert.NoError(t, err) {
 			return
 		}
+
+		mpsc := queue.NewMpsc("MCPTestDBQueue")
+		mpsc.Start()
+
+		index, err := invertedindex.New(indexdb, mpsc, iiOpts)
+		if !assert.NoError(t, err) {
+			return
+		}
+		// Wrap the pebble-backed *Index in the adapter so the test exercises the
+		// SAME live backend the production server wires (invertedindex.New +
+		// NewIndexerAdapter), including the adapter's async-enqueue seam.
+		idx := invertedindex.NewIndexerAdapter(index)
 		st, stErr := documents.New(db, mpsc, idx, documents.Options{})
 		if !assert.NoError(t, stErr) {
 			return
@@ -154,6 +171,7 @@ This is a test project.`,
 			mpsc.Stop()
 			alloc.Close()
 			db.Close()
+			indexdb.Close()
 		}
 	})
 

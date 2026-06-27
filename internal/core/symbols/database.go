@@ -44,8 +44,8 @@ func Create(workspaceId int, desc string) error {
 // Delete deletes a symbols and all of its documents and keywords.
 //
 // idxInst.DeleteTable runs OUTSIDE the mpsc.RunFunc task, exactly like
-// documents.Store.Delete hoists indexDeleteTable: invertedstore.DeleteTable does
-// its own q.RunFunc on the SHARED worker, so calling it from inside symbols' own
+// documents.Store.Delete hoists indexDeleteTable: the live IndexerAdapter.DeleteTable
+// does its own q.RunFunc on the SHARED worker, so calling it from inside symbols' own
 // mpsc.RunFunc would nest RunFunc-in-RunFunc and deadlock the single worker. The
 // meta lookup (getTable) and the db doc-functions cleanup stay serialized on the
 // queue; only the index table-drop is hoisted out.

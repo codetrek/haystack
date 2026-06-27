@@ -29,14 +29,49 @@ func flushQueue(t *testing.T) {
 	}
 }
 
+// waitForDocPosting polls GetDocs(tableId, key) until docid is present, or the
+// deadline elapses. The live backend is the pebble-backed invertedindex, whose
+// GetDocs reads only FLUSHED rows: draining the worker (flushQueue) applies the
+// async Update to the in-memory pending buffer, but the periodic flush ticker
+// (set to 20ms via setupTestEnv's fast-flush options) must still move it to
+// pebble before the posting becomes visible. Returns true once seen.
+func waitForDocPosting(t *testing.T, tableId int, key string, docid int64) bool {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := idxInst.GetDocs(tableId, key).DocIds[docid]; ok {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
+// waitForDocRetracted polls GetDocs(tableId, key) until docid is ABSENT, or the
+// deadline elapses. Used to confirm a forward-map retraction (Update with the key
+// dropped / empty keyword set) has flushed through to pebble. Returns true once
+// the posting is gone.
+func waitForDocRetracted(t *testing.T, tableId int, key string, docid int64) bool {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := idxInst.GetDocs(tableId, key).DocIds[docid]; !ok {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
 // TestAddFunctions_NoDeadlockWithSharedQueueIndexer is the symbols counterpart to
-// core/documents/save_no_deadlock_test.go. It guards the symbols↔invertedstore write
-// seam through the REAL shared-queue wiring (setupTestEnv builds invertedstore.Open
-// on the same env.Mpsc that drives the symbols package).
+// core/documents/save_no_deadlock_test.go. It guards the symbols↔inverted-index write
+// seam through the REAL shared-queue wiring (setupTestEnv builds the pebble-backed
+// invertedindex + NewIndexerAdapter on the same env.Mpsc that drives the symbols
+// package — the same construction the production server performs).
 //
 // The hazard: AddFunctions runs its kv writes inside mpsc.RunFunc (occupying the
 // single worker). Each doc previously called idxInst.Update TWICE (symbol +
-// symbol-words tables) from inside that task; invertedstore.Update enqueues onto the
+// symbol-words tables) from inside that task; the adapter's Update enqueues onto the
 // SAME shared queue (q.AddFunc = a blocking channel send). With a batch larger than
 // the 100-deep channel buffer, the worker would block sending to a queue only it can
 // drain → permanent deadlock. A 200-doc batch issues ~400 such sends, far past the
@@ -87,8 +122,8 @@ func TestAddFunctions_NoDeadlockWithSharedQueueIndexer(t *testing.T) {
 	}
 	for i := 0; i < n; i++ {
 		wantDocid := idtable.DecodeId(docIDString(i + 1))
-		res := env.idx.GetDocs(st.InvertedId, names[i])
-		if _, ok := res.DocIds[wantDocid]; !ok {
+		if !waitForDocPosting(t, st.InvertedId, names[i], wantDocid) {
+			res := env.idx.GetDocs(st.InvertedId, names[i])
 			t.Fatalf("doc %d function %q not found in symbol index (got %d docids)", i+1, names[i], len(res.DocIds))
 		}
 	}
@@ -97,7 +132,7 @@ func TestAddFunctions_NoDeadlockWithSharedQueueIndexer(t *testing.T) {
 // TestAddFunctions_RetractsDroppedFunction proves the forward-map retraction the old
 // words/symbol tables could NOT do: re-AddFunctions the SAME doc id with a different
 // function name and the OLD name's posting must be GONE while the new one is present.
-// invertedstore owns the forward map keyed by (InvertedId, docid) and diffs the
+// The inverted index owns the forward map keyed by (InvertedId, docid) and diffs the
 // CURRENT keyword set against the stored one, so passing only the new names retracts
 // the dropped ones. This verifies the §4/§8 contract on the symbols keyspace and
 // covers the words table too (the tokenized words of the dropped name vanish).
@@ -132,10 +167,10 @@ func TestAddFunctions_RetractsDroppedFunction(t *testing.T) {
 	// The old name must be present in the symbol table, and its tokenized word
 	// "oldfunction" (TokenizeForIndex lower-cases and keeps the whole identifier as a
 	// token) must be present in the words table after the first index.
-	if _, ok := env.idx.GetDocs(st.InvertedId, "oldFunction").DocIds[docid]; !ok {
+	if !waitForDocPosting(t, st.InvertedId, "oldFunction", docid) {
 		t.Fatal("oldFunction posting missing after first AddFunctions")
 	}
-	if _, ok := env.idx.GetDocs(swt.InvertedId, "oldfunction").DocIds[docid]; !ok {
+	if !waitForDocPosting(t, swt.InvertedId, "oldfunction", docid) {
 		t.Fatal("word 'oldfunction' posting missing in words table after first AddFunctions")
 	}
 
@@ -151,18 +186,18 @@ func TestAddFunctions_RetractsDroppedFunction(t *testing.T) {
 	flushQueue(t)
 
 	// New name present (symbol table) and its word "newfunction" present (words table).
-	if _, ok := env.idx.GetDocs(st.InvertedId, "newFunction").DocIds[docid]; !ok {
+	if !waitForDocPosting(t, st.InvertedId, "newFunction", docid) {
 		t.Fatal("newFunction posting missing after re-AddFunctions")
 	}
-	if _, ok := env.idx.GetDocs(swt.InvertedId, "newfunction").DocIds[docid]; !ok {
+	if !waitForDocPosting(t, swt.InvertedId, "newfunction", docid) {
 		t.Fatal("word 'newfunction' posting missing in words table after re-AddFunctions")
 	}
 
 	// Old name retracted (the forward-map diff dropped it).
-	if _, ok := env.idx.GetDocs(st.InvertedId, "oldFunction").DocIds[docid]; ok {
+	if !waitForDocRetracted(t, st.InvertedId, "oldFunction", docid) {
 		t.Fatal("oldFunction posting NOT retracted after re-AddFunctions: forward-map diff failed")
 	}
-	if _, ok := env.idx.GetDocs(swt.InvertedId, "oldfunction").DocIds[docid]; ok {
+	if !waitForDocRetracted(t, swt.InvertedId, "oldfunction", docid) {
 		t.Fatal("word 'oldfunction' posting NOT retracted in words table after re-AddFunctions")
 	}
 }
@@ -194,7 +229,7 @@ func TestDeleteDocument_NoDeadlockAndRetracts(t *testing.T) {
 	if !assert.NoError(t, err) {
 		return
 	}
-	if _, ok := env.idx.GetDocs(st.InvertedId, "toBeDeleted").DocIds[docid]; !ok {
+	if !waitForDocPosting(t, st.InvertedId, "toBeDeleted", docid) {
 		t.Fatal("toBeDeleted posting missing after AddFunctions")
 	}
 
@@ -212,7 +247,7 @@ func TestDeleteDocument_NoDeadlockAndRetracts(t *testing.T) {
 	flushQueue(t)
 
 	// The symbol posting must be retracted (empty keyword set ⇒ delete via forward map).
-	if _, ok := env.idx.GetDocs(st.InvertedId, "toBeDeleted").DocIds[docid]; ok {
+	if !waitForDocRetracted(t, st.InvertedId, "toBeDeleted", docid) {
 		t.Fatal("toBeDeleted posting NOT retracted after DeleteDocument")
 	}
 }

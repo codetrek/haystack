@@ -16,7 +16,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedstore"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
@@ -58,13 +58,29 @@ func TestMain(m *testing.M) {
 		panic("Failed to open storage: " + err.Error())
 	}
 
+	indexdb, err := storage.Open(filepath.Join(tempDir, "index"), 0)
+	if err != nil {
+		panic("Failed to open index storage: " + err.Error())
+	}
+
 	mpsc := queue.NewMpsc("test-handler-queue")
 	mpsc.Start()
 
-	idx, err := invertedstore.Open(filepath.Join(tempDir, "index", storage.StorageVersion, "invertedstore"), mpsc, invertedstore.Options{})
+	// Fast-flush options so any indexed docs become searchable promptly (the
+	// pebble Search reads only flushed rows, not the in-memory pending buffer).
+	index, err := invertedindex.New(indexdb, mpsc, invertedindex.Options{
+		FlushTicker:        50 * time.Millisecond,
+		FlushWaitTimeout:   1 * time.Microsecond,
+		FlushWaitBatchSize: 10,
+		FlushCooldown:      50 * time.Millisecond,
+	})
 	if err != nil {
 		panic("Failed to init inverted index: " + err.Error())
 	}
+	// Wrap the pebble-backed *Index in the adapter so the suite exercises the
+	// SAME live backend the production server wires (invertedindex.New +
+	// NewIndexerAdapter).
+	idx := invertedindex.NewIndexerAdapter(index)
 	st, err := documents.New(db, mpsc, idx, documents.Options{})
 	if err != nil {
 		panic("Failed to init documents: " + err.Error())
@@ -106,6 +122,7 @@ func TestMain(m *testing.M) {
 		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()
+		indexdb.Close()
 		os.RemoveAll(tempDir)
 	}
 

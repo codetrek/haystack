@@ -11,7 +11,6 @@ import (
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/invertedindex"
-	"github.com/codetrek/haystack/core/invertedstore"
 	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
@@ -26,10 +25,16 @@ import (
 
 // Function variables for Init calls, enabling test overrides.
 var (
-	invertedindexInit = func(path string, mpsc *queue.Mpsc) (*invertedstore.Store, error) {
-		// AutoMerge ON in production so the live segment count stays bounded (design §6/§12
-		// P8); the rest of Options{} fills in the §3/§7 production config via withDefaults.
-		return invertedstore.Open(path, mpsc, invertedstore.Options{AutoMerge: true})
+	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (invertedindex.Indexer, error) {
+		// Zero-value Options selects production defaults inside New. The pebble-backed
+		// *Index is wrapped in NewIndexerAdapter so the live backend satisfies the
+		// storage-agnostic invertedindex.Indexer seam (the segment-based invertedstore
+		// remains available as an alternate implementation, currently unwired).
+		idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
+		if err != nil {
+			return nil, err
+		}
+		return invertedindex.NewIndexerAdapter(idx), nil
 	}
 	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx invertedindex.Indexer) (*documents.Store, error) {
 		return documents.New(db, mpsc, idx, documents.Options{})
@@ -77,6 +82,13 @@ func run() error {
 	// that use db are torn down (deferred LIFO, after the manual teardown below).
 	defer db.Close()
 
+	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
+	if err != nil {
+		running.Shutdown()
+		return fmt.Errorf("error initializing index storage: %w", err)
+	}
+	defer indexdb.Close()
+
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
@@ -91,14 +103,7 @@ func run() error {
 	}
 	indexer.SetIdAllocator(idAlloc)
 
-	// The pebble inverted-index store is gone (replaced by the segment-based
-	// invertedstore), so storage.Open no longer runs over the `index` root to
-	// reclaim its stale version dirs. Run the cleanup explicitly so the dead
-	// pebble index version dirs (incl. the just-superseded "1.5") under the index
-	// root are removed before the invertedstore opens its own versioned subdir.
-	indexRoot := filepath.Join(conf.Get().Global.DataPath, "index")
-	storage.Cleanup(indexRoot)
-	idx, err := invertedindexInit(filepath.Join(indexRoot, storage.StorageVersion, "invertedstore"), mpsc)
+	idx, err := invertedindexInit(indexdb, mpsc)
 	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing inverted index: %w", err)
@@ -155,9 +160,8 @@ func run() error {
 
 	idAlloc.Close()
 
-	// db is closed by the deferred Close() registered right after storage.Open
-	// above (it also covers the early-return error paths). The index is the
-	// self-managed invertedstore (no pebble handle), closed by idx.CloseAndWait above.
+	// db and indexdb are closed by the deferred Close() calls registered right after
+	// each storage.Open above (they also cover the early-return error paths).
 	log.Println("[Server] Haystack server stopped")
 	return nil
 }

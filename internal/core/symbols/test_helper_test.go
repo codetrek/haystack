@@ -4,8 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
-	"github.com/codetrek/haystack/core/invertedstore"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
 	"github.com/codetrek/haystack/core/kv/pebblekv"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
@@ -17,11 +19,12 @@ import (
 // be torn down cleanly in reverse order.
 type testEnv struct {
 	*testutil.Env
-	idx *invertedstore.Store
+	idx     invertedindex.Indexer
+	indexdb kv.Store
 }
 
 // setupTestEnv creates a temporary Pebble database, starts an MPSC queue,
-// and initialises both invertedstore and symbols packages.
+// and initialises both the inverted index and symbols packages.
 // Call env.teardown() in a defer.
 func setupTestEnv(t *testing.T) *testEnv {
 	t.Helper()
@@ -31,26 +34,49 @@ func setupTestEnv(t *testing.T) *testEnv {
 	// Ensure the symbols feature flag is enabled for tests.
 	conf.Get().Symbols.EnableFeature = true
 
-	// Init inverted index first (symbols.Create depends on it).
-	idx, err := invertedstore.Open(filepath.Join(env.TempDir, "index", storage.StorageVersion, "invertedstore"), env.Mpsc, invertedstore.Options{})
+	// Open a dedicated pebble index store (the live server keeps the inverted
+	// index in its own `index` store, separate from the `data` store).
+	indexdb, err := storage.Open(filepath.Join(env.TempDir, "index"), 0)
 	if err != nil {
+		env.TeardownBase()
+		t.Fatalf("failed to open index storage: %v", err)
+	}
+
+	// Init inverted index first (symbols.Create depends on it). Wrap the
+	// pebble-backed *Index in the adapter so the test exercises the SAME live
+	// backend the production server wires (invertedindex.New + NewIndexerAdapter).
+	// Fast-flush options so posting writes reach pebble promptly — the pebble
+	// GetDocs/Search read only flushed rows, so the deadlock tests poll for the
+	// posting to land (see waitForDocPosting) rather than block on the 1s default.
+	index, err := invertedindex.New(indexdb, env.Mpsc, invertedindex.Options{
+		FlushTicker:              20 * time.Millisecond,
+		FlushWaitTimeout:         1 * time.Microsecond,
+		FlushWaitBatchSize:       1,
+		FlushDeleteWaitTimeout:   1 * time.Microsecond,
+		FlushDeleteWaitBatchSize: 1,
+		FlushCooldown:            20 * time.Millisecond,
+	})
+	if err != nil {
+		indexdb.Close()
 		env.TeardownBase()
 		t.Fatalf("failed to init inverted index: %v", err)
 	}
+	idx := invertedindex.NewIndexerAdapter(index)
 
 	// Init symbols package -- sets the package-level globals.
 	if err := Init(env.DB, env.Mpsc, idx); err != nil {
 		idx.CloseAndWait()
+		indexdb.Close()
 		env.TeardownBase()
 		t.Fatalf("failed to init symbols: %v", err)
 	}
 
-	return &testEnv{Env: env, idx: idx}
+	return &testEnv{Env: env, idx: idx, indexdb: indexdb}
 }
 
 // teardown shuts down everything in reverse init order:
 //
-//	symbols -> invertedstore -> mpsc queue -> pebble db -> temp dir
+//	symbols -> inverted index -> index store -> mpsc queue -> pebble db -> temp dir
 func (e *testEnv) teardown() {
 	e.T.Helper()
 
@@ -62,7 +88,10 @@ func (e *testEnv) teardown() {
 	// 2. inverted index
 	e.idx.CloseAndWait()
 
-	// 3. base resources (queue → db → temp dir)
+	// 3. index store
+	e.indexdb.Close()
+
+	// 4. base resources (queue → db → temp dir)
 	e.TeardownBase()
 }
 

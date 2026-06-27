@@ -18,7 +18,7 @@ import (
 	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedstore"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
@@ -40,9 +40,9 @@ var (
 	testWorkspacePath string
 	testServerURL     string
 
-	// testInvertedIndexOptions holds the invertedstore options used by the test
+	// testInvertedIndexOptions holds the fast-flush options used by the test
 	// server. Set in setupTestEnvironment, consumed in startTestServer.
-	testInvertedIndexOptions invertedstore.Options
+	testInvertedIndexOptions invertedindex.Options
 )
 
 func TestServerEndToEnd(t *testing.T) {
@@ -80,7 +80,12 @@ func setupTestEnvironment(t *testing.T) {
 	conf.Get().Global.DataPath = filepath.Join(tempDir, testDataPath)
 	conf.Get().Server.CacheSize = 8 * 1024 * 1024 // 8MB for tests
 
-	testInvertedIndexOptions = invertedstore.Options{AutoMerge: true}
+	testInvertedIndexOptions = invertedindex.Options{
+		FlushTicker:        50 * time.Millisecond,
+		FlushWaitTimeout:   1 * time.Microsecond,
+		FlushWaitBatchSize: 10,
+		FlushCooldown:      50 * time.Millisecond,
+	}
 }
 
 // waitForServerReady polls the health endpoint until the server responds.
@@ -202,6 +207,9 @@ func startTestServer(t *testing.T) func() {
 	db, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "data"), conf.Get().Server.CacheSize)
 	assert.NoError(t, err)
 
+	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
+	assert.NoError(t, err)
+
 	mpsc := queue.NewMpsc("TestDBQueue")
 	mpsc.Start()
 
@@ -209,8 +217,12 @@ func startTestServer(t *testing.T) func() {
 	assert.NoError(t, err)
 	indexer.SetIdAllocator(alloc)
 
-	idx, err := invertedstore.Open(filepath.Join(conf.Get().Global.DataPath, "index", storage.StorageVersion, "invertedstore"), mpsc, testInvertedIndexOptions)
+	index, err := invertedindex.New(indexdb, mpsc, testInvertedIndexOptions)
 	assert.NoError(t, err)
+	// Wrap the pebble-backed *Index in the adapter so it satisfies the
+	// invertedindex.Indexer seam consumed by documents/symbols/searcher — the
+	// same construction the production server performs.
+	idx := invertedindex.NewIndexerAdapter(index)
 
 	st, err := documents.New(db, mpsc, idx, documents.Options{})
 	assert.NoError(t, err)
@@ -243,6 +255,7 @@ func startTestServer(t *testing.T) func() {
 		mpsc.Stop()
 		alloc.Close()
 		db.Close()
+		indexdb.Close()
 		workspace.SetDocStore(nil)
 		indexer.SetDocStore(nil)
 	}

@@ -54,10 +54,8 @@ func TestCleanup_RemovesOldVersionDirs(t *testing.T) {
 	storagePath := filepath.Join(tmpDir, "storage")
 	os.MkdirAll(storagePath, 0755)
 
-	// Old version directories that cleanup should remove. 1.4 (pre-delta-varint) and
-	// 1.5 (the pebble inverted-index / doc-words keyspace the 1.6 cutover supersedes)
-	// are included so the reclaim-the-old-store half of the 1.6 cutover is covered.
-	oldDirs := []string{"index", "1.0", "1.1", "1.2", "1.3", "1.4", "1.5"}
+	// Old version directories that cleanup should remove
+	oldDirs := []string{"index", "1.0", "1.1", "1.2", "1.3"}
 	for _, name := range oldDirs {
 		dirPath := filepath.Join(storagePath, name)
 		os.MkdirAll(dirPath, 0755)
@@ -133,7 +131,7 @@ func TestCleanup_PartialOldDirs(t *testing.T) {
 }
 
 func TestStorageVersion(t *testing.T) {
-	assert.Equal(t, "1.6", StorageVersion)
+	assert.Equal(t, "1.5", StorageVersion)
 }
 
 func TestIsKeyType(t *testing.T) {
