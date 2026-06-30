@@ -111,7 +111,7 @@ func TestSealLocked_WriteFaultPropagates(t *testing.T) {
 func TestCommitSealLocked_ReconcileErrorRollsBack(t *testing.T) {
 	kvStore := newTestKV(t)
 	dir := t.TempDir()
-	s, err := Open(Options{Dir: dir, Metric: Cosine})
+	s, err := Open(Options{Dir: dir, Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(909))
 	bp := s.NewBatch()

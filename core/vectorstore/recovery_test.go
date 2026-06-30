@@ -8,11 +8,11 @@ import (
 )
 
 // reopenStore closes s and reopens a fresh Store over the SAME dir + KV (recovery).
-func reopenStore(t *testing.T, s *Store, _ kv.Store) *Store {
+func reopenStore(t *testing.T, s *Store, kvStore kv.Store) *Store {
 	t.Helper()
 	dir := s.dir
 	requireNoError(t, s.Close())
-	s2, err := Open(Options{Dir: dir, Metric: s.metric})
+	s2, err := Open(Options{Dir: dir, Metric: s.metric, KV: kvStore})
 	requireNoError(t, err)
 	t.Cleanup(func() { _ = s2.Close() })
 	return s2
@@ -20,7 +20,7 @@ func reopenStore(t *testing.T, s *Store, _ kv.Store) *Store {
 
 func TestRecovery_SealedSegmentsAndHead(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	rng := rand.New(rand.NewSource(41))
 	dim := 16

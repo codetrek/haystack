@@ -169,8 +169,8 @@ func TestKeyTypeConstants(t *testing.T) {
 		{"invertedindex.DefaultKeyTypeNextId", invertedindex.DefaultKeyTypeNextId},
 		{"invertedindex.DefaultKeyTypeForward", invertedindex.DefaultKeyTypeForward},
 		// idtable (28-29)
-		{"idtable.LegacyKeyTypeNextId", idtable.LegacyKeyTypeNextId},
-		{"idtable.LegacyKeyTypeKey", idtable.LegacyKeyTypeKey},
+		{"idtable.DefaultKeyTypeNextId", idtable.DefaultKeyTypeNextId},
+		{"idtable.DefaultKeyTypeKey", idtable.DefaultKeyTypeKey},
 		// storage symbols (30, 31, 33)
 		{"storage.KeyTypeSymbol", KeyTypeSymbol},
 		{"storage.KeyTypeSymbolDocFunctions", KeyTypeSymbolDocFunctions},

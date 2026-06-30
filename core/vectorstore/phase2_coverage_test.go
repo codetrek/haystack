@@ -44,7 +44,7 @@ func TestSealedSegment_TombstoneOutOfRange(t *testing.T) {
 // loaded from control.db — and must be swept, never mistaken for live state.
 func TestRecovery_StrandedManifestTmpIgnored(t *testing.T) {
 	kvStore := newTestKV(t)
-	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine})
+	s, err := Open(Options{Dir: t.TempDir(), Metric: Cosine, KV: kvStore})
 	requireNoError(t, err)
 	requireNoError(t, s.Put("d-0", []float32{1, 0, 0, 0}, nil))
 	requireNoError(t, s.Seal()) // commits the control store (control.db)

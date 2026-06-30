@@ -11,15 +11,29 @@ import (
 	"sync/atomic"
 
 	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 	bolt "go.etcd.io/bbolt"
 )
 
-// Options configures a Store. Dir holds the bbolt control store (control.db),
-// the standalone idtable (idtable.db), and the flat sealed-segment data dirs.
+// Options configures a Store. Dir holds the bbolt control store (control.db), the
+// flat sealed-segment data dirs, and (when KV is nil) a dedicated pebble store for
+// the idtable. KV, when set, is a shared kv.Store the idtable allocates over
+// (namespaced by the vectorstore's 40/41 key prefixes) so idtable can coexist with
+// other data in one pebble instance instead of owning a separate store.
 type Options struct {
 	Dir    string
 	Metric Metric
+	KV     kv.Store
 }
+
+// idtableKeyType{NextId,Key} are the key-type prefixes the vectorstore's idtable
+// allocator uses within its kv.Store (shared or dedicated), namespacing it apart
+// from any other data that shares the same store.
+const (
+	idtableKeyTypeNextId = byte(40)
+	idtableKeyTypeKey    = byte(41)
+)
 
 // headSegID is the reserved segId for the in-memory head in the global
 // docId→segId map. Sealed segments use ids >= 1 (the manifest version space).
@@ -55,7 +69,12 @@ type Store struct {
 	metric Metric
 	dir    string
 	alloc  *idtable.Allocator
-	seg    *segment // the head
+	// idStore backs alloc. ownIdStore is true when the store opened it itself
+	// (opts.KV was nil) and is therefore responsible for closing it; a
+	// caller-provided opts.KV is never closed here.
+	idStore    kv.Store
+	ownIdStore bool
+	seg        *segment // the head
 	// cs is the bbolt-backed CONTROL plane: the small, transactional store
 	// metadata (meta/segments/indexes/indexsegs/attrdecls) plus the durable head
 	// record (head bucket) that replaced the hand-rolled manifest rewrite AND the
@@ -165,24 +184,46 @@ func Open(opts Options) (*Store, error) {
 	if err := os.MkdirAll(opts.Dir, 0755); err != nil {
 		return nil, err
 	}
-	// idtable is a standalone bbolt component living under the store's own Dir.
-	alloc, err := idtable.Open(filepath.Join(opts.Dir, "idtable.db"), idtable.Options{})
+	// idtable allocates docids as a thin allocator OVER a pebble kv.Store, namespaced
+	// by the 40/41 key prefixes. A caller may pass opts.KV to coexist in a shared
+	// store; otherwise the store opens (and owns) a dedicated pebble store.
+	idStore := opts.KV
+	ownIdStore := false
+	if idStore == nil {
+		st, err := pebblekv.Open(filepath.Join(opts.Dir, "idtable"), 0)
+		if err != nil {
+			return nil, err
+		}
+		idStore, ownIdStore = st, true
+	}
+	alloc, err := idtable.New(idStore, idtable.Options{
+		KeyTypeNextId: idtableKeyTypeNextId,
+		KeyTypeKey:    idtableKeyTypeKey,
+	})
 	if err != nil {
+		if ownIdStore {
+			idStore.Close()
+		}
 		return nil, err
 	}
 	cs, err := openControlStore(opts.Dir)
 	if err != nil {
 		alloc.Close()
+		if ownIdStore {
+			idStore.Close()
+		}
 		return nil, err
 	}
 	s := &Store{
-		metric:   opts.Metric,
-		dir:      opts.Dir,
-		alloc:    alloc,
-		seg:      newSegment(opts.Metric),
-		cs:       cs,
-		idToDoc:  make(map[string]int64),
-		docToSeg: make(map[int64]segID),
+		metric:     opts.Metric,
+		dir:        opts.Dir,
+		alloc:      alloc,
+		idStore:    idStore,
+		ownIdStore: ownIdStore,
+		seg:        newSegment(opts.Metric),
+		cs:         cs,
+		idToDoc:    make(map[string]int64),
+		docToSeg:   make(map[int64]segID),
 		indexes: map[string]*vindex{
 			// The "default" index carries the store's primary metric and reproduces
 			// Phases 1-5 exactly (empty graphs map → every segment pending until built).
@@ -207,6 +248,9 @@ func Open(opts Options) (*Store, error) {
 		}
 		cs.Close()
 		alloc.Close()
+		if ownIdStore {
+			idStore.Close()
+		}
 		return nil, err
 	}
 	return s, nil
@@ -852,6 +896,9 @@ func (s *Store) Close() error {
 		ss.close()
 	}
 	s.alloc.Close()
+	if s.ownIdStore {
+		s.idStore.Close()
+	}
 	return s.cs.Close()
 }
 

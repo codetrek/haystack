@@ -34,7 +34,7 @@ func TestMerge_RebuildRePendsInputDuringMergeWindow(t *testing.T) {
 	}
 	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
-		s, err := Open(Options{Dir: t.TempDir(), Metric: DotProduct})
+		s, err := Open(Options{Dir: t.TempDir(), Metric: DotProduct, KV: kvStore})
 		requireNoError(t, err)
 		rng := rand.New(rand.NewSource(int64(900 + iter)))
 		dim := 8
@@ -100,7 +100,7 @@ func TestMerge_CreateRePendsInputDuringMergeWindow(t *testing.T) {
 	}
 	for iter := 0; iter < iters; iter++ {
 		kvStore := newTestKV(t)
-		s, err := Open(Options{Dir: t.TempDir(), Metric: DotProduct})
+		s, err := Open(Options{Dir: t.TempDir(), Metric: DotProduct, KV: kvStore})
 		requireNoError(t, err)
 		rng := rand.New(rand.NewSource(int64(1300 + iter)))
 		dim := 8
