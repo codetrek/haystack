@@ -213,16 +213,12 @@ func startTestServer(t *testing.T) func() {
 	mpsc := queue.NewMpsc("TestDBQueue")
 	mpsc.Start()
 
-	alloc, err := idtable.Open(filepath.Join(conf.Get().Global.DataPath, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(db, idtable.Options{})
 	assert.NoError(t, err)
 	indexer.SetIdAllocator(alloc)
 
-	index, err := invertedindex.New(indexdb, mpsc, testInvertedIndexOptions)
+	idx, err := invertedindex.New(indexdb, mpsc, testInvertedIndexOptions)
 	assert.NoError(t, err)
-	// Wrap the pebble-backed *Index in the adapter so it satisfies the
-	// invertedindex.Indexer seam consumed by documents/symbols/searcher — the
-	// same construction the production server performs.
-	idx := invertedindex.NewIndexerAdapter(index)
 
 	st, err := documents.New(db, mpsc, idx, documents.Options{})
 	assert.NoError(t, err)

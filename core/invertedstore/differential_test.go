@@ -230,7 +230,7 @@ func (h *invIndexHarness) teardown() {
 type invStoreHarness struct {
 	t    *testing.T
 	s    *Store
-	b    invertedindex.Batch
+	b    *Batch
 	dir  string
 	q    *queue.Mpsc
 	opts Options

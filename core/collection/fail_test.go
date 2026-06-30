@@ -56,7 +56,7 @@ func newFailCatalog(t *testing.T) (*Catalog, *failStore) {
 	q.Start()
 	idx, err := invertedindex.New(real, q, invertedindex.Options{})
 	require.NoError(t, err)
-	docs, err := documents.New(real, q, invertedindex.NewIndexerAdapter(idx), documents.Options{})
+	docs, err := documents.New(real, q, idx, documents.Options{})
 	require.NoError(t, err)
 
 	fs := &failStore{Store: real}
@@ -111,7 +111,7 @@ func TestCreate_DocsCreateError(t *testing.T) {
 	// The document store rides on its own failable wrapper so docs.Create can be
 	// made to fail without affecting the catalog's own db ops.
 	docFS := &failStore{Store: real}
-	docs, err := documents.New(docFS, q, invertedindex.NewIndexerAdapter(idx), documents.Options{})
+	docs, err := documents.New(docFS, q, idx, documents.Options{})
 	require.NoError(t, err)
 
 	// The catalog's db is a separate failable wrapper: persistRecord's Put must

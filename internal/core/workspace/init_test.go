@@ -21,33 +21,22 @@ import (
 
 // setupCatalog is a test helper: runs migration, creates collection.Catalog + documents.Store.
 // Returns the catalog, documents store, queue, and a cleanup func.
-func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *documents.Store, mpsc *queue.Mpsc, idx invertedindex.Indexer, cleanup func()) {
+func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *documents.Store, mpsc *queue.Mpsc, idx *invertedindex.Index, cleanup func()) {
 	t.Helper()
 
 	mpsc = queue.NewMpsc("test-catalog-q")
 	mpsc.Start()
 
-	indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), 0)
+	var err error
+	idx, err = invertedindex.New(db, mpsc, invertedindex.Options{})
 	if err != nil {
-		mpsc.Stop()
-		t.Fatalf("storage.Open(index): %v", err)
-	}
-
-	// Wrap the pebble-backed *Index in the adapter so the test exercises the
-	// SAME live backend the production server wires (invertedindex.New +
-	// NewIndexerAdapter).
-	index, err := invertedindex.New(indexdb, mpsc, invertedindex.Options{})
-	if err != nil {
-		indexdb.Close()
 		mpsc.Stop()
 		t.Fatalf("invertedindex.New: %v", err)
 	}
-	idx = invertedindex.NewIndexerAdapter(index)
 
 	st, err = documents.New(db, mpsc, idx, documents.Options{})
 	if err != nil {
 		idx.CloseAndWait()
-		indexdb.Close()
 		mpsc.Stop()
 		t.Fatalf("documents.New: %v", err)
 	}
@@ -56,7 +45,6 @@ func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *docum
 	if err != nil {
 		st.CloseAndWait()
 		idx.CloseAndWait()
-		indexdb.Close()
 		mpsc.Stop()
 		t.Fatalf("collection.New: %v", err)
 	}
@@ -64,7 +52,6 @@ func setupCatalog(t *testing.T, db kv.Store) (cat *collection.Catalog, st *docum
 	cleanup = func() {
 		st.CloseAndWait()
 		idx.CloseAndWait()
-		indexdb.Close()
 		mpsc.Stop()
 	}
 	return cat, st, mpsc, idx, cleanup

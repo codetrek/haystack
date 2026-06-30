@@ -11,15 +11,12 @@ import (
 
 // StorageVersion names the on-disk KV directory. Bump it on any breaking
 // on-disk format change to force a clean reindex into a fresh directory; add the
-// previous version to cleanup's list so the stale DB is removed. 1.5 switched the
+// previous version to cleanup's list so the stale DB is removed. 1.5 switches the
 // inverted-index posting-row values from fixed 8-byte big-endian docids to a
 // delta-varint encoding, which the 1.4 decoder cannot read.
 const StorageVersion = "1.5"
 
-// Cleanup removes the stale on-disk DB directories (previous StorageVersions and
-// the first-gen un-versioned `index` dir) under storagePath. storage.Open runs it
-// for both the `data` and `index` stores via the post-Open goroutine.
-func Cleanup(storagePath string) {
+func cleanup(storagePath string) {
 	// Perform cleanup tasks here, such as removing old files or directories
 	log.Printf("[Storage] Cleaning up storage path: %s", storagePath)
 	cleanupList := []string{
@@ -69,7 +66,3 @@ func Open(storagePath string, cacheSize int64) (kv.Store, error) {
 	go cleanup(storagePath)
 	return db, nil
 }
-
-// cleanup is the unexported alias kept so the post-Open goroutine reads naturally;
-// it forwards to the exported Cleanup used by the index-root caller.
-func cleanup(storagePath string) { Cleanup(storagePath) }

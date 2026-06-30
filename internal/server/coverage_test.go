@@ -124,7 +124,7 @@ func TestRun_RunError(t *testing.T) {
 	defer restore()
 
 	// Make invertedindexInit fail so run() returns an error.
-	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (invertedindex.Indexer, error) {
+	invertedindexInit = func(_ kv.Store, _ *queue.Mpsc) (*invertedindex.Index, error) {
 		return nil, errFake
 	}
 

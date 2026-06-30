@@ -58,29 +58,13 @@ func TestMain(m *testing.M) {
 		panic("Failed to open storage: " + err.Error())
 	}
 
-	indexdb, err := storage.Open(filepath.Join(tempDir, "index"), 0)
-	if err != nil {
-		panic("Failed to open index storage: " + err.Error())
-	}
-
 	mpsc := queue.NewMpsc("test-handler-queue")
 	mpsc.Start()
 
-	// Fast-flush options so any indexed docs become searchable promptly (the
-	// pebble Search reads only flushed rows, not the in-memory pending buffer).
-	index, err := invertedindex.New(indexdb, mpsc, invertedindex.Options{
-		FlushTicker:        50 * time.Millisecond,
-		FlushWaitTimeout:   1 * time.Microsecond,
-		FlushWaitBatchSize: 10,
-		FlushCooldown:      50 * time.Millisecond,
-	})
+	idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
 	if err != nil {
 		panic("Failed to init inverted index: " + err.Error())
 	}
-	// Wrap the pebble-backed *Index in the adapter so the suite exercises the
-	// SAME live backend the production server wires (invertedindex.New +
-	// NewIndexerAdapter).
-	idx := invertedindex.NewIndexerAdapter(index)
 	st, err := documents.New(db, mpsc, idx, documents.Options{})
 	if err != nil {
 		panic("Failed to init documents: " + err.Error())
@@ -91,7 +75,7 @@ func TestMain(m *testing.M) {
 	// Inject the inverted index into the searcher so search handlers work.
 	searcher.Run(&runningWg, idx, st)
 
-	alloc, err := idtable.Open(filepath.Join(tempDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {
 		panic("Failed to init idtable: " + err.Error())
 	}
@@ -122,7 +106,6 @@ func TestMain(m *testing.M) {
 		idx.CloseAndWait()
 		mpsc.Stop()
 		db.Close()
-		indexdb.Close()
 		os.RemoveAll(tempDir)
 	}
 

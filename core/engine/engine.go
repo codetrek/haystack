@@ -35,7 +35,7 @@ type Options struct {
 type Engine struct {
 	opts         Options
 	collectionID int
-	idx          invertedindex.Indexer
+	idx          *invertedindex.Index
 	docs         *documents.Store
 
 	orClauses []*andClause
@@ -43,10 +43,8 @@ type Engine struct {
 
 // New constructs a content Engine backed by the supplied index and document
 // store. idx and docs may be nil (e.g. in unit tests that only call
-// Compile/IsLineMatch without CollectDocuments). idx is the storage-agnostic
-// invertedindex.Indexer seam, so the engine runs unchanged on either the
-// pebble-backed invertedindex or the segment-based invertedstore.Store.
-func New(idx invertedindex.Indexer, docs *documents.Store, collectionID int, opts Options) *Engine {
+// Compile/IsLineMatch without CollectDocuments).
+func New(idx *invertedindex.Index, docs *documents.Store, collectionID int, opts Options) *Engine {
 	return &Engine{
 		opts:         opts,
 		collectionID: collectionID,

@@ -18,7 +18,6 @@ import (
 	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/codetrek/haystack/internal/conf"
-	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/server/indexer"
@@ -463,36 +462,24 @@ func TestFullIntegration(t *testing.T) {
 	indexer.SymbolParserFlushInterval = 50 * time.Millisecond
 	defer func() { indexer.SymbolParserFlushInterval = origFlushInterval }()
 
-	// Fast-flush options so indexed docs become searchable promptly: the pebble
-	// Search reads only flushed rows, so the test must not wait the 1s
-	// production flush ticker for each search assertion.
+	// Speed up inverted index flush: reduce the "entry must be N seconds old"
+	// timeout so pending writes are flushed quickly.
 	iiOpts := invertedindex.Options{
-		FlushTicker:        50 * time.Millisecond,
-		FlushWaitTimeout:   1 * time.Microsecond,
-		FlushWaitBatchSize: 10,
-		FlushCooldown:      50 * time.Millisecond,
+		FlushWaitTimeout: 200 * time.Millisecond,
 	}
 
 	var shutdownWg sync.WaitGroup
 	running.InitShutdown(&shutdownWg)
 
-	alloc, err := idtable.Open(filepath.Join(env.TempDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(env.DB, idtable.Options{})
 	if err != nil {
-		t.Fatalf("idtable.Open: %v", err)
+		t.Fatalf("idtable.New: %v", err)
 	}
 	indexer.SetIdAllocator(alloc)
-	indexdb, err := storage.Open(filepath.Join(env.TempDir, "index"), 0)
-	if err != nil {
-		t.Fatalf("storage.Open(index): %v", err)
-	}
-	index, err := invertedindex.New(indexdb, env.Mpsc, iiOpts)
+	idx, err := invertedindex.New(env.DB, env.Mpsc, iiOpts)
 	if err != nil {
 		t.Fatalf("invertedindex.New: %v", err)
 	}
-	// Wrap the pebble-backed *Index in the adapter so the test exercises the
-	// SAME live backend the production server wires (invertedindex.New +
-	// NewIndexerAdapter).
-	idx := invertedindex.NewIndexerAdapter(index)
 	idxInst = idx
 	docSt, err := documents.New(env.DB, env.Mpsc, idx, documents.Options{})
 	if err != nil {
@@ -618,11 +605,10 @@ func TestFullIntegration(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	// Wait for the async indexing pipeline (parser + symbol parser) to push its
-	// writes into the inverted index AND for the index to flush them to pebble:
-	// the pebble Search reads only flushed rows, so this wait covers both the
-	// content/symbol parser hand-off (symbol parser flush set to 50ms above) and
-	// the index flush ticker/cooldown (set to 50ms via iiOpts above).
+	// Wait for the inverted-index to flush pending writes from both
+	// content indexing and symbol indexing.
+	// We reduced FlushWaitTimeout to 200ms; wait for that plus a ticker cycle
+	// (default ticker is 1s).
 	time.Sleep(200*time.Millisecond + 1*time.Second + 200*time.Millisecond)
 
 	// makeWS creates a NEW workspace for tests that need isolated files.
@@ -2258,7 +2244,6 @@ func TestFullIntegration(t *testing.T) {
 	workspace.SetDocStore(nil)
 	idx.CloseAndWait()
 	idxInst = nil
-	indexdb.Close()
 	alloc.Close()
 	env.TeardownBase()
 }

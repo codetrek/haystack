@@ -50,18 +50,13 @@ type Options struct {
 	KeyTypeDocPath byte
 }
 
-// Store is the instance-based document store. It persists document metadata
-// and path information in a kv.Store, and optionally maintains a linked
-// inverted index (any invertedindex.Indexer) for full-text search.
-//
-// The document's tokenized keywords are NOT persisted here: the inverted index
-// owns the forward map (its source of truth for a doc's current keywords), so
-// the store passes the doc's CURRENT keyword set to the index on every mutation
-// and lets the index diff against its own forward map.
+// Store is the instance-based document store. It persists document metadata,
+// keywords, and path information in a kv.Store, and optionally maintains a
+// linked invertedindex.Index for full-text search.
 type Store struct {
 	db  kv.Store
 	q   queue.Queue
-	idx invertedindex.Indexer
+	idx *invertedindex.Index
 
 	// resolved on-disk key-type bytes (set in New from opts with defaults applied)
 	keyTypeDocCollection byte
@@ -79,10 +74,8 @@ type Store struct {
 // New creates a new Store backed by the given kv.Store and queue.Queue.
 // idx may be nil in tests or configurations that do not exercise index-linked
 // paths; when non-nil it is notified of all document mutations so it stays in
-// sync with the kv.Store. idx is the storage-agnostic invertedindex.Indexer
-// seam, so the store runs unchanged on either the pebble-backed invertedindex
-// (via invertedindex.NewIndexerAdapter) or the segment-based invertedstore.Store.
-func New(store kv.Store, q queue.Queue, idx invertedindex.Indexer, opts Options) (*Store, error) {
+// sync with the kv.Store.
+func New(store kv.Store, q queue.Queue, idx *invertedindex.Index, opts Options) (*Store, error) {
 	// Apply key-type defaults (zero means "use default").
 	if opts.KeyTypeDocCollection == 0 {
 		opts.KeyTypeDocCollection = DefaultKeyTypeDocCollection
@@ -177,27 +170,20 @@ func (s *Store) Create(collectionID int, desc string) error {
 }
 
 // Delete deletes a collection and all of its documents and keywords.
-//
-// indexDeleteTable runs OUTSIDE the queue task, exactly like Create runs
-// indexCreateTable outside any task: an Indexer's DeleteTable may itself block
-// on the same mpsc worker (invertedstore.DeleteTable does q.RunFunc), so calling
-// it from inside s.q.RunFunc would nest RunFunc-in-RunFunc and deadlock the
-// single worker when the store and the index share a queue (the production
-// wiring does). The kv cleanup + count update stay serialized on the queue.
 func (s *Store) Delete(collectionID int) error {
-	ft, err := s.GetCollection(collectionID)
-	if err != nil {
-		return fmt.Errorf("failed to get collection: %w", err)
-	}
-	s.markCollectionDeleted(collectionID)
-
-	s.indexDeleteTable(ft.InvertedId)
-
 	return s.q.RunFunc(func() error {
+		ft, err := s.GetCollection(collectionID)
+		if err != nil {
+			return fmt.Errorf("failed to get collection: %w", err)
+		}
+		s.markCollectionDeleted(collectionID)
+
+		s.indexDeleteTable(ft.InvertedId)
+
 		batch := s.db.NewBatch(0)
 		batch.DeletePrefix(s.encodeDocumentMetaKey(collectionID, ""))
 
-		err := batch.Commit()
+		err = batch.Commit()
 		if err != nil {
 			return err
 		}
@@ -260,18 +246,30 @@ func (s *Store) indexDeleteTable(tableId int) {
 	s.idx.DeleteTable(tableId)
 }
 
-// indexDocument is the seam for a single per-document index update. words is the
-// doc's CURRENT full keyword set (empty/nil ⇒ delete the doc from the index). The
-// index owns the forward map and diffs against it, so NO oldWords is passed —
-// this is the invertedstore contract (design §4) that lets the store drop its
-// doc-words machinery. It MUST be called OUTSIDE any s.q worker task (Update
-// enqueues onto the shared queue; see indexDocuments).
-func (s *Store) indexDocument(tableId int, docId string, words []string) {
+// indexAddDocument is the seam for indexing a brand-new document's words. The
+// inverted index keys postings by the docid's int64 value; docId here is its
+// canonical 8-byte string form (as produced by idtable.GetId and used for the
+// document-store keys), so decode it at this boundary.
+func (s *Store) indexAddDocument(tableId int, docId string, words []string) {
 	if s.idx == nil {
 		return
 	}
-	// The inverted index keys postings by the docid's int64 value; docId here is
-	// its canonical 8-byte string form (as produced by idtable.GetId and used for
-	// the document-store keys), so decode it at this boundary.
+	s.idx.Add(tableId, idtable.DecodeId(docId), words)
+}
+
+// indexUpdateDocument is the seam for re-indexing an existing document; the index
+// diffs against the keyword set it already owns, so no old set is passed.
+func (s *Store) indexUpdateDocument(tableId int, docId string, words []string) {
+	if s.idx == nil {
+		return
+	}
 	s.idx.Update(tableId, idtable.DecodeId(docId), words)
+}
+
+// indexDeleteDocument is the seam for removing a document from the index.
+func (s *Store) indexDeleteDocument(tableId int, docId string) {
+	if s.idx == nil {
+		return
+	}
+	s.idx.Delete(tableId, idtable.DecodeId(docId))
 }

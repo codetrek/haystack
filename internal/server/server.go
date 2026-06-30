@@ -25,24 +25,17 @@ import (
 
 // Function variables for Init calls, enabling test overrides.
 var (
-	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (invertedindex.Indexer, error) {
-		// Zero-value Options selects production defaults inside New. The pebble-backed
-		// *Index is wrapped in NewIndexerAdapter so the live backend satisfies the
-		// storage-agnostic invertedindex.Indexer seam (the segment-based invertedstore
-		// remains available as an alternate implementation, currently unwired).
-		idx, err := invertedindex.New(db, mpsc, invertedindex.Options{})
-		if err != nil {
-			return nil, err
-		}
-		return invertedindex.NewIndexerAdapter(idx), nil
+	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (*invertedindex.Index, error) {
+		// Zero-value Options selects production defaults inside New.
+		return invertedindex.New(db, mpsc, invertedindex.Options{})
 	}
-	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx invertedindex.Indexer) (*documents.Store, error) {
+	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) (*documents.Store, error) {
 		return documents.New(db, mpsc, idx, documents.Options{})
 	}
 	// workspaceInit receives the fully-constructed Catalog so the workspace
 	// package no longer needs its own kv.Store reference.
 	workspaceInit = func(cat *collection.Catalog) error { return workspace.Init(cat) }
-	symbolsInit   = func(db kv.Store, mpsc *queue.Mpsc, idx invertedindex.Indexer) error {
+	symbolsInit   = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) error {
 		return symbols.Init(db, mpsc, idx)
 	}
 )
@@ -92,11 +85,10 @@ func run() error {
 	mpsc := queue.NewMpsc("DBQueue")
 	mpsc.Start()
 
-	// idtable is a standalone bbolt-backed component (separate from the `data`
-	// pebble store); the legacy 28/29-prefix KV idtable predates it and is no
-	// longer migrated.
-	idtablePath := filepath.Join(conf.Get().Global.DataPath, "idtable.db")
-	idAlloc, err := idtable.Open(idtablePath, idtable.Options{})
+	// idtable is a thin docid allocator OVER the shared `data` pebble store,
+	// namespaced by its default 28/29 key prefixes — it coexists with
+	// documents/invertedindex in the one store (no separate file).
+	idAlloc, err := idtable.New(db, idtable.Options{})
 	if err != nil {
 		running.Shutdown()
 		return fmt.Errorf("error initializing id table: %w", err)

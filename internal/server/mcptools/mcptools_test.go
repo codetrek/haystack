@@ -46,9 +46,6 @@ func setupMCPTestEnv(t *testing.T) {
 		// Configure
 		conf.Get().Global.DataPath = filepath.Join(tempDir, "mcp_test_data")
 		conf.Get().Server.CacheSize = 8 * 1024 * 1024
-		// Fast-flush options so indexed docs become searchable promptly: the
-		// pebble Search reads only flushed rows, so the test must not wait the
-		// 1s production flush ticker for each assertion.
 		iiOpts := invertedindex.Options{
 			FlushTicker:        50 * time.Millisecond,
 			FlushWaitTimeout:   1 * time.Microsecond,
@@ -99,7 +96,6 @@ This is a test project.`,
 		if !assert.NoError(t, err) {
 			return
 		}
-
 		indexdb, err := storage.Open(filepath.Join(conf.Get().Global.DataPath, "index"), conf.Get().Server.CacheSize)
 		if !assert.NoError(t, err) {
 			return
@@ -108,14 +104,10 @@ This is a test project.`,
 		mpsc := queue.NewMpsc("MCPTestDBQueue")
 		mpsc.Start()
 
-		index, err := invertedindex.New(indexdb, mpsc, iiOpts)
+		idx, err := invertedindex.New(indexdb, mpsc, iiOpts)
 		if !assert.NoError(t, err) {
 			return
 		}
-		// Wrap the pebble-backed *Index in the adapter so the test exercises the
-		// SAME live backend the production server wires (invertedindex.New +
-		// NewIndexerAdapter), including the adapter's async-enqueue seam.
-		idx := invertedindex.NewIndexerAdapter(index)
 		st, stErr := documents.New(db, mpsc, idx, documents.Options{})
 		if !assert.NoError(t, stErr) {
 			return
@@ -133,7 +125,7 @@ This is a test project.`,
 			return
 		}
 
-		alloc, allocErr := idtable.Open(filepath.Join(conf.Get().Global.DataPath, "idtable.db"), idtable.Options{})
+		alloc, allocErr := idtable.New(db, idtable.Options{})
 		if !assert.NoError(t, allocErr) {
 			return
 		}

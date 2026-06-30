@@ -19,7 +19,7 @@ import (
 // indexedStack is a fully wired core stack with documents indexed, ready
 // for engine queries. It exercises the CollectDocuments path end-to-end.
 type indexedStack struct {
-	idx   invertedindex.Indexer
+	idx   *invertedindex.Index
 	docs  *documents.Store
 	colID int
 	ids   map[string]string // relPath -> docID
@@ -38,7 +38,7 @@ func buildIndexedStack(t *testing.T, docMap map[string][]string) *indexedStack {
 	q := queue.NewMpsc("engine-test-writes")
 	q.Start()
 
-	alloc, err := idtable.Open(filepath.Join(tmpDir, "idtable.db"), idtable.Options{})
+	alloc, err := idtable.New(store, idtable.Options{})
 	require.NoError(t, err)
 	ids := make(map[string]string, len(docMap))
 	for relPath := range docMap {
@@ -50,9 +50,8 @@ func buildIndexedStack(t *testing.T, docMap map[string][]string) *indexedStack {
 
 	idx, err := invertedindex.New(store, q, invertedindex.Options{})
 	require.NoError(t, err)
-	indexer := invertedindex.NewIndexerAdapter(idx)
 
-	docs, err := documents.New(store, q, indexer, documents.Options{})
+	docs, err := documents.New(store, q, idx, documents.Options{})
 	require.NoError(t, err)
 
 	cat, err := collection.New(store, docs, collection.Options{})
@@ -77,7 +76,7 @@ func buildIndexedStack(t *testing.T, docMap map[string][]string) *indexedStack {
 		_ = os.RemoveAll(tmpDir)
 	})
 
-	return &indexedStack{idx: indexer, docs: docs, colID: col.ID(), ids: ids}
+	return &indexedStack{idx: idx, docs: docs, colID: col.ID(), ids: ids}
 }
 
 func (s *indexedStack) collect(t *testing.T, query string) map[int64]struct{} {
