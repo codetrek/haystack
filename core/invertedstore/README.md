@@ -9,11 +9,13 @@ and [`...-implementation-plan.md`](../../docs/design/invertedstore-luceneization
 
 ## Status (2026-06)
 
-**Built and component-complete, but NOT yet the live backend.** The production server runs on the
-pebble-backed `invertedindex`; `invertedstore` satisfies the same `invertedindex.Indexer` seam and can
-be swapped in by changing one server constructor, but it is held back because it is **not yet mature at
-scale** (see "Known scale gaps" below). It is exercised by its own tests + the `core/cmd/idxbench` A/B
-harness. Form: single mpsc-worker-owned head buffer → atomically-published immutable sealed segments +
+**Built and component-complete, but NOT integrated.** The production server runs on the pebble-backed
+`invertedindex`; `invertedstore` is a **standalone, deliberately unwired** component. It is held back
+because it is **not yet mature at scale** (see "Known scale gaps" below), and — since `core/invertedindex`
+is a published package other projects depend on — **no swap seam / interface is added to it** for an
+unproven replacement. The integration approach will be designed only once invertedstore is stable. The
+component is exercised by its own tests + the `core/cmd/idxbench` A/B harness (a dev-only, uncommitted
+tool). Form: single mpsc-worker-owned head buffer → atomically-published immutable sealed segments +
 a MANIFEST; size-tiered background merge; single-mutator invariant; lock-free refcounted reader
 snapshots.
 
