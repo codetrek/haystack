@@ -19,6 +19,10 @@ func newForwardSkipStore(t *testing.T, opts Options) (*Store, int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Release every open segment fd at test end (retireKeepFile via CloseAndWait). Without this the
+	// read fds a spill opens stay live, and on Windows t.TempDir's RemoveAll cannot delete seg-*.dat
+	// while a handle is open. No caller of this helper closes the store itself, so one close here is safe.
+	t.Cleanup(func() { s.CloseAndWait() })
 	return s, tid
 }
 
@@ -119,6 +123,7 @@ func TestForwardSkip_LegacyManifestUpgrade(t *testing.T) {
 
 	// Reopen: Open must detect FormatVersion < 3 and recompute each segment's range.
 	s2 := openAt(t, dir, Options{AutoMerge: false, CapBytes: 1 << 20})
+	defer s2.CloseAndWait() // release the reopened store's segment fds (Windows RemoveAll)
 	sm := s2.SegmentsForTest()
 	if len(sm) != 1 {
 		t.Fatalf("want 1 segment after reopen, got %d", len(sm))

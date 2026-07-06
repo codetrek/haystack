@@ -3,6 +3,7 @@ package invertedstore
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -66,6 +67,10 @@ func parkEncode(t *testing.T) (entered chan struct{}, release chan struct{}, unp
 // keyword would resurrect (silent corruption, ZERO concurrency). Run -count=20 for determinism.
 func TestSpillF_B1_RepostAfterDetachTombstonesDropped(t *testing.T) {
 	s, tbl := newSpillOffworkerStore(t, Options{CapBytes: 64})
+	// Release the store's segment fds at test end (Windows RemoveAll cannot delete seg-*.dat while a
+	// handle is open). Registered here so it runs (LIFO) AFTER the drain+hook-clear cleanup below — by
+	// then close(release) has fired in the body, so the close-time flush never blocks on the parked encode.
+	t.Cleanup(func() { s.CloseAndWait() })
 
 	// Park the off-worker encode so the detached head STAYS in s.spilling across the re-post.
 	release := make(chan struct{})
@@ -455,6 +460,16 @@ func TestSpillF_InstallFailureGiveUpBound(t *testing.T) {
 // TestSpillF_CrashLosesDetachedHeadNoOrphan: a crash with a detached-but-not-installed head loses it
 // (volatile, like today's unspilled head) AND leaves no seg-tmp-* orphan after reopen (G sweeps it).
 func TestSpillF_CrashLosesDetachedHeadNoOrphan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this crash sim intentionally ABANDONS the store `s` (never CloseAndWait): after detaching a " +
+			"head it unparks the off-worker encode and Stops the queue, so the released encode races to " +
+			"finish writing its temp segment file and fails its install against the stopped queue — modeling " +
+			"a process death mid-spill. Closing s cleanly would instead install the detached head and defeat " +
+			"the 'head lost on crash' property. The abandoned store's open segment/temp-file handle would be " +
+			"released by a real Windows crash killing the process, but in-process it blocks t.TempDir " +
+			"RemoveAll. The property itself (detached-but-uninstalled head is lost, no seg-tmp orphan " +
+			"survives reopen) holds cross-platform and is exercised on Linux/macOS.")
+	}
 	dir := t.TempDir()
 	q := queue.NewMpsc("spillcrash")
 	q.Start()
@@ -514,6 +529,7 @@ func TestSpillF_CrashLosesDetachedHeadNoOrphan(t *testing.T) {
 // MANIFEST write must roll the in-memory manifest back and seal NO segment, leaving the head readable.
 func TestSpillF_SyncSpillManifestWriteFailureRollsBack(t *testing.T) {
 	s, tbl := newSpillOffworkerStore(t, Options{CapBytes: 1 << 20}) // large cap: no async detach
+	t.Cleanup(func() { s.CloseAndWait() })                          // release segment fds (Windows RemoveAll)
 	s.applyForTest(tbl, 1, []string{"alpha", "beta"})
 
 	// Make MANIFEST.tmp a directory so writeManifestBytes' os.Create fails — the synchronous spill must

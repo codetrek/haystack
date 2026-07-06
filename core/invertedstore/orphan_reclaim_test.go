@@ -36,6 +36,7 @@ func TestOrphanReclaim_DeleteTableWindowCrash(t *testing.T) {
 	// Reopen with AutoMerge OFF — the orphan reclaim must STILL run (synchronous, not via the
 	// AutoMerge-gated triggerMerge). This is the round-3-BLOCKER guard.
 	s2 := openAt(t, dir, Options{AutoMerge: false})
+	defer s2.CloseAndWait() // release the reopened store's segment fds (Windows RemoveAll)
 	if _, ok := s2.LiveByTableForTest()[b]; ok {
 		t.Fatalf("dropped table B resurrected into liveByTable: %v", s2.LiveByTableForTest())
 	}
@@ -64,7 +65,7 @@ func TestOrphanReclaim_CleanReopenNoMerge(t *testing.T) {
 
 	n := installCoveringCounter(t)
 	s2 := openAt(t, dir, Options{AutoMerge: false})
-	_ = s2
+	defer s2.CloseAndWait() // release the reopened store's segment fds (Windows RemoveAll)
 	if got := n.Load(); got != 0 {
 		t.Fatalf("clean reopen ran %d covering merges, want 0", got)
 	}

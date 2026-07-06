@@ -6,6 +6,7 @@ import "testing"
 // mid-assertion). cold build → 0 (the pathology guard); delete-all → 1.
 func TestDeadFraction_Unit(t *testing.T) {
 	s, tid := newUpdateStore(t) // AutoMerge off, large cap
+	defer s.CloseAndWait()      // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	for d := int64(1); d <= 100; d++ {
 		s.Update(tid, d, []string{"common", uniqWord(int(d))})
 	}
@@ -44,6 +45,7 @@ func TestDeadFraction_Unit(t *testing.T) {
 // path ran a full-decompression scan after every spill; here it is a metadata sum.)
 func TestDeadFraction_ColdBuildNoCoveringMerge(t *testing.T) {
 	s, tid := newUpdateStoreOpts(t, Options{CapBytes: 4 << 10, AutoMerge: true})
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	n := installCoveringCounter(t)
 	for d := 0; d < 3000; d++ {
 		s.Update(tid, int64(d), []string{"w", uniqWord(d)})
@@ -62,6 +64,7 @@ func TestDeadFraction_ColdBuildNoCoveringMerge(t *testing.T) {
 // The trigger still fires when garbage accumulates: delete a large fraction and a covering merge runs.
 func TestDeadFraction_TriggerFiresOnDeletes(t *testing.T) {
 	s, tid := newUpdateStoreOpts(t, Options{CapBytes: 4 << 10, AutoMerge: true})
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	n := installCoveringCounter(t)
 	for d := 0; d < 1000; d++ {
 		s.Update(tid, int64(d), []string{"w", uniqWord(d)})
@@ -87,6 +90,7 @@ func TestDeadFraction_TriggerFiresOnDeletes(t *testing.T) {
 // term — not asserted here.)
 func TestCovering_PreservesLive_CleanFixture(t *testing.T) {
 	s, tid := newUpdateStore(t) // AutoMerge off
+	defer s.CloseAndWait()      // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	for d := int64(1); d <= 50; d++ {
 		s.Update(tid, d, []string{"k", uniqWord(int(d))})
 	}
@@ -117,6 +121,7 @@ func TestCovering_PreservesLive_CleanFixture(t *testing.T) {
 // live equals the exact distinct-pair count). Spec §4.2.3 (merge path never touches liveByTable).
 func TestTieredMergeAndSpill_LeaveLiveUnchanged(t *testing.T) {
 	s, tid := newUpdateStoreOpts(t, Options{CapBytes: 2 << 10, AutoMerge: true, Fanout: 4})
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	n := installCoveringCounter(t)
 	for d := 0; d < 1000; d++ {
 		s.Update(tid, int64(d), []string{"k", uniqWord(d)}) // "k" shared, uniqWord distinct

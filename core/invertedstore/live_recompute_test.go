@@ -23,6 +23,7 @@ func openAt(t *testing.T, dir string, opts Options) *Store {
 // recomputeLive reproduces the incremental counter exactly from the segments' forward records.
 func TestRecomputeLive_EqualsIncremental(t *testing.T) {
 	s, tid := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	s.Update(tid, 1, []string{"a", "b", "c"})
 	s.Update(tid, 2, []string{"a", "a", "b"}) // dup -> distinct 2
 	s.sync()
@@ -53,6 +54,7 @@ func TestRecomputeLive_OnReopen(t *testing.T) {
 	s.CloseAndWait()
 
 	s2 := openAt(t, dir, Options{})
+	defer s2.CloseAndWait() // release the reopened store's segment fds (Windows RemoveAll)
 	if got := s2.LiveByTableForTest()[tid]; got != 5 {
 		t.Fatalf("reopened live=%d want 5 (doc1 abc=3 + doc2 bc=2)", got)
 	}

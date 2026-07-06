@@ -40,6 +40,13 @@ func newBackpressureStore(t *testing.T, opts Options) (*Store, int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Release every open segment fd at test end (retireKeepFile via CloseAndWait). Without this the
+	// read fds a spill opens stay live, and on Windows t.TempDir's RemoveAll cannot delete seg-*.dat
+	// while a handle is open. Registered before each test body's own gate cleanup, so it runs LAST
+	// (LIFO) — after the gate is released, applyGate cleared, and the queue drained — meaning
+	// CloseAndWait's head-flush RunFunc never blocks on a parked apply. No caller of this helper
+	// closes the store itself, so one close here is safe.
+	t.Cleanup(func() { s.CloseAndWait() })
 	return s, tid
 }
 

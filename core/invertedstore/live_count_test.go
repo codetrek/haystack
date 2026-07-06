@@ -7,6 +7,7 @@ import "testing"
 // bypasses applyBatch and would leave the counter at 0.
 func TestLiveByTable_DeltaBranches(t *testing.T) {
 	s, tid := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	up := func(docid int64, kw []string) { s.Update(tid, docid, kw); s.sync() }
 	live := func() int64 { return s.LiveByTableForTest()[tid] }
 
@@ -43,6 +44,7 @@ func TestLiveByTable_DeltaBranches(t *testing.T) {
 // DeleteTable drops the table's whole liveByTable partition in O(1) and leaves other tables intact.
 func TestLiveByTable_DeleteTableDropsPartition(t *testing.T) {
 	s, a := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	b, err := s.CreateTable("B")
 	if err != nil {
 		t.Fatal(err)

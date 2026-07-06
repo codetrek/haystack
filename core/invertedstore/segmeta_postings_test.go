@@ -29,6 +29,7 @@ func decodeInvertedEntryCount(t *testing.T, s *Store) int64 {
 // decoding the segment, not asserting a hand constant (spec §8.8).
 func TestSegMetaPostings_DecodeCrossCheck(t *testing.T) {
 	s, tid := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	s.applyForTest(tid, 1, []string{"a", "b", "c"})
 	s.applyForTest(tid, 2, []string{"b", "c"})
 	s.spillForTest(tid)
@@ -49,6 +50,7 @@ func TestSegMetaPostings_DecodeCrossCheck(t *testing.T) {
 // Postings 0 — the terminal state the deadFraction `written <= 0 → 0` guard rests on (spec §8.8).
 func TestSegMetaPostings_EmptyCoveringOutput(t *testing.T) {
 	s, tid := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	s.applyForTest(tid, 1, []string{"a", "b"})
 	s.spillForTest(tid)
 	s.Update(tid, 1, nil) // real delete path: reads old={a,b} from the segment, tombstones them

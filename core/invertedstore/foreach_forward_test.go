@@ -7,6 +7,7 @@ import "testing"
 // with duplicate keywords) collapse under distinctOrds to the distinct-keyword count.
 func TestForEachLiveSegmentForward_SurfacesOrds(t *testing.T) {
 	s, tid := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	s.applyForTest(tid, 1, []string{"a", "b", "c"})
 	s.applyForTest(tid, 2, []string{"a", "a", "b"}) // raw forward keeps the dup
 	s.spillForTest(tid)

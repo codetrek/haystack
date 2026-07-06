@@ -7,6 +7,7 @@ import "testing"
 // Final distinct set is {a} → live 1; the Open recompute must agree. Spec §8.7.
 func TestLiveByTable_InBatchAddDelAdd(t *testing.T) {
 	s, tid := newUpdateStore(t)
+	defer s.CloseAndWait() // release segment fds so Windows t.TempDir RemoveAll can delete seg-*.dat
 	bt := s.NewBatch()
 	bt.Update(tid, 1, []string{"a", "b", "c"})
 	bt.Update(tid, 1, nil)           // delete in the same batch
@@ -48,6 +49,7 @@ func TestCrashRecovery_HeadOnlyLoss_NoDoubleCount(t *testing.T) {
 	s.dropHeadCloseSegmentsForTest() // crash: docs 11-20 lost
 
 	s2 := openAt(t, dir, Options{AutoMerge: false})
+	defer s2.CloseAndWait()           // release the reopened store's segment fds (Windows RemoveAll)
 	for d := int64(1); d <= 20; d++ { // indexer over-replays ALL docs
 		s2.Update(tid, d, []string{"k", uniqWord(int(d))})
 	}
@@ -86,6 +88,7 @@ func TestCrashRecovery_PartiallyDurable_NoDoubleCount(t *testing.T) {
 	s.dropHeadCloseSegmentsForTest()
 
 	s2 := openAt(t, dir, Options{AutoMerge: false})
+	defer s2.CloseAndWait() // release the reopened store's segment fds (Windows RemoveAll)
 	// recompute alone (before replay) sees the 10 durable docs.
 	if got := s2.LiveByTableForTest()[tid]; got != 20 {
 		t.Fatalf("post-crash recompute live=%d want 20 (10 durable docs * 2)", got)
