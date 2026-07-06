@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -151,5 +152,18 @@ func TestWriteManifestBytesRenameError(t *testing.T) {
 	err := writeManifestBytes(dir, []byte(`{"formatVersion":3}`))
 	if err == nil {
 		t.Fatal("writeManifestBytes should return the rename error when MANIFEST is a non-empty dir")
+	}
+}
+
+// TestSyncDirOpenErrorSurfaced: on POSIX, syncDir opens the directory to fsync it, so a directory
+// that cannot be opened (it does not exist) surfaces the os.Open error rather than silently skipping
+// the durability fsync. On Windows syncDir is a deliberate no-op (a directory handle cannot be
+// flushed and NTFS does not need it), so there is no open+error path to exercise — skip there.
+func TestSyncDirOpenErrorSurfaced(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("syncDir is a no-op on Windows (no directory fsync); the os.Open error path is POSIX-only")
+	}
+	if err := syncDir(filepath.Join(t.TempDir(), "no-such-dir")); err == nil {
+		t.Fatal("syncDir should surface the os.Open error for a directory that does not exist")
 	}
 }

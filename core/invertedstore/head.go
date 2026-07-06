@@ -350,11 +350,37 @@ func (s *Store) encodeSpill(e *spillEntry) spillResult {
 	return s.encodeHeadToFile(e.head, e.tableId, tempPath)
 }
 
+// renameSegmentFile renames seg's backing file from -> to, RESEATING seg's open fd across the
+// rename. It closes seg.f before os.Rename and reopens it at the resulting path after — because a
+// rename of a file whose handle is still open is refused on Windows: os.Open (which openSegment uses
+// to open the segment) requests share mode FILE_SHARE_READ|FILE_SHARE_WRITE with NO FILE_SHARE_DELETE,
+// and os.Rename == MoveFileEx(from,to,MOVEFILE_REPLACE_EXISTING) must open the source with DELETE
+// access, so the missing share flag makes the rename fail with ERROR_SHARING_VIOLATION. POSIX renames
+// an open fd fine (the fd follows the inode), so closing+reopening is behaviorally a no-op there — an
+// extra close/open on a segment NO reader can yet reach (it is not published into s.segs until after a
+// successful install), so there is no race and POSIX durability/correctness is unchanged. A rename does
+// not change the file's BYTES, so seg's already-parsed footer / block index / codecs stay valid; only
+// the fd (and seg.path) are reseated. On a rename error the fd is reopened at `from` (the file did not
+// move) so the caller's bounded retry / rollback still sees a live segment; seg.path is set to the
+// resulting name in both cases.
+func renameSegmentFile(seg *segment, from, to string) error {
+	seg.close()
+	if err := os.Rename(from, to); err != nil {
+		seg.f, _ = os.Open(from) // rename failed: the file is still at `from`; reseat the fd there
+		seg.path = from
+		return err
+	}
+	seg.f, _ = os.Open(to)
+	seg.path = to
+	return nil
+}
+
 // installSpill installs the off-worker-encoded segment ON the worker (F v5). MUST run on the worker
 // (it mutates s.man/s.segs/s.spilling). The seg id is assigned HERE (install order ⇒ correct
-// newest-wins), the temp file is renamed atomically to seg-<id>.dat (the open fd survives the rename),
-// the segMeta is appended + the MANIFEST durably rewritten (persist-then-publish), the snapshot is
-// republished, and the entry is removed from s.spilling — PUBLISH BEFORE REMOVE, so a reader never sees
+// newest-wins), the temp file is renamed atomically to seg-<id>.dat (renameSegmentFile reseats the
+// open fd across the rename so it is Windows-safe), the segMeta is appended + the MANIFEST durably
+// rewritten (persist-then-publish), the snapshot is republished, and the entry is removed from
+// s.spilling — PUBLISH BEFORE REMOVE, so a reader never sees
 // the doc in NEITHER tier. Finally spillInFlight is cleared, blockProducer cleared + broadcast, and
 // EVERY table is re-checked for an over-cap head (one-in-flight is store-wide, so a different table's
 // head that filled while this spill was in flight is found + re-dispatched here — LOAD-BEARING for
@@ -367,12 +393,11 @@ func (s *Store) installSpill(e *spillEntry, res spillResult) error {
 	s.mu.Lock()
 	id := s.man.NextSegId
 	finalPath := filepath.Join(s.dir, segFileName(id))
-	if err := os.Rename(tempPath, finalPath); err != nil {
+	if err := renameSegmentFile(seg, tempPath, finalPath); err != nil {
 		s.mu.Unlock()
 		return err // transient (e.g. disk full); dispatch retries. The temp file + entry are preserved.
 	}
 	seg.id = id                                     // P5: the chunk-LRU keys decompressed dict chunks by (segmentId, chunkIdx)
-	seg.path = finalPath                            // teardown/retire must unlink the renamed file, not the temp name
 	seg.minDocid, seg.maxDocid = res.minD, res.maxD // B
 	seg.refs.Store(1)                               // P9: the published snapshot holds one ref on this new segment
 	sm := s.spillSegMeta(res, id, e.tableId)
@@ -383,8 +408,7 @@ func (s *Store) installSpill(e *spillEntry, res spillResult) error {
 		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1] // roll back the in-memory manifest
 		s.man.NextSegId--
 		seg.refs.Store(0)
-		os.Rename(finalPath, tempPath) // restore the temp file for the retry (final name is unreferenced)
-		seg.path = tempPath
+		renameSegmentFile(seg, finalPath, tempPath) // restore the temp file for the retry (final name is unreferenced)
 		s.mu.Unlock()
 		return err
 	}
@@ -395,8 +419,7 @@ func (s *Store) installSpill(e *spillEntry, res spillResult) error {
 		s.man.Segments = s.man.Segments[:len(s.man.Segments)-1] // roll back to the pre-install set
 		s.man.NextSegId--
 		seg.refs.Store(0)
-		os.Rename(finalPath, tempPath) // restore the temp file for the retry (MANIFEST never recorded it)
-		seg.path = tempPath
+		renameSegmentFile(seg, finalPath, tempPath) // restore the temp file for the retry (MANIFEST never recorded it)
 		s.mu.Unlock()
 		return err
 	}

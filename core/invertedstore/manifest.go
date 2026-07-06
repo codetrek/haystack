@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -154,7 +155,21 @@ func writeManifestBytes(dir string, b []byte) error {
 	if err := os.Rename(tmp, filepath.Join(dir, "MANIFEST")); err != nil {
 		return err
 	}
-	// fsync the dir so the rename is durable
+	// fsync the dir so the rename is durable (no-op on Windows — see syncDir)
+	return syncDir(dir)
+}
+
+// syncDir fsyncs a directory so a rename within it is durable. On POSIX a directory fsync is
+// required for the rename's new dentry to survive a crash, so we open the dir and Sync it. On
+// Windows a directory handle cannot be flushed (FlushFileBuffers on a directory fails with
+// ERROR_ACCESS_DENIED / "Incorrect function") and NTFS journals its metadata — the rename is
+// already crash-durable without an explicit directory fsync — so it is a no-op there. This is the
+// standard portability pattern (bolt/badger/pebble do the same); the POSIX durability behavior is
+// unchanged.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	d, err := os.Open(dir)
 	if err != nil {
 		return err
