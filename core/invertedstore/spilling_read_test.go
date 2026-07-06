@@ -109,4 +109,3 @@ func TestSpillingTier_ForwardDocidsReadsDetachedHead(t *testing.T) {
 		t.Fatalf("doc 2 (tombstoned in spilling) yielded — ForwardDocids let an older segment forward resurrect it")
 	}
 }
-

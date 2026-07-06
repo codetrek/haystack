@@ -239,7 +239,7 @@ func TestMergeOffWorker_ConcurrentUpdateSearchUnderParkedCompute(t *testing.T) {
 
 	// Let the concurrent load overlap the parked compute, then unpark and stop the load.
 	time.Sleep(100 * time.Millisecond)
-	unpark()       // clear the hook + release the parked compute (subsequent passes do not re-park)
+	unpark() // clear the hook + release the parked compute (subsequent passes do not re-park)
 	close(stop)
 	wg.Wait()
 

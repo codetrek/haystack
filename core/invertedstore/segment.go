@@ -311,15 +311,6 @@ func (s *segment) blockBytesInto(dst []byte, i int) []byte {
 	return s.dataCodec.decompressInto(dst, comp, int(rl))
 }
 
-// blockDiskSize returns the on-disk (compressed) size of data block i. (port spike main.go:808-814.)
-func (s *segment) blockDiskSize(i int) int64 {
-	hdr := make([]byte, 20)
-	s.f.ReadAt(hdr, s.idx[i].off)
-	_, n := binary.Uvarint(hdr)
-	cl, n2 := binary.Uvarint(hdr[n:])
-	return int64(n+n2) + int64(cl)
-}
-
 // readExternal reads & decompresses an external value's chunks. (port spike main.go:817-830.)
 func (s *segment) readExternal(off int64, compLen int) []byte {
 	buf := make([]byte, compLen)

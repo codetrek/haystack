@@ -9,8 +9,8 @@ func TestLiveByTable_InBatchAddDelAdd(t *testing.T) {
 	s, tid := newUpdateStore(t)
 	bt := s.NewBatch()
 	bt.Update(tid, 1, []string{"a", "b", "c"})
-	bt.Update(tid, 1, nil)            // delete in the same batch
-	bt.Update(tid, 1, []string{"a"})  // re-add, distinct 1
+	bt.Update(tid, 1, nil)           // delete in the same batch
+	bt.Update(tid, 1, []string{"a"}) // re-add, distinct 1
 	bt.Commit()
 	s.sync()
 
@@ -44,8 +44,8 @@ func TestCrashRecovery_HeadOnlyLoss_NoDoubleCount(t *testing.T) {
 	for d := int64(11); d <= 20; d++ {
 		s.Update(tid, d, []string{"k", uniqWord(int(d))})
 	}
-	s.sync()                          // docs 11-20 only in the head
-	s.dropHeadCloseSegmentsForTest()  // crash: docs 11-20 lost
+	s.sync()                         // docs 11-20 only in the head
+	s.dropHeadCloseSegmentsForTest() // crash: docs 11-20 lost
 
 	s2 := openAt(t, dir, Options{AutoMerge: false})
 	for d := int64(1); d <= 20; d++ { // indexer over-replays ALL docs

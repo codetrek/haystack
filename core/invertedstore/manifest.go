@@ -97,12 +97,23 @@ func writeManifest(dir string, m *manifest) error {
 	return writeManifestBytes(dir, b)
 }
 
+// marshalManifestErr, when non-nil, forces marshalManifest to return its error instead of the
+// marshaled bytes. Test-only fault-injection hook (like beforeManifestFsync): a manifest built from
+// the fixed struct never fails json.Marshal in production, so the writeManifest/spill/merge error
+// branch that handles a marshal failure is otherwise unreachable. A test installs one to exercise
+// that branch. nil in production (one predictable, never-taken branch); a test installing it MUST
+// NOT run t.Parallel.
+var marshalManifestErr error
+
 // marshalManifest serializes a manifest to its on-disk JSON bytes. It is split out of writeManifest
 // so a writer (spill/installMerge) can capture the bytes WHILE it briefly holds s.mu (the marshal
 // reads s.man's maps/slices, which a reader may also be reading under RLock — concurrent reads are
 // safe, but the in-memory s.man must not be mutated concurrently), then perform the slow fsync via
 // writeManifestBytes OUTSIDE the lock. No I/O here, so it is cheap to run under the lock.
 func marshalManifest(m *manifest) ([]byte, error) {
+	if marshalManifestErr != nil {
+		return nil, marshalManifestErr
+	}
 	return json.Marshal(m)
 }
 

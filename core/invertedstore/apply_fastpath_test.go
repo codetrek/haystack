@@ -7,8 +7,8 @@ import "testing"
 func TestApplyFastPath_WarmEditTombstonesDroppedKeyword(t *testing.T) {
 	s, tid := newForwardSkipStore(t, Options{CapBytes: 1 << 20})
 	s.Update(tid, 1, []string{"alpha", "beta"})
-	s.spillForTest(tid) // seal so the next edit reads the forward from a segment
-	s.Update(tid, 1, []string{"alpha"}) // drop "beta"
+	s.spillForTest(tid)                      // seal so the next edit reads the forward from a segment
+	s.Update(tid, 1, []string{"alpha"})      // drop "beta"
 	s.q.RunFunc(func() error { return nil }) // drain
 	// "beta" must no longer resolve to docid 1.
 	if got := searchDocidsForTest(t, s, tid, "beta"); len(got) != 0 {

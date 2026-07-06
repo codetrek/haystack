@@ -353,4 +353,3 @@ func TestSearch_ConcurrentReadVsHeadWrite(t *testing.T) {
 
 	wg.Wait()
 }
-

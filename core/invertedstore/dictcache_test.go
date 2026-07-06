@@ -64,7 +64,7 @@ func TestForwardKeywords_HeadDeletedDoc(t *testing.T) {
 	tbl, _ := s.CreateTable("files")
 
 	s.applyForTest(tbl, 20, []string{"alpha", "beta"}) // present...
-	s.applyForTest(tbl, 20, nil)                        // ...then deleted (head delForward)
+	s.applyForTest(tbl, 20, nil)                       // ...then deleted (head delForward)
 	words, deleted := s.forwardKeywords(tbl, 20)
 	if !deleted {
 		t.Fatalf("head-deleted doc 20 should read deleted, got words=%v", words)
@@ -132,7 +132,7 @@ func TestForwardKeywords_HeadWinsOverStaleSegment(t *testing.T) {
 	tbl, _ := s.CreateTable("files")
 
 	s.applyForTest(tbl, 40, []string{"old1", "old2"})
-	s.spillForTest(tbl)                            // stale copy sealed in segment
+	s.spillForTest(tbl)                                       // stale copy sealed in segment
 	s.applyForTest(tbl, 40, []string{"new1", "new2", "new3"}) // re-edit, now in the head
 	w, del := s.forwardKeywords(tbl, 40)
 	if del {
@@ -152,7 +152,7 @@ func TestForwardKeywords_SealedHeadDeleteWinsOverSegment(t *testing.T) {
 	tbl, _ := s.CreateTable("files")
 
 	s.applyForTest(tbl, 50, []string{"alpha"})
-	s.spillForTest(tbl)         // sealed non-empty
+	s.spillForTest(tbl)          // sealed non-empty
 	s.applyForTest(tbl, 50, nil) // delete pending in the head
 	if w, del := s.forwardKeywords(tbl, 50); !del || w != nil {
 		t.Fatalf("head delete should win over sealed copy: got (%v, del=%v)", w, del)
@@ -384,4 +384,21 @@ func uniqueWord(sg, d, k int) string {
 		return string(b)
 	}
 	return "w_" + enc(sg) + "_" + enc(d) + "_" + enc(k)
+}
+
+// TestNewChunkLRUDefaultsBudget: a non-positive budget is defaulted to 32 MiB (Options leaves it 0
+// only when the caller wants the default; the LRU must never run with a zero/negative budget that
+// would evict every insert).
+func TestNewChunkLRUDefaultsBudget(t *testing.T) {
+	const defaultBudget = int64(32 << 20)
+	for _, in := range []int64{0, -1, -4096} {
+		c := newChunkLRU(in)
+		if c.budget != defaultBudget {
+			t.Fatalf("newChunkLRU(%d).budget = %d, want default %d", in, c.budget, defaultBudget)
+		}
+	}
+	// A positive budget is honored unchanged.
+	if c := newChunkLRU(4096); c.budget != 4096 {
+		t.Fatalf("newChunkLRU(4096).budget = %d, want 4096", c.budget)
+	}
 }

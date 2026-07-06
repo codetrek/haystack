@@ -1,6 +1,7 @@
 package invertedstore
 
 import (
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -90,4 +91,51 @@ func TestSegmentGoldenFooter(t *testing.T) {
 	if foot[17] != codecZstd {
 		t.Fatalf("footer dict codec id = %d, want %d", foot[17], codecZstd)
 	}
+}
+
+// TestNewSegWriterDefaultsDictChunk: passing dictChunk <= 0 defaults it to blockTarget (the
+// term-dict chunk size falls back to the block size when the caller does not size it).
+func TestNewSegWriterDefaultsDictChunk(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "seg-defaultdict.dat")
+	const blockTarget = 4096
+	w := newSegWriter(path, newCodec(codecSnappy), newCodec(codecZstd), blockTarget, 65536, 1024, true, 0)
+	defer func() { _ = w.f.Close() }()
+	if w.dictChunk != blockTarget {
+		t.Fatalf("dictChunk=%d, want blockTarget %d when dictChunk<=0", w.dictChunk, blockTarget)
+	}
+}
+
+// TestNewSegWriterPanicsOnUncreatablePath: newSegWriter cannot recover from a failed os.Create (a
+// corrupt/unwritable dir is unrecoverable at seal time), so it panics — here the path's parent
+// directory does not exist.
+func TestNewSegWriterPanicsOnUncreatablePath(t *testing.T) {
+	badPath := filepath.Join(t.TempDir(), "no-such-subdir", "seg.dat")
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("newSegWriter should panic when os.Create fails")
+		}
+	}()
+	newSegWriter(badPath, newCodec(codecSnappy), newCodec(codecZstd), 4096, 65536, 1024, true, 4096)
+}
+
+// TestMustReadAtPanicsOnShortRead: mustReadAt requires an exact-length read at off; a read past the
+// end of the file (nothing there) returns io.EOF, which mustReadAt turns into a panic (a corrupt
+// segment is unrecoverable at this layer).
+func TestMustReadAtPanicsOnShortRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "tiny.bin")
+	if err := os.WriteFile(path, []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("mustReadAt should panic on a short/EOF read past the file end")
+		}
+	}()
+	// Read 16 bytes starting at offset 100, well past the 2-byte file → io.EOF, zero bytes read.
+	mustReadAt(f, make([]byte, 16), 100)
 }

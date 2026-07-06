@@ -1,6 +1,8 @@
 package invertedstore
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -56,5 +58,24 @@ func sortInt64Slice(s []int64) {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {
 			s[j-1], s[j] = s[j], s[j-1]
 		}
+	}
+}
+
+// TestFileSize_ExistingAndMissing: fileSize returns the on-disk byte length of an existing file and
+// falls back to 0 when os.Stat errors (a missing file) — the segMeta.Size field must not propagate a
+// stat error, only a best-effort size.
+func TestFileSize_ExistingAndMissing(t *testing.T) {
+	dir := t.TempDir()
+	present := filepath.Join(dir, "present.dat")
+	body := []byte("0123456789") // 10 bytes
+	if err := os.WriteFile(present, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileSize(present); got != int64(len(body)) {
+		t.Fatalf("fileSize(present) = %d, want %d", got, len(body))
+	}
+	// A path that does not exist: os.Stat errors, so fileSize returns 0 (never a negative/garbage).
+	if got := fileSize(filepath.Join(dir, "does-not-exist.dat")); got != 0 {
+		t.Fatalf("fileSize(missing) = %d, want 0 on a stat error", got)
 	}
 }
