@@ -28,6 +28,18 @@ type pebbleStore interface {
 	Close() error
 }
 
+// pebbleIterable and pebbleGetter are the minimal read surfaces the shared scan
+// and get helpers need. Both the whole DB (*pebble.DB via pebbleStore) and a
+// point-in-time snapshot (pebbleSnapshotReader) satisfy them, so PebbleDB and
+// pebbleSnapshot share a single source of truth for the scan/get logic (notably
+// the subtle keyUpperBound / prefix-HasPrefix bound, which has regressed before).
+type pebbleIterable interface {
+	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+}
+type pebbleGetter interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+}
+
 // PebbleDB is a Pebble-backed implementation of kv.Store. It wraps an
 // underlying Pebble database and tracks whether it has been closed.
 type PebbleDB struct {
@@ -219,7 +231,15 @@ func (d *PebbleDB) Get(key []byte) ([]byte, error) {
 	}
 
 	// Read directly from the DB
-	value, closer, err := d.db.Get(key)
+	return getCopy(d.db, key)
+}
+
+// getCopy reads key from r and returns a freshly-copied value (the source slice
+// may be invalidated once the pebble Closer is closed), mapping pebble.ErrNotFound
+// to (nil, nil). It is the single source of truth for the get semantics shared by
+// PebbleDB.Get and pebbleSnapshot.Get.
+func getCopy(r pebbleGetter, key []byte) ([]byte, error) {
+	value, closer, err := r.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}
@@ -283,11 +303,19 @@ func (d *PebbleDB) Scan(prefix []byte, cb func(key, value []byte) bool) error {
 		return fmt.Errorf("database is closed")
 	}
 
+	return scanPrefix(d.db, prefix, cb)
+}
+
+// scanPrefix iterates every key of r that begins with prefix, invoking cb with
+// each key/value (valid only for that call). Returning false from cb stops the
+// scan. It is the single source of truth for the prefix-scan semantics shared by
+// PebbleDB.Scan and pebbleSnapshot.Scan.
+func scanPrefix(r pebbleIterable, prefix []byte, cb func(key, value []byte) bool) error {
 	// Create an iterator with the prefix. The upper bound must be the prefix
 	// successor (keyUpperBound), NOT append(prefix, 0xff): the latter excludes
 	// any key of the form prefix+0xff+... — e.g. an inverted-index keyword
 	// containing 0xff right after a search prefix — silently dropping it.
-	iter, err := d.db.NewIter(&pebble.IterOptions{
+	iter, err := r.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: keyUpperBound(prefix),
 	})
@@ -324,8 +352,16 @@ func (d *PebbleDB) ScanRange(begin []byte, end []byte, cb func(key, value []byte
 		return fmt.Errorf("database is closed")
 	}
 
+	return scanRange(d.db, begin, end, cb)
+}
+
+// scanRange iterates every key of r in [begin, end) (end exclusive), invoking cb
+// with each key/value (valid only for that call). Returning false from cb stops
+// the scan. It is the single source of truth for the range-scan semantics shared
+// by PebbleDB.ScanRange and pebbleSnapshot.ScanRange.
+func scanRange(r pebbleIterable, begin []byte, end []byte, cb func(key, value []byte) bool) error {
 	// Create an iterator with the prefix
-	iter, err := d.db.NewIter(&pebble.IterOptions{
+	iter, err := r.NewIter(&pebble.IterOptions{
 		LowerBound: begin,
 		UpperBound: end,
 	})
