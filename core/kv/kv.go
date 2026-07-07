@@ -79,3 +79,21 @@ type Snapshot interface {
 	// through the Snapshot after its Close are undefined; callers must not do that.
 	Close() error
 }
+
+// Reader is the read-only surface shared by Store and Snapshot — the same
+// Get/Scan/ScanRange methods. Their semantics (value handling on Get; the
+// callback slice-validity and stop-on-false rules on Scan/ScanRange) are as
+// documented on Store and Snapshot, which remain the canonical contract; this
+// interface only names the shared subset so a read path can be written against
+// either the live Store or a consistent point-in-time Snapshot.
+type Reader interface {
+	Get(key []byte) ([]byte, error)
+	Scan(prefix []byte, cb func(key, value []byte) bool) error
+	ScanRange(begin, end []byte, cb func(key, value []byte) bool) error
+}
+
+// Store and Snapshot both satisfy Reader (compile-time assertions).
+var (
+	_ Reader = (Store)(nil)
+	_ Reader = (Snapshot)(nil)
+)
