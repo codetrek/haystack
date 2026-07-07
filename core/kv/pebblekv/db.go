@@ -24,8 +24,25 @@ type pebbleStore interface {
 	Delete(key []byte, opts *pebble.WriteOptions) error
 	NewBatch() *pebble.Batch
 	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+	NewSnapshot() *pebble.Snapshot
 	Compact(start, end []byte, parallelize bool) error
 	Close() error
+}
+
+// var _ kv.Snapshotter = (*PebbleDB)(nil) asserts at compile time that PebbleDB
+// implements the optional kv.Snapshotter capability (in addition to kv.Store).
+var _ kv.Snapshotter = (*PebbleDB)(nil)
+
+// pebbleIterable and pebbleGetter are the minimal read surfaces the shared scan
+// and get helpers need. Both the whole DB (*pebble.DB via pebbleStore) and a
+// point-in-time snapshot (pebbleSnapshotReader) satisfy them, so PebbleDB and
+// pebbleSnapshot share a single source of truth for the scan/get logic (notably
+// the subtle keyUpperBound / prefix-HasPrefix bound, which has regressed before).
+type pebbleIterable interface {
+	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+}
+type pebbleGetter interface {
+	Get(key []byte) ([]byte, io.Closer, error)
 }
 
 // PebbleDB is a Pebble-backed implementation of kv.Store. It wraps an
@@ -178,7 +195,12 @@ func (d *PebbleDB) GetIncrementalId(key []byte) (int, error) {
 	return nextId, nil
 }
 
-// Close closes the database
+// Close closes the database.
+//
+// All snapshots obtained via Snapshot() MUST be Closed before Close is called:
+// pebble's DB.Close returns a "leaked snapshots" error if any snapshot is still
+// open. PebbleDB does not track or auto-close snapshots on Close — the ordering
+// is the caller's contract (see kv.Snapshot.Close).
 func (d *PebbleDB) Close() error {
 	if d.IsClosed() {
 		return fmt.Errorf("database is closed")
@@ -219,7 +241,15 @@ func (d *PebbleDB) Get(key []byte) ([]byte, error) {
 	}
 
 	// Read directly from the DB
-	value, closer, err := d.db.Get(key)
+	return getCopy(d.db, key)
+}
+
+// getCopy reads key from r and returns a freshly-copied value (the source slice
+// may be invalidated once the pebble Closer is closed), mapping pebble.ErrNotFound
+// to (nil, nil). It is the single source of truth for the get semantics shared by
+// PebbleDB.Get and pebbleSnapshot.Get.
+func getCopy(r pebbleGetter, key []byte) ([]byte, error) {
+	value, closer, err := r.Get(key)
 	if err == pebble.ErrNotFound {
 		return nil, nil
 	}
@@ -283,11 +313,19 @@ func (d *PebbleDB) Scan(prefix []byte, cb func(key, value []byte) bool) error {
 		return fmt.Errorf("database is closed")
 	}
 
+	return scanPrefix(d.db, prefix, cb)
+}
+
+// scanPrefix iterates every key of r that begins with prefix, invoking cb with
+// each key/value (valid only for that call). Returning false from cb stops the
+// scan. It is the single source of truth for the prefix-scan semantics shared by
+// PebbleDB.Scan and pebbleSnapshot.Scan.
+func scanPrefix(r pebbleIterable, prefix []byte, cb func(key, value []byte) bool) error {
 	// Create an iterator with the prefix. The upper bound must be the prefix
 	// successor (keyUpperBound), NOT append(prefix, 0xff): the latter excludes
 	// any key of the form prefix+0xff+... — e.g. an inverted-index keyword
 	// containing 0xff right after a search prefix — silently dropping it.
-	iter, err := d.db.NewIter(&pebble.IterOptions{
+	iter, err := r.NewIter(&pebble.IterOptions{
 		LowerBound: prefix,
 		UpperBound: keyUpperBound(prefix),
 	})
@@ -324,8 +362,16 @@ func (d *PebbleDB) ScanRange(begin []byte, end []byte, cb func(key, value []byte
 		return fmt.Errorf("database is closed")
 	}
 
+	return scanRange(d.db, begin, end, cb)
+}
+
+// scanRange iterates every key of r in [begin, end) (end exclusive), invoking cb
+// with each key/value (valid only for that call). Returning false from cb stops
+// the scan. It is the single source of truth for the range-scan semantics shared
+// by PebbleDB.ScanRange and pebbleSnapshot.ScanRange.
+func scanRange(r pebbleIterable, begin []byte, end []byte, cb func(key, value []byte) bool) error {
 	// Create an iterator with the prefix
-	iter, err := d.db.NewIter(&pebble.IterOptions{
+	iter, err := r.NewIter(&pebble.IterOptions{
 		LowerBound: begin,
 		UpperBound: end,
 	})
@@ -346,4 +392,65 @@ func (d *PebbleDB) ScanRange(begin []byte, end []byte, cb func(key, value []byte
 		}
 	}
 	return nil
+}
+
+// pebbleSnapshotReader is the read surface of a *pebble.Snapshot that
+// pebbleSnapshot depends on. Declaring it as an interface (rather than using
+// *pebble.Snapshot directly) lets tests substitute a fake to drive the snapshot
+// read/close error branches, exactly as errPebbleStore does for PebbleDB.
+type pebbleSnapshotReader interface {
+	Get(key []byte) ([]byte, io.Closer, error)
+	NewIter(o *pebble.IterOptions) (*pebble.Iterator, error)
+	Close() error
+}
+
+// pebbleSnapshot is a read-only, point-in-time kv.Snapshot backed by a
+// *pebble.Snapshot. Its Get/Scan/ScanRange delegate to the same shared helpers
+// as PebbleDB, so their semantics are byte-identical. A pebbleSnapshot has no
+// independent closed-state: closing the parent DB while it is open is a caller
+// contract violation (see PebbleDB.Close / kv.Snapshot.Close).
+type pebbleSnapshot struct {
+	snap pebbleSnapshotReader
+}
+
+func (s *pebbleSnapshot) Get(key []byte) ([]byte, error) {
+	return getCopy(s.snap, key)
+}
+
+func (s *pebbleSnapshot) Scan(prefix []byte, cb func(key, value []byte) bool) error {
+	return scanPrefix(s.snap, prefix, cb)
+}
+
+func (s *pebbleSnapshot) ScanRange(begin, end []byte, cb func(key, value []byte) bool) error {
+	return scanRange(s.snap, begin, end, cb)
+}
+
+// Close releases the snapshot. It is idempotent: the reader field is nil'd
+// UNCONDITIONALLY on the first call (before/regardless of the underlying Close's
+// result), so a later Close is a safe no-op returning nil and never re-invokes
+// the underlying Close — which would panic on a raw pebble.Snapshot double-close.
+// Consistent with pebblekv's repeat-safe PebbleBatch.Close.
+func (s *pebbleSnapshot) Close() error {
+	snap := s.snap
+	s.snap = nil
+	if snap == nil {
+		return nil
+	}
+	return snap.Close()
+}
+
+// Snapshot returns a consistent, point-in-time read view of the DB, satisfying
+// the optional kv.Snapshotter capability. On a closed DB it returns a non-nil
+// error together with a literal-nil kv.Snapshot (never a typed-nil
+// *pebbleSnapshot, which would defeat a caller's sn == nil check). The IsClosed
+// guard is required, not cosmetic: pebble's DB.NewSnapshot panics with ErrClosed
+// on a closed *pebble.DB (and Close nils d.db), so the guard must return the
+// error before ever touching d.db — exactly like Get/Scan/ScanRange. It is safe
+// to call concurrently with writes and other reads.
+func (d *PebbleDB) Snapshot() (kv.Snapshot, error) {
+	if d.IsClosed() {
+		return nil, fmt.Errorf("database is closed")
+	}
+
+	return &pebbleSnapshot{snap: d.db.NewSnapshot()}, nil
 }

@@ -50,3 +50,32 @@ type Batch interface {
 	Close() error
 	Count() int32
 }
+
+// Snapshotter is an OPTIONAL capability. A backend that can serve a consistent,
+// point-in-time read view implements it in addition to Store. Callers obtain the
+// view by type-asserting a Store: sn, ok := store.(kv.Snapshotter).
+type Snapshotter interface {
+	// Snapshot returns a read-only view frozen at the current committed state.
+	// Reads issued through it are unaffected by writes committed after the call.
+	// The caller MUST Close the returned Snapshot to release the resources it
+	// pins (see the Snapshot.Close contract). On error it returns (nil, err) — a
+	// literal untyped nil Snapshot, never a typed-nil pointer. It is safe to call
+	// concurrently with Store writes and other reads.
+	Snapshot() (Snapshot, error)
+}
+
+// Snapshot is a read-only, point-in-time view over a Store. Its read methods
+// mirror Store's (same key/value copy and callback slice-validity semantics), and
+// a single Snapshot is safe for concurrent Get/Scan/ScanRange from multiple
+// goroutines (each call opens its own reader/iterator).
+type Snapshot interface {
+	Get(key []byte) ([]byte, error)
+	Scan(prefix []byte, cb func(key, value []byte) bool) error
+	ScanRange(begin, end []byte, cb func(key, value []byte) bool) error
+	// Close releases the view. It MUST be called (typically deferred) and MUST
+	// happen before the parent Store is closed. Close is idempotent and safe to
+	// call more than once (a second call is a no-op returning nil), consistent
+	// with pebblekv's existing repeat-safe Close (PebbleBatch.Close). Reads
+	// through the Snapshot after its Close are undefined; callers must not do that.
+	Close() error
+}
