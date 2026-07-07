@@ -4,12 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	pebbledb "github.com/cockroachdb/pebble"
+	"github.com/codetrek/haystack/core/kv"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // errBatchWriter is a mock pebbleBatchWriter that returns errors from every operation.
@@ -562,6 +566,10 @@ func (e *errPebbleStore) NewBatch() *pebbledb.Batch { return nil }
 func (e *errPebbleStore) NewIter(o *pebbledb.IterOptions) (*pebbledb.Iterator, error) {
 	return nil, e.err
 }
+
+// NewSnapshot is never dereferenced on errPebbleStore's paths (no test drives
+// PebbleDB.Snapshot through this fake); it exists only to satisfy pebbleStore.
+func (e *errPebbleStore) NewSnapshot() *pebbledb.Snapshot                   { return nil }
 func (e *errPebbleStore) Compact(start, end []byte, parallelize bool) error { return e.err }
 func (e *errPebbleStore) Close() error                                      { return nil }
 
@@ -605,4 +613,442 @@ func TestDB_ScanRange_StopEarly(t *testing.T) {
 		return count < 2
 	})
 	assert.Equal(t, 2, count)
+}
+
+// ---------------------------------------------------------------------------
+// kv.Snapshotter / kv.Snapshot (pebbleSnapshot) tests
+// ---------------------------------------------------------------------------
+
+// openSnapTestDB opens a fresh pebblekv store in a temp dir for the snapshot
+// tests. It fails the test (not merely records) on error so callers never
+// dereference a nil Store.
+func openSnapTestDB(t *testing.T) kv.Store {
+	t.Helper()
+	db, err := Open(t.TempDir()+"/snapdb", 4*1024*1024)
+	require.NoError(t, err)
+	require.NotNil(t, db)
+	return db
+}
+
+// mustSnapshot obtains a snapshot via the OPTIONAL kv.Snapshotter capability
+// (type-asserted from kv.Store, exactly how a caller acquires one) and fails the
+// test if the store does not implement it or Snapshot errors.
+func mustSnapshot(t *testing.T, db kv.Store) kv.Snapshot {
+	t.Helper()
+	ss, ok := db.(kv.Snapshotter)
+	require.True(t, ok, "pebblekv store must implement kv.Snapshotter")
+	snap, err := ss.Snapshot()
+	require.NoError(t, err)
+	require.NotNil(t, snap)
+	return snap
+}
+
+// errSnapReader implements pebbleSnapshotReader and returns the injected error
+// from every method (Get/NewIter/Close). It lets the snapshot's read/close error
+// branches be driven directly via pebbleSnapshot{snap: errSnapReader{err}} — the
+// errPebbleStore fake cannot, because its Close returns nil. Value receivers so
+// the field can be nil'd by pebbleSnapshot.Close without aliasing surprises.
+type errSnapReader struct {
+	err error
+}
+
+func (e errSnapReader) Get(key []byte) ([]byte, io.Closer, error) {
+	return nil, nil, e.err
+}
+func (e errSnapReader) NewIter(o *pebbledb.IterOptions) (*pebbledb.Iterator, error) {
+	return nil, e.err
+}
+func (e errSnapReader) Close() error {
+	return e.err
+}
+
+// TestSnapshot_Consistency pins contract §4.1: reads through a snapshot observe
+// exactly the state committed when Snapshot() returned. Writes committed after
+// (overwrite, new key, delete) are invisible to it, while the live DB reflects
+// them. A snapshot that read the live DB would fail every assertion here.
+func TestSnapshot_Consistency(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	// Seed pre-snapshot state: k=v1 and an "old" key we will later delete.
+	require.NoError(t, db.Put([]byte("k"), []byte("v1")))
+	require.NoError(t, db.Put([]byte("old"), []byte("kept")))
+
+	snap := mustSnapshot(t, db)
+	defer snap.Close()
+
+	// Mutate the DB AFTER the snapshot: overwrite k, add a new key, delete old.
+	require.NoError(t, db.Put([]byte("k"), []byte("v2")))
+	require.NoError(t, db.Put([]byte("new"), []byte("fresh")))
+	require.NoError(t, db.Delete([]byte("old")))
+
+	// The snapshot still sees the frozen state.
+	got, err := snap.Get([]byte("k"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("v1"), got, "snapshot must still read the pre-write value")
+
+	got, err = snap.Get([]byte("new"))
+	assert.NoError(t, err)
+	assert.Nil(t, got, "snapshot must NOT see a key added after it was taken")
+
+	got, err = snap.Get([]byte("old"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("kept"), got, "snapshot must still see a key deleted after it was taken")
+
+	// The live DB reflects the post-snapshot writes.
+	got, err = db.Get([]byte("k"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("v2"), got)
+	got, err = db.Get([]byte("new"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("fresh"), got)
+	got, err = db.Get([]byte("old"))
+	assert.NoError(t, err)
+	assert.Nil(t, got)
+}
+
+// TestSnapshot_ScanIsolation pins contract §4.1 for Scan/ScanRange: after
+// mutations under the prefix (overwrite, add, delete), the snapshot yields the
+// EXACT original key/value set — not a count, so a wrong impl that saw the
+// mutated value or the added/removed key is caught.
+func TestSnapshot_ScanIsolation(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	original := map[string]string{
+		"p:a": "1",
+		"p:b": "2",
+		"p:c": "3",
+	}
+	for k, v := range original {
+		require.NoError(t, db.Put([]byte(k), []byte(v)))
+	}
+
+	snap := mustSnapshot(t, db)
+	defer snap.Close()
+
+	// Mutate under the prefix after the snapshot.
+	require.NoError(t, db.Put([]byte("p:a"), []byte("changed"))) // overwrite
+	require.NoError(t, db.Put([]byte("p:d"), []byte("4")))       // add
+	require.NoError(t, db.Delete([]byte("p:b")))                 // delete
+
+	gotScan := map[string]string{}
+	err := snap.Scan([]byte("p:"), func(k, v []byte) bool {
+		gotScan[string(k)] = string(v)
+		return true
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, original, gotScan, "Scan through the snapshot must yield the frozen set")
+
+	// ScanRange over [p:, p;) spans exactly the p: keys; must match likewise.
+	gotRange := map[string]string{}
+	err = snap.ScanRange([]byte("p:"), []byte("p;"), func(k, v []byte) bool {
+		gotRange[string(k)] = string(v)
+		return true
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, original, gotRange, "ScanRange through the snapshot must yield the frozen set")
+}
+
+// TestSnapshot_Scan_PrefixFollowedByFF mirrors TestDB_Scan_PrefixFollowedByFF
+// through the snapshot path (contract §4.4 / R3): every key with the prefix must
+// be scanned, including keys whose first byte after the prefix is 0xff. Asserts
+// the EXACT key set (stronger than a count) so a regressed keyUpperBound bound in
+// the shared scanPrefix helper is caught on the snapshot path too.
+func TestSnapshot_Scan_PrefixFollowedByFF(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	prefix := []byte("p|")
+	keys := [][]byte{
+		[]byte("p|a"),
+		{'p', '|', 0xff},
+		{'p', '|', 0xff, 'x'},
+		{'p', '|', 0xff, 0xff, 'z'},
+	}
+	for i, k := range keys {
+		require.NoError(t, db.Put(k, []byte{byte(i)}))
+	}
+	require.NoError(t, db.Put([]byte("q|other"), []byte("x"))) // outside the prefix
+
+	snap := mustSnapshot(t, db)
+	defer snap.Close()
+
+	want := map[string]bool{}
+	for _, k := range keys {
+		want[string(k)] = true
+	}
+
+	got := map[string]bool{}
+	err := snap.Scan(prefix, func(k, _ []byte) bool {
+		got[string(append([]byte{}, k...))] = true
+		return true
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, want, got,
+		"snapshot Scan must yield exactly the prefix keys, including those with 0xff right after the prefix")
+}
+
+// TestSnapshot_Get_CopyAndNotFound pins contract §4.3: snapshot Get returns a
+// fresh copy (mutating it must not corrupt a subsequent read) and maps a missing
+// key to (nil, nil).
+func TestSnapshot_Get_CopyAndNotFound(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	require.NoError(t, db.Put([]byte("k"), []byte("orig")))
+
+	snap := mustSnapshot(t, db)
+	defer snap.Close()
+
+	got, err := snap.Get([]byte("k"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("orig"), got)
+
+	// Mutating the returned slice must not affect a re-Get.
+	for i := range got {
+		got[i] = 'X'
+	}
+	again, err := snap.Get([]byte("k"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("orig"), again, "Get must return a copy; mutating it must not corrupt the view")
+
+	// Absent key → (nil, nil).
+	absent, err := snap.Get([]byte("missing"))
+	assert.NoError(t, err)
+	assert.Nil(t, absent)
+}
+
+// TestSnapshot_Scan_StopEarly pins contract §4.4: returning false from the cb
+// stops iteration for both Scan and ScanRange through the snapshot.
+func TestSnapshot_Scan_StopEarly(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	for _, k := range []string{"k:1", "k:2", "k:3"} {
+		require.NoError(t, db.Put([]byte(k), []byte("v")))
+	}
+
+	snap := mustSnapshot(t, db)
+	defer snap.Close()
+
+	count := 0
+	err := snap.Scan([]byte("k:"), func(k, v []byte) bool {
+		count++
+		return count < 2 // stop after 2
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	rcount := 0
+	err = snap.ScanRange([]byte("k:1"), []byte("k:9"), func(k, v []byte) bool {
+		rcount++
+		return rcount < 2 // stop after 2
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, rcount)
+}
+
+// TestSnapshot_ConcurrentReads pins contract §4.2(a)+(b): a single snapshot is
+// read by N goroutines (Get + Scan) WHILE other goroutines write the DB
+// (Put/Delete/add). Every read must observe the frozen state, and the run must
+// be race-clean under -race. A wrong impl (shared iterator, or reading the live
+// DB) either races or observes a mutated value.
+func TestSnapshot_ConcurrentReads(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	const nKeys = 50
+	frozen := map[string]string{}
+	for i := 0; i < nKeys; i++ {
+		k := fmt.Sprintf("p:%03d", i)
+		v := fmt.Sprintf("v%03d", i)
+		frozen[k] = v
+		require.NoError(t, db.Put([]byte(k), []byte(v)))
+	}
+	require.NoError(t, db.Put([]byte("solo"), []byte("frozen-solo")))
+
+	snap := mustSnapshot(t, db)
+	defer snap.Close()
+
+	// Writers churn the DB under the same prefix + a growing "extra:" set.
+	stop := make(chan struct{})
+	var writers sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			for i := 0; ; i++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = db.Put([]byte(fmt.Sprintf("p:%03d", i%nKeys)), []byte("MUTATED"))
+				_ = db.Put([]byte("solo"), []byte("MUTATED"))
+				_ = db.Delete([]byte(fmt.Sprintf("p:%03d", (i+1)%nKeys)))
+				_ = db.Put([]byte(fmt.Sprintf("extra:%d", i)), []byte("x"))
+			}
+		}()
+	}
+
+	// Readers repeatedly read the snapshot; each read must match the frozen set.
+	var readers sync.WaitGroup
+	errCh := make(chan error, 32)
+	for r := 0; r < 4; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for iter := 0; iter < 200; iter++ {
+				got, err := snap.Get([]byte("solo"))
+				if err != nil {
+					errCh <- fmt.Errorf("snapshot Get: %w", err)
+					return
+				}
+				if string(got) != "frozen-solo" {
+					errCh <- fmt.Errorf("snapshot Get(solo)=%q, want frozen-solo", got)
+					return
+				}
+				seen := map[string]string{}
+				if err := snap.Scan([]byte("p:"), func(k, v []byte) bool {
+					seen[string(k)] = string(v)
+					return true
+				}); err != nil {
+					errCh <- fmt.Errorf("snapshot Scan: %w", err)
+					return
+				}
+				if !reflect.DeepEqual(seen, frozen) {
+					errCh <- fmt.Errorf("snapshot Scan saw a mutated set (%d keys)", len(seen))
+					return
+				}
+			}
+		}()
+	}
+
+	readers.Wait()
+	close(stop)
+	writers.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Error(err)
+	}
+}
+
+// TestSnapshot_CloseBeforeDBClose pins contract §4.7 (positive): with the
+// snapshot Closed first, the parent DB.Close returns nil.
+func TestSnapshot_CloseBeforeDBClose(t *testing.T) {
+	db := openSnapTestDB(t)
+	require.NoError(t, db.Put([]byte("k"), []byte("v")))
+
+	snap := mustSnapshot(t, db)
+	assert.NoError(t, snap.Close())
+
+	assert.NoError(t, db.Close(), "DB.Close must succeed once the snapshot is closed")
+}
+
+// TestSnapshot_OpenSnapshotBlocksDBClose pins contract §4.7 / R2 (negative):
+// closing the DB while a snapshot is still open returns a non-nil error. It
+// wraps pebble's "leaked snapshots" error; asserting on that substring is an
+// INTENTIONAL, documented coupling to the pebble behavior the ordering contract
+// rests on, so a pebble upgrade that silently weakened it is caught.
+func TestSnapshot_OpenSnapshotBlocksDBClose(t *testing.T) {
+	db := openSnapTestDB(t)
+	require.NoError(t, db.Put([]byte("k"), []byte("v")))
+
+	snap := mustSnapshot(t, db)
+
+	err := db.Close()
+	assert.Error(t, err, "DB.Close with an open snapshot must return an error")
+	assert.Contains(t, err.Error(), "leaked",
+		"DB.Close with an open snapshot must surface pebble's leaked-snapshots error (documented coupling)")
+
+	// Release the snapshot to clean up.
+	assert.NoError(t, snap.Close())
+}
+
+// TestSnapshot_CloseIdempotent pins contract §4.6: a second Close is a safe
+// no-op returning nil and never panics (defends the defer+explicit-Close
+// pattern from pebble's double-close panic).
+func TestSnapshot_CloseIdempotent(t *testing.T) {
+	db := openSnapTestDB(t)
+	defer db.Close()
+
+	snap := mustSnapshot(t, db)
+
+	assert.NoError(t, snap.Close())
+	assert.NotPanics(t, func() {
+		assert.NoError(t, snap.Close(), "second Close must be a no-op returning nil")
+	})
+}
+
+// TestSnapshot_OnClosedStore pins contract §4.8: Snapshot() on a closed store
+// returns a non-nil error AND a LITERAL-nil kv.Snapshot (not a typed-nil
+// *pebbleSnapshot, which would defeat a caller's sn == nil check).
+func TestSnapshot_OnClosedStore(t *testing.T) {
+	db := openSnapTestDB(t)
+	require.NoError(t, db.Close())
+
+	ss, ok := db.(kv.Snapshotter)
+	require.True(t, ok)
+
+	snap, err := ss.Snapshot()
+	assert.Error(t, err)
+	assert.True(t, snap == nil, "Snapshot on a closed store must return a literal-nil kv.Snapshot, not a typed nil")
+}
+
+// ---------------------------------------------------------------------------
+// T4: underlying-error propagation via the errSnapReader fake. These drive the
+// error branches of getCopy/scanPrefix/scanRange and pebbleSnapshot.Close that a
+// real *pebble.Snapshot cannot be made to hit, closing the deferred go-cov
+// CRITICAL markers.
+// ---------------------------------------------------------------------------
+
+// TestSnapshot_GetError: a snapshot Get propagates the reader's Get error
+// (getCopy's non-NotFound branch: "failed to get data").
+func TestSnapshot_GetError(t *testing.T) {
+	injectedErr := errors.New("snapshot get failed")
+	s := &pebbleSnapshot{snap: errSnapReader{err: injectedErr}}
+
+	_, err := s.Get([]byte("k"))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get data")
+	assert.Contains(t, err.Error(), "snapshot get failed")
+}
+
+// TestSnapshot_ScanError: a snapshot Scan propagates the reader's NewIter error
+// (scanPrefix's "failed to create iterator" branch).
+func TestSnapshot_ScanError(t *testing.T) {
+	injectedErr := errors.New("snapshot newiter failed")
+	s := &pebbleSnapshot{snap: errSnapReader{err: injectedErr}}
+
+	err := s.Scan([]byte("p:"), func(k, v []byte) bool { return true })
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create iterator")
+	assert.Contains(t, err.Error(), "snapshot newiter failed")
+}
+
+// TestSnapshot_ScanRangeError: a snapshot ScanRange propagates the reader's
+// NewIter error (scanRange's "failed to create iterator" branch).
+func TestSnapshot_ScanRangeError(t *testing.T) {
+	injectedErr := errors.New("snapshot newiter failed")
+	s := &pebbleSnapshot{snap: errSnapReader{err: injectedErr}}
+
+	err := s.ScanRange([]byte("a"), []byte("z"), func(k, v []byte) bool { return true })
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to create iterator")
+	assert.Contains(t, err.Error(), "snapshot newiter failed")
+}
+
+// TestSnapshot_CloseError: the FIRST Close propagates the reader's Close error
+// (pebbleSnapshot.Close returns the captured reader's Close result verbatim).
+func TestSnapshot_CloseError(t *testing.T) {
+	injectedErr := errors.New("snapshot close failed")
+	s := &pebbleSnapshot{snap: errSnapReader{err: injectedErr}}
+
+	err := s.Close()
+	assert.ErrorIs(t, err, injectedErr)
+
+	// Idempotency still holds after an erroring Close: the reader was nil'd
+	// unconditionally, so a second Close is a no-op returning nil.
+	assert.NoError(t, s.Close())
 }
