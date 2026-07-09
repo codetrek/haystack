@@ -88,7 +88,7 @@ func TestEncodeDecodeInvertedKeyRoundTrip(t *testing.T) {
 	keyword := "testing"
 	doccount := 42
 
-	key := testCodecIdx.encodeInvertedKey(tableId, keyword, doccount)
+	key := testCodecIdx.encodeInvertedKey(tableId, keyword, doccount, 0)
 	s := string(key)
 
 	// First byte is DefaultKeyTypeRow

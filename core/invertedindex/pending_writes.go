@@ -70,7 +70,8 @@ func (idx *Index) flushPendingWrites(closing, force bool) {
 	if !closing && !force && time.Since(idx.lastFlushWriteTime) < idx.opts.flushCooldown() {
 		return
 	}
-	idx.lastFlushWriteTime = time.Now()
+	now := time.Now()
+	idx.lastFlushWriteTime = now
 
 	if closing {
 		log.Println("[Inverted] Flushing pending writes...")
@@ -93,7 +94,7 @@ func (idx *Index) flushPendingWrites(closing, force bool) {
 				continue
 			}
 
-			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, idx.encodeInvertedKey(wp.TableId, kw, len(relatedDocs.DocIds)))
+			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, idx.encodeInvertedKey(wp.TableId, kw, len(relatedDocs.DocIds), now.UnixMicro()))
 			idx.pendingWritePostings -= len(relatedDocs.DocIds)
 			delete(wp.InvertedIndex, kw)
 

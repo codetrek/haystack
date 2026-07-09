@@ -3,6 +3,7 @@ package invertedindex
 import (
 	"bytes"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -43,17 +44,33 @@ func TestRemoveDocuments_NoPipeCrossDelete(t *testing.T) {
 	}
 }
 
-// B3 — encodeInvertedKey must be unique even for the same (tableId,keyword,
-// doccount) within one microsecond (else one row silently overwrites another).
-func TestEncodeInvertedKey_UniqueWithinMicrosecond(t *testing.T) {
+// B3 — encodeInvertedKey must be unique even when the tick is LITERALLY IDENTICAL
+// across rows of the same (tableId,keyword,doccount): the per-Index keySeq suffix,
+// not the micros tick, is the sole key-uniqueness guarantor. (The tick was the
+// current micros read per key before I4 sampled it once per flush/merge batch and
+// threaded it in; under an identical tick two rows would collide without keySeq.)
+func TestEncodeInvertedKey_UniqueUnderIdenticalTick(t *testing.T) {
 	idx := &Index{keyTypeRow: DefaultKeyTypeRow}
+	const tick = int64(0)
 	seen := make(map[string]struct{}, 2000)
 	for i := 0; i < 2000; i++ {
-		k := string(idx.encodeInvertedKey(7, "a", 5))
+		k := string(idx.encodeInvertedKey(7, "a", 5, tick))
 		if _, dup := seen[k]; dup {
 			t.Fatalf("duplicate key at i=%d: %q", i, k)
 		}
+		if tid, kw, dc, _ := idx.decodeInvertedKey(k); tid != 7 || kw != "a" || dc != 5 {
+			t.Fatalf("decode(encode(7,a,5)) = (%d,%q,%d); want (7,\"a\",5)", tid, kw, dc)
+		}
 		seen[k] = struct{}{}
+	}
+
+	// The tick param must actually be THREADED into the key: a GREEN impl that
+	// added the param but kept calling time.Now().UnixMicro() internally would
+	// still pass the distinctness check above. Encode with a recognizable tick and
+	// assert the decoded tail is "<tick>.<seq>".
+	const K = int64(1234567)
+	if _, _, _, gotTick := idx.decodeInvertedKey(string(idx.encodeInvertedKey(7, "a", 5, K))); !strings.HasPrefix(gotTick, "1234567.") {
+		t.Fatalf("tick not threaded: decoded tick = %q, want prefix %q", gotTick, "1234567.")
 	}
 }
 

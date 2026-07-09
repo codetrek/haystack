@@ -108,6 +108,10 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		return err
 	}
 
+	// Sample the opaque key tick ONCE for every rewritten row of this keyword
+	// (uniqueness is guaranteed by keySeq, not the tick), instead of reading the
+	// clock per row.
+	tick := time.Now().UnixMicro()
 	for len(docids) > 0 {
 		docs := []int64{}
 		for id := range docids {
@@ -123,7 +127,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		// the merger's `doccount > maxSize/2` guard then quarantines from
 		// compaction forever. encodeInvertedKey's seq suffix keeps the new key
 		// distinct from the originals, all of which are deleted below.
-		key := idx.encodeInvertedKey(tableId, kw, len(docs))
+		key := idx.encodeInvertedKey(tableId, kw, len(docs), tick)
 
 		writeInvertedIndex(batch, tableId, kw, docs, key)
 	}

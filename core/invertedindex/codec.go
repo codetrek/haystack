@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Default on-disk key-type prefix bytes.  These values MUST NOT change after
@@ -69,18 +68,19 @@ func (idx *Index) encodeInvertedKeyPrefix(tableId int, keyword string) []byte {
 	return idx.appendInvertedKeyPrefix(b, tableId, keyword)
 }
 
-func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int) []byte {
-	// "<prefix><doccount>|<tick>.<seq>" where tick is the current micros and seq
-	// is a per-Index monotonic counter. tick alone is not unique within a single
-	// microsecond, so two rows of the same (tableId,keyword,doccount) could get
-	// byte-identical keys and overwrite each other; the seq suffix makes every
-	// encoded key unique. decode treats everything after the last '|' as the
-	// opaque tick, so this does not change the on-disk format contract.
+func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int, tick int64) []byte {
+	// "<prefix><doccount>|<tick>.<seq>" where tick is a decimal-micros timestamp
+	// SAMPLED ONCE PER flush/merge/delete batch by the caller and threaded in (not
+	// read per key), and seq is a per-Index monotonic counter. tick alone is not
+	// unique — two rows of the same (tableId,keyword,doccount) in one batch share
+	// it — so the seq suffix is the SOLE guarantor that every encoded key is
+	// distinct. decode treats everything after the last '|' as the opaque tick, so
+	// this does not change the on-disk format contract.
 	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19+1+20)
 	b = idx.appendInvertedKeyPrefix(b, tableId, keyword)
 	b = strconv.AppendInt(b, int64(doccount), 10)
 	b = append(b, '|')
-	b = strconv.AppendInt(b, time.Now().UnixMicro(), 10)
+	b = strconv.AppendInt(b, tick, 10)
 	b = append(b, '.')
 	b = strconv.AppendUint(b, idx.keySeq.Add(1), 10)
 	return b
