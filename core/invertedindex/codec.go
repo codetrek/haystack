@@ -146,11 +146,12 @@ func encodeTableValue(info TableInfo) []byte {
 // small, densely-allocated idtable ids, so the gaps are tiny and most encode to a
 // single byte — far smaller than the previous fixed 8-byte-per-id layout, and
 // cheaper to decode than a general-purpose block compressor. Order within a row
-// is irrelevant (the docids are a set), so sorting here is free; deduplication
-// remains the caller's responsibility. Sorting/subtracting in uint64 space (not
-// int64) keeps every gap non-negative and makes the round-trip exact for any
-// int64 docid, including negative and max values. This is an on-disk format
-// change from the old big-endian layout and requires a reindex.
+// is irrelevant (the docids are a set), so sorting here is free; the encoder sorts
+// AND dedups (adjacent-equal removal after the sort), so callers may pass a slice
+// containing duplicates. Sorting/subtracting in uint64 space (not int64) keeps
+// every gap non-negative and makes the round-trip exact for any int64 docid,
+// including negative and max values. This is an on-disk format change from the old
+// big-endian layout and requires a reindex.
 func encodeInvertedValue(docids []int64) []byte {
 	if len(docids) == 0 {
 		return []byte{}
@@ -160,17 +161,16 @@ func encodeInvertedValue(docids []int64) []byte {
 		us[i] = uint64(id)
 	}
 	slices.Sort(us)
+	us = slices.Compact(us) // adjacent-equal removal == set-dedup post-sort
 
 	buf := make([]byte, 0, len(us)+len(us)/2) // most ids encode to ~1 byte
-	var tmp [binary.MaxVarintLen64]byte
 	var prev uint64
 	for i, u := range us {
 		delta := u
 		if i > 0 {
 			delta = u - prev // non-negative: us is sorted ascending in uint64 space
 		}
-		n := binary.PutUvarint(tmp[:], delta)
-		buf = append(buf, tmp[:n]...)
+		buf = binary.AppendUvarint(buf, delta)
 		prev = u
 	}
 	return buf

@@ -33,7 +33,7 @@ func newBoundedIndex(t *testing.T, opts Options) (*Index, func()) {
 	// Reset the package test-injection seams (mirrors setupTestEnv).
 	newBatch = func(db kv.Store) kv.Batch { return db.NewBatch(MaxBatchSize) }
 	writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
-		batch.Put(key, encodeInvertedValue(removeDuplicatesEfficiently(docids)))
+		batch.Put(key, encodeInvertedValue(docids))
 	}
 
 	opts.FlushTicker = time.Hour // disable the periodic ticker for the test

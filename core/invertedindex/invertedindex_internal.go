@@ -48,9 +48,9 @@ func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 // Callers must pass the pre-computed key via idx.encodeInvertedKey so that the
 // configured key-type bytes are honoured.
 var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
-	// Remove duplicates to ensure the data stored is clean
-	uniqueDocids := removeDuplicatesEfficiently(docids)
-	content := encodeInvertedValue(uniqueDocids)
+	// encodeInvertedValue sorts AND dedups, so the raw docids (which the flush
+	// path intentionally leaves with duplicates) can be handed straight to it.
+	content := encodeInvertedValue(docids)
 	batch.Put(key, content)
 }
 
