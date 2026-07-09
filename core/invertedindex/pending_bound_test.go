@@ -141,6 +141,143 @@ func TestClearPendingWritesKeepsCounters(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Flush age heuristic (I2): UpdatedAt as int64 unix-nanos. These pin BOTH
+// directions of the edited age comparison on the write AND delete sides via
+// periodic flushes (false,false) — never forceFlush, whose force=true short-
+// circuits the age term. The aged cases direct-seed UpdatedAt as an int64, which
+// is the compile RED until relatedDocs.UpdatedAt becomes int64, and pin the
+// sign + nanosecond scale of the age math.
+// ---------------------------------------------------------------------------
+
+// TestFlushWriteYoungEntrySurvives seeds the write cache via the PRODUCTION
+// updateIndex path (pinning the .UnixNano() scale end-to-end) and asserts a
+// young, sub-batch-size entry is SKIPPED by a periodic flush (the count=0 skip
+// branch at pending_writes.go:104).
+func TestFlushWriteYoungEntrySurvives(t *testing.T) {
+	// FlushWaitTimeout=1h makes "young" deterministic: the seed->flush gap can
+	// never exceed 1h, so a scheduler stall (slow/loaded CI) cannot age the
+	// entry out and drain it (kills the flake). The .UnixNano() scale stays
+	// pinned despite the large timeout: a .Unix() (seconds) scale bug would make
+	// nowNanos-UpdatedAt ~1.75e18 ns (~55 years) >> 1h -> the entry would drain
+	// -> this survives-assert would fail.
+	idx, cleanup := newBoundedIndex(t, Options{FlushWaitTimeout: time.Hour})
+	defer cleanup()
+
+	idx.updateIndex(7, makeDocID("d1"), []string{"kw"})
+
+	// Cooldown satisfied so the flush actually runs; the entry is still young.
+	idx.lastFlushWriteTime = time.Now().Add(-time.Hour)
+	idx.flushPendingWrites(false, false)
+
+	wp := idx.pendingWrites[7]
+	if wp == nil {
+		t.Fatalf("expected pending write table to survive a periodic flush, got nil")
+	}
+	if _, ok := wp.InvertedIndex["kw"]; !ok {
+		t.Fatalf("expected young entry 'kw' to survive a periodic flush")
+	}
+}
+
+// TestFlushWriteAgedEntryDrains direct-seeds a small write entry with UpdatedAt
+// WELL past the 3s write timeout (as int64 nanos) and asserts a periodic flush
+// DRAINS it — the FALSE branch that pins the age math's sign and nanosecond
+// scale (a swapped operand or seconds-vs-nanos regression fails here).
+func TestFlushWriteAgedEntryDrains(t *testing.T) {
+	idx, cleanup := newBoundedIndex(t, Options{} /* unbounded, ticker disabled */)
+	defer cleanup()
+
+	docid := makeDocID("d1")
+	wp := idx.getPendingWrite(7)
+	wp.InvertedIndex["kw"] = relatedDocs{
+		DocIds:    []int64{docid},
+		UpdatedAt: time.Now().Add(-time.Hour).UnixNano(),
+	}
+	idx.pendingWritePostings += 1 // mirror what updateIndex would have bumped
+
+	idx.lastFlushWriteTime = time.Now().Add(-time.Hour) // cooldown satisfied
+	pre := idx.pendingWritePostings
+	idx.flushPendingWrites(false, false)
+
+	if wp2 := idx.pendingWrites[7]; wp2 != nil {
+		if _, ok := wp2.InvertedIndex["kw"]; ok {
+			t.Fatalf("expected aged entry 'kw' to drain on a periodic flush")
+		}
+	}
+	if idx.pendingWritePostings >= pre {
+		t.Fatalf("expected write posting counter to drop after drain: pre=%d post=%d", pre, idx.pendingWritePostings)
+	}
+	if got := searchDocCount(idx, 7, "kw"); got != 1 {
+		t.Fatalf("expected drained entry written to the store, Search found %d, want 1", got)
+	}
+}
+
+// TestFlushDeleteYoungEntrySurvives seeds the delete cache via the PRODUCTION
+// removeIndex path and asserts a young, sub-batch-size entry is SKIPPED by a
+// periodic flush (the count=0 skip branch at pending_writes.go:159).
+func TestFlushDeleteYoungEntrySurvives(t *testing.T) {
+	// FlushDeleteWaitTimeout=1h makes "young" deterministic: the seed->flush gap
+	// can never exceed 1h, so a scheduler stall (slow/loaded CI) cannot age the
+	// entry out and drain it (kills the flake). The .UnixNano() scale stays
+	// pinned despite the large timeout: a .Unix() (seconds) scale bug would make
+	// nowNanos-UpdatedAt ~1.75e18 ns (~55 years) >> 1h -> the entry would drain
+	// -> this survives-assert would fail.
+	idx, cleanup := newBoundedIndex(t, Options{FlushDeleteWaitTimeout: time.Hour})
+	defer cleanup()
+
+	idx.removeIndex(7, makeDocID("d1"), []string{"kw"})
+
+	idx.lastFlushDeleteTime = time.Now().Add(-time.Hour) // cooldown satisfied
+	idx.flushPendingDeletes(false, false, MaxInvertedIndexSize)
+
+	wp := idx.pendingDeletes[7]
+	if wp == nil {
+		t.Fatalf("expected pending delete table to survive a periodic flush, got nil")
+	}
+	if _, ok := wp.InvertedIndex["kw"]; !ok {
+		t.Fatalf("expected young delete entry 'kw' to survive a periodic flush")
+	}
+}
+
+// TestFlushDeleteAgedEntryDrains seeds a doc in the store, then direct-seeds a
+// small delete entry with UpdatedAt WELL past the 5s delete timeout (int64
+// nanos) and asserts a periodic flush DRAINS it and removes the doc from the
+// store — the delete-side FALSE branch pinning sign + nanosecond scale.
+func TestFlushDeleteAgedEntryDrains(t *testing.T) {
+	idx, cleanup := newBoundedIndex(t, Options{} /* unbounded, ticker disabled */)
+	defer cleanup()
+
+	docid := makeDocID("d1")
+	idx.updateIndex(7, docid, []string{"kw"})
+	forceFlush(idx)
+	if got := searchDocCount(idx, 7, "kw"); got != 1 {
+		t.Fatalf("seed: expected 1 doc in store, got %d", got)
+	}
+
+	wp := idx.getPendingDelete(7)
+	wp.InvertedIndex["kw"] = relatedDocs{
+		DocIds:    []int64{docid},
+		UpdatedAt: time.Now().Add(-time.Hour).UnixNano(),
+	}
+	idx.pendingDeletePostings += 1 // mirror what removeIndex would have bumped
+
+	idx.lastFlushDeleteTime = time.Now().Add(-time.Hour) // cooldown satisfied
+	pre := idx.pendingDeletePostings
+	idx.flushPendingDeletes(false, false, MaxInvertedIndexSize)
+
+	if wp2 := idx.pendingDeletes[7]; wp2 != nil {
+		if _, ok := wp2.InvertedIndex["kw"]; ok {
+			t.Fatalf("expected aged delete entry 'kw' to drain on a periodic flush")
+		}
+	}
+	if idx.pendingDeletePostings >= pre {
+		t.Fatalf("expected delete posting counter to drop after drain: pre=%d post=%d", pre, idx.pendingDeletePostings)
+	}
+	if got := searchDocCount(idx, 7, "kw"); got != 0 {
+		t.Fatalf("expected doc removed from the store after aged delete drain, got %d, want 0", got)
+	}
+}
+
 // TestMaxPendingPostingsForcesDeleteFlush covers the delete-side pressure branch:
 // buffered deletes crossing the bound trigger a forced flushPendingDeletes that
 // applies the removals to the store without an explicit flush.

@@ -1084,7 +1084,7 @@ func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
 	pw := env.idx.getPendingWrite(1)
 	pw.InvertedIndex["testword"] = relatedDocs{
 		DocIds:    []int64{Doc2ID("doc1")},
-		UpdatedAt: time.Now(),
+		UpdatedAt: time.Now().UnixNano(),
 	}
 
 	km := &keywordsMerger{idx: env.idx, InitialDelay: 10 * time.Millisecond}

@@ -16,7 +16,7 @@ func (idx *Index) updateIndex(tableId int, docid int64, keywords []string) {
 	// corrupted by a malformed docid (the previous string-based ingress guard is
 	// no longer representable and has been removed).
 	cache := idx.getPendingWrite(tableId)
-	now := time.Now() // one timestamp for the whole update (per-keyword time.Now is hot)
+	now := time.Now().UnixNano() // one timestamp for the whole update (per-keyword time.Now is hot)
 	for _, kw := range keywords {
 		// Add to write cache to merge with other documents and flush later. docid may be
 		// duplicated; however for performance we don't check for duplicates here — all
@@ -32,7 +32,7 @@ func (idx *Index) updateIndex(tableId int, docid int64, keywords []string) {
 
 func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 	w := idx.getPendingDelete(tableId)
-	now := time.Now()
+	now := time.Now().UnixNano()
 	for _, kw := range keywords {
 		// Add to delete cache to merge with other documents and flush later.
 		w.InvertedIndex[kw] = relatedDocs{

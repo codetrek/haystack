@@ -6,8 +6,18 @@ import (
 )
 
 type relatedDocs struct {
-	DocIds    []int64
-	UpdatedAt time.Time
+	DocIds []int64
+	// UpdatedAt is a wall-clock unix-nanos timestamp (time.Now().UnixNano()),
+	// not a monotonic reading. It backs ONLY the soft young-entry flush-skip
+	// heuristic (forced/closing/pressure flushes drain regardless), so a wall
+	// step (e.g. NTP) can at worst skip/drain an entry one cycle early or late —
+	// no correctness impact. Two edge cases resolve the same safe way as today's
+	// time.Since: a backward clock step makes (now-UpdatedAt) negative → < timeout
+	// → treated as "young"/skipped (drained by the next forced flush); a zero
+	// value (never set) yields a huge positive delta → flushed. int64 instead of
+	// time.Time keeps this per-keyword struct pointer-free (no GC-scanned
+	// *Location) and 16B smaller across the unbounded pending map.
+	UpdatedAt int64
 }
 
 type pendingTableWrites struct {
@@ -72,6 +82,7 @@ func (idx *Index) flushPendingWrites(closing, force bool) {
 	}
 	now := time.Now()
 	idx.lastFlushWriteTime = now
+	nowNanos := now.UnixNano()
 
 	if closing {
 		log.Println("[Inverted] Flushing pending writes...")
@@ -90,7 +101,7 @@ func (idx *Index) flushPendingWrites(closing, force bool) {
 			// Skip young, small keyword entries on a periodic flush; a forced or
 			// closing flush drains them regardless.
 			if !closing && !force && len(relatedDocs.DocIds) < flushWaitBatchSize &&
-				time.Since(relatedDocs.UpdatedAt) < flushWaitTimeout {
+				time.Duration(nowNanos-relatedDocs.UpdatedAt) < flushWaitTimeout {
 				continue
 			}
 
@@ -127,7 +138,9 @@ func (idx *Index) flushPendingDeletes(closing, force bool, maxKeywordIndexSize i
 	if !closing && !force && time.Since(idx.lastFlushDeleteTime) < idx.opts.flushCooldown() {
 		return
 	}
-	idx.lastFlushDeleteTime = time.Now()
+	now := time.Now()
+	idx.lastFlushDeleteTime = now
+	nowNanos := now.UnixNano()
 
 	if closing {
 		log.Println("[Inverted] Flushing pending deletes...")
@@ -143,7 +156,7 @@ func (idx *Index) flushPendingDeletes(closing, force bool, maxKeywordIndexSize i
 			// Skip young, small delete entries on a periodic flush; a forced or
 			// closing flush drains them regardless.
 			if !closing && !force && len(relatedDocs.DocIds) < idx.opts.flushDeleteWaitBatchSize() &&
-				time.Since(relatedDocs.UpdatedAt) < idx.opts.flushDeleteWaitTimeout() {
+				time.Duration(nowNanos-relatedDocs.UpdatedAt) < idx.opts.flushDeleteWaitTimeout() {
 				continue
 			}
 
