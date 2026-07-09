@@ -92,6 +92,7 @@ func (idx *Index) flushPendingWrites(closing, force bool) {
 	}
 
 	batch := newBatch(idx.db)
+	defer func() { _ = batch.Close() }()
 
 	flushWaitTimeout := idx.opts.flushWaitTimeout()
 	flushWaitBatchSize := idx.opts.flushWaitBatchSize()
@@ -150,6 +151,7 @@ func (idx *Index) flushPendingDeletes(closing, force bool, maxKeywordIndexSize i
 	}
 
 	batch := newBatch(idx.db)
+	defer func() { _ = batch.Close() }()
 
 	for _, wp := range idx.pendingDeletes {
 		for kw, relatedDocs := range wp.InvertedIndex {
