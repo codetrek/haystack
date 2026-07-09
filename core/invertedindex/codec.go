@@ -234,7 +234,21 @@ func (idx *Index) encodeForwardKeyPrefix(tableId int) []byte {
 // doc-words value used. A keyword containing '|' splits the same lossy way it
 // always has (no behavior change vs. the old doc-words value).
 func encodeForwardValue(keywords []string) []byte {
-	return []byte(strings.Join(keywords, "|"))
+	if len(keywords) == 0 {
+		return []byte{}
+	}
+	n := len(keywords) - 1
+	for _, k := range keywords {
+		n += len(k)
+	}
+	b := make([]byte, 0, n)
+	for i, k := range keywords {
+		if i > 0 {
+			b = append(b, '|')
+		}
+		b = append(b, k...)
+	}
+	return b
 }
 
 // decodeForwardValue is the inverse of encodeForwardValue. An empty input decodes

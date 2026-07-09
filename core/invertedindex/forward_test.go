@@ -1,10 +1,74 @@
 package invertedindex
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 )
+
+// TestEncodeForwardValue_ByteIdentity is the non-drift guard: every case must
+// stay byte-for-byte identical to both a hand-written literal AND
+// strings.Join(kw, "|") (the encoding the retired doc-words value used). These
+// pass on the current strings.Join body; they exist to catch any drift when the
+// body is hand-rolled to a single allocation.
+func TestEncodeForwardValue_ByteIdentity(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []byte
+	}{
+		{"multi", []string{"a", "b", "c"}, []byte("a|b|c")},
+		{"single", []string{"only"}, []byte("only")},
+		{"nil-empty", []string{}, []byte{}},
+		{"single-empty", []string{""}, []byte{}}, // len==1 empty branch, distinct from {}
+		{"interior-empty", []string{"a", "", "b"}, []byte("a||b")},
+		{"pipe-in-keyword", []string{"a|x", "b"}, []byte("a|x|b")}, // lossy-identical to today
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := encodeForwardValue(tc.in)
+			assert.Equal(t, tc.want, got, "literal golden")
+			assert.Equal(t, []byte(strings.Join(tc.in, "|")), got, "strings.Join parity")
+			assert.Len(t, got, len(tc.want))
+		})
+	}
+
+	// Round-trip: decode reverses encode for a multi-element set.
+	assert.Equal(t, []string{"a", "b", "c"},
+		decodeForwardValue(encodeForwardValue([]string{"a", "b", "c"})))
+}
+
+// forwardSink defeats dead-store elision of the encodeForwardValue result in the
+// allocation benchmark below.
+var forwardSink []byte
+
+// TestEncodeForwardValue_SingleAlloc is the load-bearing RED for T-I3: today the
+// []byte(strings.Join(...)) body allocates twice (the joined string + the []byte
+// copy) for a >=2-element input, so this fails at 2.0 allocs; the hand-rolled
+// single-alloc body passes at 1.0. A 1-element input cannot serve as the red
+// because strings.Join special-cases len==1 to a single alloc.
+//
+// testing.AllocsPerRun reads the process-global runtime.MemStats.Mallocs delta,
+// so a stray malloc from a background goroutine (flush/merge tickers, db worker)
+// or a GC cycle firing inside the microsecond measurement window is misattributed
+// to encodeForwardValue, inflating the average upward from 1 to 2 and flaking the
+// gate. Contamination is upward-only, so we take the MINIMUM across a few trials:
+// the single-alloc body reports 1 on at least one uncontended trial, while a
+// regression to the 2-alloc strings.Join body reports >=2 on EVERY trial (the 2
+// allocs are intrinsic), so the RED is preserved.
+func TestEncodeForwardValue_SingleAlloc(t *testing.T) {
+	kws := []string{"a", "b", "c"} // >=2 elements: strings.Join+[]byte = 2 allocs today
+	best := testing.AllocsPerRun(100, func() { forwardSink = encodeForwardValue(kws) })
+	for i := 0; i < 4; i++ {
+		if got := testing.AllocsPerRun(100, func() { forwardSink = encodeForwardValue(kws) }); got < best {
+			best = got
+		}
+	}
+	if best > 1 {
+		t.Fatalf("encodeForwardValue allocs = %v, want <= 1", best)
+	}
+}
 
 func TestForwardValueCodec_WireFormat(t *testing.T) {
 	assert.Equal(t, []byte("a|b|c"), encodeForwardValue([]string{"a", "b", "c"}))
