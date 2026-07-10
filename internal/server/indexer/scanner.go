@@ -10,9 +10,18 @@ import (
 	gitutils "github.com/codetrek/haystack/core/utils/git"
 	"github.com/codetrek/haystack/internal/core/workspace"
 	"github.com/codetrek/haystack/internal/shared/running"
+	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/codetrek/haystack/internal/utils"
 	fsutils "github.com/codetrek/haystack/internal/utils/fs"
 )
+
+// buildExcludeFilter returns a keep-filter: Match==true => keep, Match==false => exclude.
+func buildExcludeFilter(baseDir string, exclude types.Exclude) fsutils.ListFileFilter {
+	if exclude.UseGitIgnore {
+		return &GitIgnoreFilter{ignore: gitutils.NewGitIgnore(baseDir, true)}
+	}
+	return utils.NewSimpleFilterExclude(exclude.Customized)
+}
 
 type GitIgnoreFilter struct {
 	ignore *gitutils.GitIgnore
@@ -102,16 +111,8 @@ func ShouldIndexFile(w *workspace.Workspace, relPath string) bool {
 	baseDir := w.Path
 	filters := w.GetFilters()
 
-	var exclude fsutils.ListFileFilter
-	if filters.Exclude.UseGitIgnore {
-		exclude = &GitIgnoreFilter{
-			ignore: gitutils.NewGitIgnore(baseDir, true),
-		}
-	} else {
-		exclude = utils.NewSimpleFilter(filters.Exclude.Customized)
-	}
-
-	if exclude.Match(relPath, false) {
+	exclude := buildExcludeFilter(baseDir, filters.Exclude)
+	if !exclude.Match(relPath, false) {
 		return false
 	}
 
@@ -133,14 +134,7 @@ func (s *Scanner) processWorkspace(w *workspace.Workspace, forceRefresh bool) er
 	baseDir := w.Path
 	filters := w.GetFilters()
 
-	var exclude fsutils.ListFileFilter
-	if filters.Exclude.UseGitIgnore {
-		exclude = &GitIgnoreFilter{
-			ignore: gitutils.NewGitIgnore(baseDir, true),
-		}
-	} else {
-		exclude = utils.NewSimpleFilterExclude(filters.Exclude.Customized)
-	}
+	exclude := buildExcludeFilter(baseDir, filters.Exclude)
 
 	include := utils.NewSimpleFilter(filters.Include)
 	startTime := time.Now()
