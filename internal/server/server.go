@@ -23,11 +23,23 @@ import (
 	"github.com/codetrek/haystack/internal/shared/running"
 )
 
+// newInvertedIndex is the constructor seam; tests override it to capture the
+// Options the production wiring passes. Its type is invertedindex.New's:
+// func(kv.Store, queue.Queue, invertedindex.Options) (*invertedindex.Index, error)
+// — note the 2nd param is the queue.Queue INTERFACE (a test override must use
+// queue.Queue, not *queue.Mpsc; see server_maxpending_test.go).
+var newInvertedIndex = invertedindex.New
+
 // Function variables for Init calls, enabling test overrides.
 var (
 	invertedindexInit = func(db kv.Store, mpsc *queue.Mpsc) (*invertedindex.Index, error) {
-		// Zero-value Options selects production defaults inside New.
-		return invertedindex.New(db, mpsc, invertedindex.Options{})
+		// Cap the pending-write buffer at the measured-good bound so build-phase
+		// peak RSS is bounded and predictable (~0.66 GiB vs an unbounded, noisy
+		// ~1.3 GiB at scale) — a deliberate memory-over-build-speed default for the
+		// deployment, at a measured ~+11% build cost. See RecommendedMaxPendingPostings.
+		return newInvertedIndex(db, mpsc, invertedindex.Options{
+			MaxPendingPostings: invertedindex.RecommendedMaxPendingPostings,
+		})
 	}
 	documentsNew = func(db kv.Store, mpsc *queue.Mpsc, idx *invertedindex.Index) (*documents.Store, error) {
 		return documents.New(db, mpsc, idx, documents.Options{})
