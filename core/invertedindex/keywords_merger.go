@@ -198,8 +198,7 @@ var rewriteIndex = func(batch kv.Batch, idx *Index, index *invertedIndexEntry, m
 			ids = append(ids, id)
 		}
 
-		key := idx.encodeInvertedKey(index.TableId, index.Keyword, len(ids), tick)
-		writeInvertedIndex(batch, index.TableId, index.Keyword, ids, key)
+		writeInvertedIndex(idx, batch, index.TableId, index.Keyword, ids, tick)
 		mergedCount++
 	}
 

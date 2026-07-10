@@ -106,7 +106,7 @@ func (idx *Index) flushPendingWrites(closing, force bool) {
 				continue
 			}
 
-			writeInvertedIndex(batch, wp.TableId, kw, relatedDocs.DocIds, idx.encodeInvertedKey(wp.TableId, kw, len(relatedDocs.DocIds), now.UnixMicro()))
+			writeInvertedIndex(idx, batch, wp.TableId, kw, relatedDocs.DocIds, now.UnixMicro())
 			idx.pendingWritePostings -= len(relatedDocs.DocIds)
 			delete(wp.InvertedIndex, kw)
 

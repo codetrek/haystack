@@ -50,7 +50,7 @@ func (m *mockBatchWrite) DeletePrefix(prefix []byte) error {
 func setupTestMocks() func() {
 	// Override the writeKeywordIndex function for testing
 	originalWriteKeywordIndex := writeInvertedIndex
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
 		mockBatch := batch.(*mockBatchWrite)
 		mockBatch.tableIds = append(mockBatch.tableIds, tableId)
 		mockBatch.keywords = append(mockBatch.keywords, keyword)
@@ -394,7 +394,7 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 
 	batch := newMockBatch(nil)
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
 		writtenTables = append(writtenTables, tableId)
 		writtenKeywords = append(writtenKeywords, keyword)
 		writtenDocIDs = append(writtenDocIDs, docIDs)
@@ -522,7 +522,7 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
 		if _, ok := writtenData[tableId]; !ok {
 			writtenData[tableId] = make(map[string][]int64)
 		}
@@ -743,7 +743,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	}
 
 	// Mock only the writeKeywordIndex function
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
 		// No-op for this test
 	}
 
@@ -902,7 +902,7 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 		newBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
 		// no-op: we don't need to persist data
 	}
 	newBatch = func(db kv.Store) kv.Batch {
@@ -979,7 +979,7 @@ func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
 		newBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {}
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {}
 	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
@@ -1039,7 +1039,7 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 		newBatch = origBatch
 	}()
 
-	writeInvertedIndex = func(batch kv.Batch, tableId int, keyword string, docIDs []int64, data []byte) {}
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {}
 	newBatch = func(db kv.Store) kv.Batch {
 		return &mockBatchWriteWithFuncs{
 			deleteFunc: func(key []byte) error { return nil },
