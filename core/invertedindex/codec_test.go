@@ -1,7 +1,9 @@
 package invertedindex
 
 import (
+	"bytes"
 	"encoding/json"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -86,7 +88,7 @@ func TestEncodeDecodeInvertedKeyRoundTrip(t *testing.T) {
 	keyword := "testing"
 	doccount := 42
 
-	key := testCodecIdx.encodeInvertedKey(tableId, keyword, doccount)
+	key := testCodecIdx.encodeInvertedKey(tableId, keyword, doccount, 0)
 	s := string(key)
 
 	// First byte is DefaultKeyTypeRow
@@ -324,6 +326,78 @@ func TestRemoveDuplicatesPreservesOrder(t *testing.T) {
 	for i, v := range expected {
 		if got[i] != v {
 			t.Errorf("index %d: got %d, want %d", i, got[i], v)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// encodeInvertedValue — set-dedup + byte-identity (I1)
+// ---------------------------------------------------------------------------
+
+// sortedUniqueUint64Space returns ids as the ascending-in-uint64-space set with
+// duplicates removed. It is an INDEPENDENT oracle for encodeInvertedValue's
+// sort+dedup contract — it never calls the function under test.
+func sortedUniqueUint64Space(ids []int64) []int64 {
+	us := make([]uint64, len(ids))
+	for i, id := range ids {
+		us[i] = uint64(id)
+	}
+	slices.Sort(us)
+	us = slices.Compact(us)
+	out := make([]int64, len(us))
+	for i, u := range us {
+		out[i] = int64(u)
+	}
+	return out
+}
+
+// TestEncodeInvertedValueGoldenBytes pins byte-identity against HAND-TYPED
+// delta-varint constants (never derived by calling encodeInvertedValue). The
+// encoder sorts the docids in uint64 space, drops duplicates, then writes the
+// first id followed by successive gaps as base-128 uvarints. This is the
+// load-bearing dedup guard: without slices.Compact the duplicate inputs encode
+// extra zero-gap varints and fail these goldens.
+func TestEncodeInvertedValueGoldenBytes(t *testing.T) {
+	tests := []struct {
+		name string
+		ids  []int64
+		want []byte
+	}{
+		// sort {1,1,2,3,3} -> unique {1,2,3} -> deltas 1,1,1
+		{"dups and unsorted", []int64{3, 1, 2, 1, 3}, []byte{0x01, 0x01, 0x01}},
+		// all identical -> {9} -> single absolute varint
+		{"all duplicates", []int64{9, 9, 9}, []byte{0x09}},
+		// already sorted, no dups -> deltas 1,1,2
+		{"sorted no dups", []int64{1, 2, 4}, []byte{0x01, 0x01, 0x02}},
+		// empty -> empty
+		{"empty", []int64{}, []byte{}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := encodeInvertedValue(tc.ids)
+			if !bytes.Equal(got, tc.want) {
+				t.Fatalf("encodeInvertedValue(%v) = %v, want %v", tc.ids, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEncodeInvertedValueRoundTripFullIntRange proves the encode/decode round
+// trip is exact for the full int64 range (negatives, MinInt64, MaxInt64) AND
+// that duplicates are dropped, comparing against the independent sorted-unique
+// oracle rather than hand-typed 10-byte varints.
+func TestEncodeInvertedValueRoundTripFullIntRange(t *testing.T) {
+	tests := [][]int64{
+		{math.MinInt64},
+		{-1},
+		{math.MaxInt64},
+		{5, -1, 5, math.MaxInt64},
+	}
+	for _, ids := range tests {
+		want := sortedUniqueUint64Space(ids)
+		got := decodeInvertedValue(encodeInvertedValue(ids))
+		if !slices.Equal(got, want) {
+			t.Fatalf("round-trip(%v): got %v, want %v", ids, got, want)
 		}
 	}
 }

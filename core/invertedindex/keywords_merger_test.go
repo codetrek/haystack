@@ -405,8 +405,8 @@ func TestMergeKeywordsIndexSingleTable(t *testing.T) {
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Create real formatted keys and values
 			keys := [][]byte{
-				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2),
-				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3, 0),
 			}
 			values := []string{
 				MakeDocsForKeyword("doc1", "doc2"),
@@ -538,10 +538,10 @@ func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
 			// Create real formatted keys and values
 			keys := [][]byte{
-				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2),
-				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3),
-				testCodecIdx.encodeInvertedKey(testTable2, "keyword1", 2),
-				testCodecIdx.encodeInvertedKey(testTable2, "keyword1", 3),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3, 0),
+				testCodecIdx.encodeInvertedKey(testTable2, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable2, "keyword1", 3, 0),
 			}
 			values := []string{
 				MakeDocsForKeyword("doc1", "doc2"),
@@ -714,7 +714,7 @@ func TestMergeKeywordsIndexTimeout(t *testing.T) {
 	// Generate properly formatted keys and values
 	for i := 0; i < keyCount; i++ {
 		keyword := "keyword" + string(rune('a'+i%26))
-		keys[i] = testCodecIdx.encodeInvertedKey(testTable1, keyword, 2)
+		keys[i] = testCodecIdx.encodeInvertedKey(testTable1, keyword, 2, 0)
 		values[i] = fmt.Sprintf("doc%d|doc%d", i*2, i*2+1)
 	}
 
@@ -922,8 +922,8 @@ func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
 			}
 			scanCalled = true
 			keys := [][]byte{
-				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2),
-				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3, 0),
 			}
 			values := []string{
 				MakeDocsForKeyword("doc1", "doc2"),
@@ -1053,7 +1053,7 @@ func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
 	// Create a row with doccount=6 (> maxSize/2=5) → well batched, should be skipped.
 	mdb := &mockDB{
 		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
-			key := testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 6) // doccount=6 > 5
+			key := testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 6, 0) // doccount=6 > 5
 			value := MakeDocsForKeyword("d1", "d2", "d3", "d4", "d5", "d6")
 			fn(key, []byte(value))
 		},
@@ -1084,7 +1084,7 @@ func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
 	pw := env.idx.getPendingWrite(1)
 	pw.InvertedIndex["testword"] = relatedDocs{
 		DocIds:    []int64{Doc2ID("doc1")},
-		UpdatedAt: time.Now(),
+		UpdatedAt: time.Now().UnixNano(),
 	}
 
 	km := &keywordsMerger{idx: env.idx, InitialDelay: 10 * time.Millisecond}

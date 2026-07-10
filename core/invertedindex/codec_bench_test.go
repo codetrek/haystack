@@ -27,7 +27,7 @@ func BenchmarkEncodeInvertedKey(b *testing.B) {
 	idx := benchIdx()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		_ = idx.encodeInvertedKey(7, "handleRequest", 42)
+		_ = idx.encodeInvertedKey(7, "handleRequest", 42, 0)
 	}
 }
 
@@ -52,7 +52,7 @@ func BenchmarkEncodeInvertedKeyPrefix(b *testing.B) {
 // BenchmarkDecodeInvertedKey covers the per-row merge-scan key decoder (strings.Split).
 func BenchmarkDecodeInvertedKey(b *testing.B) {
 	idx := benchIdx()
-	key := string(idx.encodeInvertedKey(7, "handleRequest", 42))
+	key := string(idx.encodeInvertedKey(7, "handleRequest", 42, 0))
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		_, _, _, _ = idx.decodeInvertedKey(key)

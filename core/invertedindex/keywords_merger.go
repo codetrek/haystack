@@ -174,7 +174,10 @@ var rewriteIndex = func(batch kv.Batch, idx *Index, index *invertedIndexEntry, m
 
 	mergedCount := 0
 	// Merge the keyword docids in old
-	// and write the new keyword to the database
+	// and write the new keyword to the database.
+	// Sample the opaque key tick ONCE for every row this rewrite emits (uniqueness
+	// is guaranteed by keySeq, not the tick), instead of reading the clock per row.
+	tick := time.Now().UnixMicro()
 	rows := index.Rows
 	remainingDocCount := index.DocCount
 	for len(rows) > 1 {
@@ -195,7 +198,7 @@ var rewriteIndex = func(batch kv.Batch, idx *Index, index *invertedIndexEntry, m
 			ids = append(ids, id)
 		}
 
-		key := idx.encodeInvertedKey(index.TableId, index.Keyword, len(ids))
+		key := idx.encodeInvertedKey(index.TableId, index.Keyword, len(ids), tick)
 		writeInvertedIndex(batch, index.TableId, index.Keyword, ids, key)
 		mergedCount++
 	}
@@ -210,6 +213,7 @@ func (idx *Index) mergeKeywordsIndex(m merging, maxKeywordIndexSize int) merging
 	}
 
 	batch := newBatch(idx.db)
+	defer func() { _ = batch.Close() }()
 	lastTableId := -1
 	current := &invertedIndexEntry{Rows: []recordRow{}}
 	nextIter := m.NextIter

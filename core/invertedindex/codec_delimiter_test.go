@@ -32,7 +32,7 @@ func TestDecodeInvertedKey_KeywordWithDelimiter(t *testing.T) {
 		"a|b\xff|c", // delimiter + 0xff together
 	}
 	for _, kw := range cases {
-		key := idx.encodeInvertedKey(7, kw, 3)
+		key := idx.encodeInvertedKey(7, kw, 3, 0)
 		tid, gotKw, dc, tick := idx.decodeInvertedKey(string(key))
 		if tid != 7 || gotKw != kw || dc != 3 || tick == "" {
 			t.Errorf("decode(encode(kw=%q)) = (tableId=%d keyword=%q doccount=%d tick=%q); want (7, %q, 3, non-empty)",
@@ -53,8 +53,8 @@ func TestMerge_KeywordWithDelimiter_NoOrphan(t *testing.T) {
 	keywords := []string{"a|b", "c|d", "x\xffy", "plain"}
 
 	// Index several distinct docs per keyword across separate flushes (each flush
-	// writes a distinct tick'd row) so the merger's rewriteIndex path
-	// (len(Rows) >= 2) actually fires for every keyword.
+	// writes a distinct row, kept unique by the per-Index keySeq suffix) so the
+	// merger's rewriteIndex path (len(Rows) >= 2) actually fires for every keyword.
 	docsByKw := map[string][]int64{}
 	for round := 0; round < 3; round++ {
 		for ki, kw := range keywords {

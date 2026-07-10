@@ -16,7 +16,7 @@ func (idx *Index) updateIndex(tableId int, docid int64, keywords []string) {
 	// corrupted by a malformed docid (the previous string-based ingress guard is
 	// no longer representable and has been removed).
 	cache := idx.getPendingWrite(tableId)
-	now := time.Now() // one timestamp for the whole update (per-keyword time.Now is hot)
+	now := time.Now().UnixNano() // one timestamp for the whole update (per-keyword time.Now is hot)
 	for _, kw := range keywords {
 		// Add to write cache to merge with other documents and flush later. docid may be
 		// duplicated; however for performance we don't check for duplicates here — all
@@ -32,7 +32,7 @@ func (idx *Index) updateIndex(tableId int, docid int64, keywords []string) {
 
 func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 	w := idx.getPendingDelete(tableId)
-	now := time.Now()
+	now := time.Now().UnixNano()
 	for _, kw := range keywords {
 		// Add to delete cache to merge with other documents and flush later.
 		w.InvertedIndex[kw] = relatedDocs{
@@ -48,9 +48,9 @@ func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 // Callers must pass the pre-computed key via idx.encodeInvertedKey so that the
 // configured key-type bytes are honoured.
 var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
-	// Remove duplicates to ensure the data stored is clean
-	uniqueDocids := removeDuplicatesEfficiently(docids)
-	content := encodeInvertedValue(uniqueDocids)
+	// encodeInvertedValue sorts AND dedups, so the raw docids (which the flush
+	// path intentionally leaves with duplicates) can be handed straight to it.
+	content := encodeInvertedValue(docids)
 	batch.Put(key, content)
 }
 
@@ -108,6 +108,10 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		return err
 	}
 
+	// Sample the opaque key tick ONCE for every rewritten row of this keyword
+	// (uniqueness is guaranteed by keySeq, not the tick), instead of reading the
+	// clock per row.
+	tick := time.Now().UnixMicro()
 	for len(docids) > 0 {
 		docs := []int64{}
 		for id := range docids {
@@ -123,7 +127,7 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		// the merger's `doccount > maxSize/2` guard then quarantines from
 		// compaction forever. encodeInvertedKey's seq suffix keeps the new key
 		// distinct from the originals, all of which are deleted below.
-		key := idx.encodeInvertedKey(tableId, kw, len(docs))
+		key := idx.encodeInvertedKey(tableId, kw, len(docs), tick)
 
 		writeInvertedIndex(batch, tableId, kw, docs, key)
 	}

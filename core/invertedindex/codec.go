@@ -6,7 +6,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // Default on-disk key-type prefix bytes.  These values MUST NOT change after
@@ -69,18 +68,19 @@ func (idx *Index) encodeInvertedKeyPrefix(tableId int, keyword string) []byte {
 	return idx.appendInvertedKeyPrefix(b, tableId, keyword)
 }
 
-func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int) []byte {
-	// "<prefix><doccount>|<tick>.<seq>" where tick is the current micros and seq
-	// is a per-Index monotonic counter. tick alone is not unique within a single
-	// microsecond, so two rows of the same (tableId,keyword,doccount) could get
-	// byte-identical keys and overwrite each other; the seq suffix makes every
-	// encoded key unique. decode treats everything after the last '|' as the
-	// opaque tick, so this does not change the on-disk format contract.
+func (idx *Index) encodeInvertedKey(tableId int, keyword string, doccount int, tick int64) []byte {
+	// "<prefix><doccount>|<tick>.<seq>" where tick is a decimal-micros timestamp
+	// SAMPLED ONCE PER flush/merge/delete batch by the caller and threaded in (not
+	// read per key), and seq is a per-Index monotonic counter. tick alone is not
+	// unique — two rows of the same (tableId,keyword,doccount) in one batch share
+	// it — so the seq suffix is the SOLE guarantor that every encoded key is
+	// distinct. decode treats everything after the last '|' as the opaque tick, so
+	// this does not change the on-disk format contract.
 	b := make([]byte, 0, 1+11+1+len(keyword)+1+11+1+19+1+20)
 	b = idx.appendInvertedKeyPrefix(b, tableId, keyword)
 	b = strconv.AppendInt(b, int64(doccount), 10)
 	b = append(b, '|')
-	b = strconv.AppendInt(b, time.Now().UnixMicro(), 10)
+	b = strconv.AppendInt(b, tick, 10)
 	b = append(b, '.')
 	b = strconv.AppendUint(b, idx.keySeq.Add(1), 10)
 	return b
@@ -146,11 +146,12 @@ func encodeTableValue(info TableInfo) []byte {
 // small, densely-allocated idtable ids, so the gaps are tiny and most encode to a
 // single byte — far smaller than the previous fixed 8-byte-per-id layout, and
 // cheaper to decode than a general-purpose block compressor. Order within a row
-// is irrelevant (the docids are a set), so sorting here is free; deduplication
-// remains the caller's responsibility. Sorting/subtracting in uint64 space (not
-// int64) keeps every gap non-negative and makes the round-trip exact for any
-// int64 docid, including negative and max values. This is an on-disk format
-// change from the old big-endian layout and requires a reindex.
+// is irrelevant (the docids are a set), so sorting here is free; the encoder sorts
+// AND dedups (adjacent-equal removal after the sort), so callers may pass a slice
+// containing duplicates. Sorting/subtracting in uint64 space (not int64) keeps
+// every gap non-negative and makes the round-trip exact for any int64 docid,
+// including negative and max values. This is an on-disk format change from the old
+// big-endian layout and requires a reindex.
 func encodeInvertedValue(docids []int64) []byte {
 	if len(docids) == 0 {
 		return []byte{}
@@ -160,17 +161,16 @@ func encodeInvertedValue(docids []int64) []byte {
 		us[i] = uint64(id)
 	}
 	slices.Sort(us)
+	us = slices.Compact(us) // adjacent-equal removal == set-dedup post-sort
 
 	buf := make([]byte, 0, len(us)+len(us)/2) // most ids encode to ~1 byte
-	var tmp [binary.MaxVarintLen64]byte
 	var prev uint64
 	for i, u := range us {
 		delta := u
 		if i > 0 {
 			delta = u - prev // non-negative: us is sorted ascending in uint64 space
 		}
-		n := binary.PutUvarint(tmp[:], delta)
-		buf = append(buf, tmp[:n]...)
+		buf = binary.AppendUvarint(buf, delta)
 		prev = u
 	}
 	return buf
@@ -234,7 +234,21 @@ func (idx *Index) encodeForwardKeyPrefix(tableId int) []byte {
 // doc-words value used. A keyword containing '|' splits the same lossy way it
 // always has (no behavior change vs. the old doc-words value).
 func encodeForwardValue(keywords []string) []byte {
-	return []byte(strings.Join(keywords, "|"))
+	if len(keywords) == 0 {
+		return []byte{}
+	}
+	n := len(keywords) - 1
+	for _, k := range keywords {
+		n += len(k)
+	}
+	b := make([]byte, 0, n)
+	for i, k := range keywords {
+		if i > 0 {
+			b = append(b, '|')
+		}
+		b = append(b, k...)
+	}
+	return b
 }
 
 // decodeForwardValue is the inverse of encodeForwardValue. An empty input decodes
