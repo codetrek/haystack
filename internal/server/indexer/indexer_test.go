@@ -515,25 +515,14 @@ func TestShouldIndexFile_WithGitIgnoreFilter(t *testing.T) {
 	_, teardown := setupTestEnv(t)
 	defer teardown()
 
-	wsDir := t.TempDir()
-	ws, err := workspace.Create(wsDir)
+	ws, err := workspace.Create(t.TempDir())
 	if err != nil {
 		t.Fatalf("workspace.Create: %v", err)
 	}
 
-	// Initialize a real git repo for gitignore to work
-	origDir, _ := os.Getwd()
-	os.Chdir(wsDir)
-	defer os.Chdir(origDir)
-
-	// Use git init to create a proper repo
-	gitCmd := filepath.Join("/usr", "bin", "git")
-	if _, err := os.Stat(gitCmd); err != nil {
-		t.Skip("git not available, skipping gitignore test")
-	}
-
-	// Create .gitignore that excludes .log files
-	if err := os.WriteFile(filepath.Join(wsDir, ".gitignore"), []byte("*.log\n"), 0644); err != nil {
+	// Create a .gitignore that ignores the build/ directory and *.log files.
+	// NewGitIgnore reads .gitignore directly — it needs no .git dir or git binary.
+	if err := os.WriteFile(filepath.Join(ws.Path, ".gitignore"), []byte("build/\n*.log\n"), 0644); err != nil {
 		t.Fatalf("write .gitignore: %v", err)
 	}
 
@@ -546,12 +535,18 @@ func TestShouldIndexFile_WithGitIgnoreFilter(t *testing.T) {
 	}
 	ws.Save()
 
-	// The GitIgnoreFilter should exercise the code path even if the actual
-	// gitignore behavior is partial — we at least cover the code branch.
-	_ = ShouldIndexFile(ws, "debug.log")
-	_ = ShouldIndexFile(ws, "main.go")
-	// Just exercising the code path — no assertions on gitignore behavior
-	// since it depends on git repo structure
+	// main.go is not ignored → should be kept (indexed).
+	if !ShouldIndexFile(ws, "main.go") {
+		t.Errorf("ShouldIndexFile(main.go) = false, want true (not ignored, should be kept)")
+	}
+	// app.log matches *.log → should be excluded.
+	if ShouldIndexFile(ws, "app.log") {
+		t.Errorf("ShouldIndexFile(app.log) = true, want false (ignored by *.log)")
+	}
+	// build/out.go is under build/ → should be excluded.
+	if ShouldIndexFile(ws, "build/out.go") {
+		t.Errorf("ShouldIndexFile(build/out.go) = true, want false (ignored by build/)")
+	}
 }
 
 // ---------------------------------------------------------------------------
