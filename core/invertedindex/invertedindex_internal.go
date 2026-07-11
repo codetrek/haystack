@@ -44,15 +44,20 @@ func (idx *Index) removeIndex(tableId int, docid int64, keywords []string) {
 	idx.maybeFlushOnPressure()
 }
 
-// writeInvertedIndex writes a keyword to the database.
-// Callers must pass the pre-computed key via idx.encodeInvertedKey so that the
-// configured key-type bytes are honoured.
-var writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
-	// encodeInvertedValue sorts AND dedups, so the raw docids (which the flush
-	// path intentionally leaves with duplicates) can be handed straight to it.
-	content := encodeInvertedValue(docids)
-	batch.Put(key, content)
+// defaultWriteInvertedIndex is the production seam body: it encodes the docids
+// (sort+dedup) and builds the on-disk key from the SAME post-dedup unique count,
+// so no caller can stamp a doccount that disagrees with the value it writes (the
+// merger quarantines rows whose stamped doccount exceeds maxSize/2, so an inflated
+// count keeps a hot keyword's rows from ever compacting). It is a NAMED func so
+// go-cov gates it per-function and the reset-helpers can point straight at it
+// instead of hand-copying the body (which would let a flush test drive a stale
+// double rather than production).
+func defaultWriteInvertedIndex(idx *Index, batch kv.Batch, tableId int, kw string, docids []int64, tick int64) {
+	content, unique := encodeInvertedValueCounted(docids)
+	batch.Put(idx.encodeInvertedKey(tableId, kw, unique, tick), content)
 }
+
+var writeInvertedIndex = defaultWriteInvertedIndex
 
 // removeDocumentsFromInvertedIndex removes a document from the keywords index.
 // It will remove the document from the keywords index and rewrite the keyword with new docids.
@@ -125,11 +130,10 @@ func (idx *Index) removeDocumentsFromInvertedIndex(batch kv.Batch, tableId int, 
 		// Always re-encode under a fresh key carrying the TRUE doccount. Reusing
 		// an original key (keys[0]) would keep its stale, inflated doccount, which
 		// the merger's `doccount > maxSize/2` guard then quarantines from
-		// compaction forever. encodeInvertedKey's seq suffix keeps the new key
-		// distinct from the originals, all of which are deleted below.
-		key := idx.encodeInvertedKey(tableId, kw, len(docs), tick)
-
-		writeInvertedIndex(batch, tableId, kw, docs, key)
+		// compaction forever. writeInvertedIndex builds the key with the deduped
+		// count and its seq suffix keeps it distinct from the originals, all of
+		// which are deleted below.
+		writeInvertedIndex(idx, batch, tableId, kw, docs, tick)
 	}
 
 	// Delete every original row we collected; their surviving docids were

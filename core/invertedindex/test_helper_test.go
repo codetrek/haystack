@@ -45,10 +45,7 @@ func setupTestEnv(t *testing.T) *testEnv {
 	newBatch = func(db kv.Store) kv.Batch {
 		return db.NewBatch(MaxBatchSize)
 	}
-	writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
-		content := encodeInvertedValue(docids)
-		batch.Put(key, content)
-	}
+	writeInvertedIndex = defaultWriteInvertedIndex
 
 	opts := Options{}
 	idx, err := New(database, q, opts)

@@ -69,9 +69,7 @@ func TestBatchSitesCloseCommittedBatch(t *testing.T) {
 	// mutated newBatch seam would bypass recStore.NewBatch. DeleteTable's direct
 	// NewBatch(0) is captured regardless.
 	newBatch = func(db kv.Store) kv.Batch { return db.NewBatch(MaxBatchSize) }
-	writeInvertedIndex = func(batch kv.Batch, tableId int, kw string, docids []int64, key []byte) {
-		batch.Put(key, encodeInvertedValue(docids))
-	}
+	writeInvertedIndex = defaultWriteInvertedIndex
 
 	// Disable the periodic ticker (FlushTicker = 1h) so the only batches created
 	// are the ones this test drives explicitly — single-goroutine and race-free.

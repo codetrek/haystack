@@ -140,21 +140,31 @@ func encodeTableValue(info TableInfo) []byte {
 	return content
 }
 
-// encodeInvertedValue encodes a posting row's docids as a delta-varint sequence:
-// the docids are sorted (by their unsigned 64-bit bit pattern) and written as the
-// first id followed by successive gaps, each a base-128 uvarint. Real docids are
-// small, densely-allocated idtable ids, so the gaps are tiny and most encode to a
-// single byte — far smaller than the previous fixed 8-byte-per-id layout, and
-// cheaper to decode than a general-purpose block compressor. Order within a row
-// is irrelevant (the docids are a set), so sorting here is free; the encoder sorts
-// AND dedups (adjacent-equal removal after the sort), so callers may pass a slice
-// containing duplicates. Sorting/subtracting in uint64 space (not int64) keeps
-// every gap non-negative and makes the round-trip exact for any int64 docid,
+// encodeInvertedValue is encodeInvertedValueCounted without the count (see there
+// for the encoding).
+func encodeInvertedValue(docids []int64) []byte {
+	b, _ := encodeInvertedValueCounted(docids)
+	return b
+}
+
+// encodeInvertedValueCounted encodes a posting row's docids as a delta-varint
+// sequence: the docids are sorted (by their unsigned 64-bit bit pattern) and
+// written as the first id followed by successive gaps, each a base-128 uvarint.
+// Real docids are small, densely-allocated idtable ids, so the gaps are tiny and
+// most encode to a single byte — far smaller than the previous fixed 8-byte-per-id
+// layout, and cheaper to decode than a general-purpose block compressor. Order
+// within a row is irrelevant (the docids are a set), so sorting here is free; the
+// encoder sorts AND dedups (adjacent-equal removal after the sort), so callers may
+// pass a slice containing duplicates. It also RETURNS the number of unique docids
+// written (== the varint count in the returned bytes), so callers stamp the key's
+// doccount with the true post-dedup count in the same single pass — no separate
+// dedup pass on the build hot path. Sorting/subtracting in uint64 space (not int64)
+// keeps every gap non-negative and makes the round-trip exact for any int64 docid,
 // including negative and max values. This is an on-disk format change from the old
 // big-endian layout and requires a reindex.
-func encodeInvertedValue(docids []int64) []byte {
+func encodeInvertedValueCounted(docids []int64) ([]byte, int) {
 	if len(docids) == 0 {
-		return []byte{}
+		return []byte{}, 0
 	}
 	us := make([]uint64, len(docids))
 	for i, id := range docids {
@@ -173,7 +183,7 @@ func encodeInvertedValue(docids []int64) []byte {
 		buf = binary.AppendUvarint(buf, delta)
 		prev = u
 	}
-	return buf
+	return buf, len(us) // len(us) is post-Compact == the varint count
 }
 
 // decodeInvertedValue is the inverse of encodeInvertedValue: it reads successive
