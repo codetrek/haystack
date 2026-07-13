@@ -50,7 +50,7 @@ func main() {
 			"-ldflags", ldflags,
 			"-gcflags=all=-l",
 			"-o", binPath,
-			"./cmd/haystack/",
+			"./packages/server/cmd/haystack/",
 		}
 
 		cmd := exec.Command("go", args...)

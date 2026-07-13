@@ -20,7 +20,7 @@ APP_BIN=$(BUILD_DIR)/$(APP_NAME)$(EXE_EXT)
 build:
 	@$(MKDIR_P)
 	@echo "Building $(APP_NAME)..."
-	@go build -o $(APP_BIN) ./cmd/haystack/
+	@go build -o $(APP_BIN) ./packages/server/cmd/haystack/
 	@echo "Build complete: $(APP_BIN)"
 
 test:
@@ -42,7 +42,7 @@ clean:
 
 gen-testdata:
 	@echo "Generating test fixtures (this takes ~15 min)..."
-	@cd core && go run -tags tools ./cmd/gen-testdata/
+	@cd packages/core && go run -tags tools ./cmd/gen-testdata/
 
 DOCKER_TEST_IMAGE=haystack-test
 

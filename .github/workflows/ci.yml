@@ -110,7 +110,7 @@ jobs:
         run: ./.github/workflows/scripts/check-fmt.sh
 
       - name: Build
-        run: go build ./...
+        run: go build ./packages/server/... ./packages/core/...
 
       - name: Test and Coverage
         run: ./.github/workflows/scripts/test_and_coverage.sh
