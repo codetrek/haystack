@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codetrek/haystack/core/engine"
-	"github.com/codetrek/haystack/core/tokenizer"
+	"github.com/codetrek/haystack/packages/core/engine"
+	"github.com/codetrek/haystack/packages/core/tokenizer"
 	"github.com/stretchr/testify/assert"
 )
 

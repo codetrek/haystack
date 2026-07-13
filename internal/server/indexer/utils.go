@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/packages/core/idtable"
 )
 
 // idAllocator is the package-level id allocator injected by server.go before Run is called.

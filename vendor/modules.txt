@@ -19,7 +19,7 @@ github.com/bits-and-blooms/bitset
 # github.com/blevesearch/mmap-go v1.0.4
 ## explicit; go 1.13
 github.com/blevesearch/mmap-go
-# github.com/blevesearch/vellum v1.0.10 => ./core/third_party/vellum
+# github.com/blevesearch/vellum v1.0.10 => ./packages/core/third_party/vellum
 ## explicit; go 1.18
 github.com/blevesearch/vellum
 # github.com/cespare/xxhash/v2 v2.3.0
@@ -297,4 +297,4 @@ gopkg.in/natefinch/lumberjack.v2
 # gopkg.in/yaml.v3 v3.0.1
 ## explicit
 gopkg.in/yaml.v3
-# github.com/blevesearch/vellum => ./core/third_party/vellum
+# github.com/blevesearch/vellum => ./packages/core/third_party/vellum

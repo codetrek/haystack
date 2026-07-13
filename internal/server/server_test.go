@@ -15,11 +15,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/codetrek/haystack/core/collection"
-	"github.com/codetrek/haystack/core/documents"
-	"github.com/codetrek/haystack/core/idtable"
-	"github.com/codetrek/haystack/core/invertedindex"
-	"github.com/codetrek/haystack/core/queue"
+	"github.com/codetrek/haystack/packages/core/collection"
+	"github.com/codetrek/haystack/packages/core/documents"
+	"github.com/codetrek/haystack/packages/core/idtable"
+	"github.com/codetrek/haystack/packages/core/invertedindex"
+	"github.com/codetrek/haystack/packages/core/queue"
 	"github.com/codetrek/haystack/internal/conf"
 	"github.com/codetrek/haystack/internal/core/storage"
 	"github.com/codetrek/haystack/internal/core/symbols"

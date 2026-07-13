@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	gitutils "github.com/codetrek/haystack/core/utils/git"
+	gitutils "github.com/codetrek/haystack/packages/core/utils/git"
 )
 
 type GitIgnoreFilter struct {

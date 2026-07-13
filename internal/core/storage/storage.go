@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/codetrek/haystack/core/kv"
-	"github.com/codetrek/haystack/core/kv/pebblekv"
+	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
 )
 
 // StorageVersion names the on-disk KV directory. Bump it on any breaking

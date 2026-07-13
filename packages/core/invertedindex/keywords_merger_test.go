@@ -1,0 +1,1126 @@
+package invertedindex
+
+import (
+	"encoding/binary"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/stretchr/testify/assert"
+)
+
+const (
+	testTable1 = 1
+	testTable2 = 2
+)
+
+// mockBatchWrite implements BatchWrite interface for testing
+type mockBatchWrite struct {
+	deleted     []string
+	writtenKeys []string
+	writtenData [][]int64
+	tableIds    []int
+	keywords    []string
+}
+
+func (m *mockBatchWrite) Delete(key []byte) error {
+	m.deleted = append(m.deleted, string(key))
+	return nil
+}
+
+func (m *mockBatchWrite) Put(key, value []byte) error {
+	m.writtenKeys = append(m.writtenKeys, string(key))
+	return nil
+}
+
+func (m *mockBatchWrite) Commit() error { return nil }
+func (m *mockBatchWrite) Reset()        {}
+func (m *mockBatchWrite) Close() error  { return nil }
+func (m *mockBatchWrite) Count() int32  { return 0 }
+func (m *mockBatchWrite) DeleteRange(start, end []byte) error {
+	return nil
+}
+func (m *mockBatchWrite) DeletePrefix(prefix []byte) error {
+	return nil
+}
+
+// setupTestMocks sets up the mocks used by all rewrite index tests
+func setupTestMocks() func() {
+	// Override the writeKeywordIndex function for testing
+	originalWriteKeywordIndex := writeInvertedIndex
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
+		mockBatch := batch.(*mockBatchWrite)
+		mockBatch.tableIds = append(mockBatch.tableIds, tableId)
+		mockBatch.keywords = append(mockBatch.keywords, keyword)
+		mockBatch.writtenData = append(mockBatch.writtenData, docIDs)
+	}
+
+	// Return restore functions
+	restoreWriteKeywordIndex := func() { writeInvertedIndex = originalWriteKeywordIndex }
+
+	return restoreWriteKeywordIndex
+}
+
+// Helper function to create a new mock batch
+func newMockBatch(db kv.Store) *mockBatchWrite {
+	return &mockBatchWrite{
+		deleted:     []string{},
+		writtenKeys: []string{},
+		writtenData: [][]int64{},
+		tableIds:    []int{},
+		keywords:    []string{},
+	}
+}
+
+// Helper function to verify write operations and document IDs
+func verifyWriteOperations(t *testing.T, mockBatch *mockBatchWrite, index *invertedIndexEntry, expectedWriteCount int, expectedDocIDs int) {
+	t.Helper()
+
+	// Check write calls
+	if len(mockBatch.tableIds) != expectedWriteCount {
+		t.Errorf("Expected %d writes, got %d", expectedWriteCount, len(mockBatch.tableIds))
+	}
+
+	// Check table ID and keyword are correctly passed
+	for i, wsID := range mockBatch.tableIds {
+		if wsID != index.TableId {
+			t.Errorf("Expected table %d, got %d", index.TableId, wsID)
+		}
+		if mockBatch.keywords[i] != index.Keyword {
+			t.Errorf("Expected keyword %s, got %s", index.Keyword, mockBatch.keywords[i])
+		}
+	}
+
+	// For cases with merged data, check unique doc count
+	if len(mockBatch.writtenData) > 0 && expectedDocIDs > 0 {
+		uniqueDocs := make(map[int64]struct{})
+		for _, docs := range mockBatch.writtenData {
+			for _, doc := range docs {
+				uniqueDocs[doc] = struct{}{}
+			}
+		}
+		if len(uniqueDocs) != expectedDocIDs {
+			t.Errorf("Expected %d unique doc IDs, got %d", expectedDocIDs, len(uniqueDocs))
+		}
+	}
+}
+
+// TestRewriteIndexSingleRow tests the case where there's only a single row
+// so no merging should happen
+func TestRewriteIndexSingleRow(t *testing.T) {
+	restoreWriteKeywordIndex := setupTestMocks()
+	defer restoreWriteKeywordIndex()
+
+	// Use actual encoded document IDs
+	encodedValue := "doc1|doc2"
+
+	index := &invertedIndexEntry{
+		TableId: testTable1,
+		Keyword: "keyword1",
+		Rows: []recordRow{
+			{Key: "key1", Value: encodedValue, DocCount: 2},
+		},
+		DocCount: 2,
+	}
+	maxSize := 10
+
+	mockBatch := newMockBatch(nil)
+	mergedCount := rewriteIndex(mockBatch, testCodecIdx, index, maxSize)
+
+	// No operations should be performed
+	if len(mockBatch.deleted) != 0 || len(mockBatch.writtenKeys) != 0 {
+		t.Errorf("Expected no database operations, got %d deletes and %d writes",
+			len(mockBatch.deleted), len(mockBatch.writtenKeys))
+	}
+
+	// Should return original count (1)
+	if mergedCount != 1 {
+		t.Errorf("Expected mergedCount 1, got %d", mergedCount)
+	}
+}
+
+// TestRewriteIndexMultipleRows tests merging multiple rows into one
+func TestRewriteIndexMultipleRows(t *testing.T) {
+	restoreWriteKeywordIndex := setupTestMocks()
+	defer restoreWriteKeywordIndex()
+
+	// Use actual encoded document IDs
+	index := &invertedIndexEntry{
+		TableId: testTable1,
+		Keyword: "keyword1",
+		Rows: []recordRow{
+			{Key: "key1", Value: MakeDocsForKeyword("doc1", "doc2"), DocCount: 2},
+			{Key: "key2", Value: MakeDocsForKeyword("doc3", "doc4"), DocCount: 2},
+			{Key: "key3", Value: MakeDocsForKeyword("doc5", "doc6"), DocCount: 2},
+		},
+		DocCount: 6,
+	}
+	maxSize := 10
+	expectedDeleted := 3
+	expectedWritten := 1
+	expectedDocIDs := 6
+
+	mockBatch := newMockBatch(nil)
+	mergedCount := rewriteIndex(mockBatch, testCodecIdx, index, maxSize)
+
+	// Check deletion count
+	if len(mockBatch.deleted) != expectedDeleted {
+		t.Errorf("Expected %d deletes, got %d", expectedDeleted, len(mockBatch.deleted))
+	}
+
+	// Check write operations
+	verifyWriteOperations(t, mockBatch, index, expectedWritten, expectedDocIDs)
+
+	// Should return merged count (1)
+	if mergedCount != 1 {
+		t.Errorf("Expected mergedCount 1, got %d", mergedCount)
+	}
+}
+
+// TestRewriteIndexWellBatched tests that rows with high doc counts aren't merged
+func TestRewriteIndexWellBatched(t *testing.T) {
+	restoreWriteKeywordIndex := setupTestMocks()
+	defer restoreWriteKeywordIndex()
+
+	// Use actual encoded document IDs
+	index := &invertedIndexEntry{
+		TableId: testTable1,
+		Keyword: "keyword1",
+		Rows: []recordRow{
+			{Key: "key1", Value: "doc1|doc2|doc3|doc4|doc5|doc6|doc7|doc8|doc9|doc10", DocCount: 10},
+			{Key: "key2", Value: "doc11|doc12|doc13|doc14|doc15|doc16|doc17|doc18|doc19|doc20", DocCount: 10},
+		},
+		DocCount: 20,
+	}
+	maxSize := 5
+
+	mockBatch := newMockBatch(nil)
+	mergedCount := rewriteIndex(mockBatch, testCodecIdx, index, maxSize)
+
+	// No operations should be performed
+	if len(mockBatch.deleted) != 0 || len(mockBatch.writtenKeys) != 0 {
+		t.Errorf("Expected no database operations, got %d deletes and %d writes",
+			len(mockBatch.deleted), len(mockBatch.writtenKeys))
+	}
+
+	// Should return original count (2)
+	if mergedCount != 2 {
+		t.Errorf("Expected mergedCount 2, got %d", mergedCount)
+	}
+}
+
+func Doc2ID(doc string) int64 {
+	// Reproduce the historical 8-byte (ASCII '0'-left-padded) docid label and read
+	// it as the big-endian int64 the index now stores. The bytes are identical to
+	// the previous string docid, so persisted encodings are unchanged.
+	if len(doc) > 8 {
+		doc = doc[0:8]
+	}
+	padded := strings.Repeat("0", 8-len(doc)) + doc
+	return int64(binary.BigEndian.Uint64([]byte(padded)))
+}
+
+func MakeDocsForKeyword(docs ...string) string {
+	ids := make([]int64, len(docs))
+	for i, doc := range docs {
+		ids[i] = Doc2ID(doc)
+	}
+	return string(encodeInvertedValue(ids))
+}
+
+// TestRewriteIndexMultipleBatches tests when multiple merge operations are needed
+func TestRewriteIndexMultipleBatches(t *testing.T) {
+	restoreWriteKeywordIndex := setupTestMocks()
+	defer restoreWriteKeywordIndex()
+
+	// Use actual encoded document IDs
+	index := &invertedIndexEntry{
+		TableId: testTable1,
+		Keyword: "keyword1",
+		Rows: []recordRow{
+			{Key: "key1", Value: MakeDocsForKeyword("doc1", "doc2"), DocCount: 2},
+			{Key: "key2", Value: MakeDocsForKeyword("doc3", "doc4"), DocCount: 2},
+			{Key: "key3", Value: MakeDocsForKeyword("doc5", "doc6"), DocCount: 2},
+			{Key: "key4", Value: MakeDocsForKeyword("doc7", "doc8"), DocCount: 2},
+			{Key: "key5", Value: MakeDocsForKeyword("doc9", "doc10"), DocCount: 2},
+		},
+		DocCount: 10,
+	}
+	maxSize := 4
+	// The rewriteIndex function deletes all 5 rows when merging
+	expectedDeleted := 5
+	expectedWritten := 2
+	expectedDocIDs := 10
+
+	mockBatch := newMockBatch(nil)
+	mergedCount := rewriteIndex(mockBatch, testCodecIdx, index, maxSize)
+
+	// Check deletion count
+	if len(mockBatch.deleted) != expectedDeleted {
+		t.Errorf("Expected %d deletes, got %d", expectedDeleted, len(mockBatch.deleted))
+	}
+
+	// Check write operations
+	verifyWriteOperations(t, mockBatch, index, expectedWritten, expectedDocIDs)
+
+	// Should return merged count (2)
+	if mergedCount != 2 {
+		t.Errorf("Expected mergedCount 2, got %d", mergedCount)
+	}
+}
+
+// mockDB implements a mock database for testing
+type mockDB struct {
+	scanRangeFunc func(start, end []byte, fn func(k, v []byte) bool)
+	batch         func() kv.Batch
+	batchCommits  int
+}
+
+func (m *mockDB) ScanRange(start, end []byte, fn func(k, v []byte) bool) error {
+	if m.scanRangeFunc != nil {
+		m.scanRangeFunc(start, end, fn)
+	}
+
+	return nil
+}
+
+func (m *mockDB) Commit() error {
+	m.batchCommits++
+	return nil
+}
+
+func (m *mockDB) IsClosed() bool {
+	return false
+}
+
+func (m *mockDB) Close() error {
+	return nil
+}
+
+func (d *mockDB) NewBatch(int32) kv.Batch {
+	if d.batch != nil {
+		return d.batch()
+	}
+	return newMockBatch(nil)
+}
+
+func (m *mockDB) Delete(key []byte) error {
+	return nil
+}
+func (m *mockDB) Put(key, value []byte) error {
+	return nil
+}
+
+func (m *mockDB) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (d *mockDB) Scan(prefix []byte, cb func(key, value []byte) bool) error {
+	return nil
+}
+
+func (d *mockDB) ScheduleCompact() {
+}
+
+func (d *mockDB) GetIncrementalId(key []byte) (int, error) {
+	return 0, nil
+}
+
+// newTestIndexWithDB creates a minimal *Index backed by the given store.
+// It does NOT start the flush goroutine or KeywordsMerger — suitable for
+// unit tests that exercise mergeKeywordsIndex directly.
+func newTestIndexWithDB(store kv.Store) *Index {
+	return &Index{
+		db:             store,
+		pendingWrites:  map[int]*pendingTableWrites{},
+		pendingDeletes: map[int]*pendingTableWrites{},
+		opts:           Options{},
+		keyTypeRow:     DefaultKeyTypeRow,
+		keyTypeTable:   DefaultKeyTypeTable,
+		keyTypeNextId:  DefaultKeyTypeNextId,
+	}
+}
+
+// TestMergeKeywordsIndexEmptyInput tests merging with an empty initial state
+func TestMergeKeywordsIndexEmptyInput(t *testing.T) {
+	// Create a mock database for testing
+	mdb := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			// Empty database, no keys to scan
+		},
+	}
+	idx := newTestIndexWithDB(mdb)
+
+	// Set up test data
+	input := merging{
+		NextIter:        string(DefaultKeyTypeRow),
+		TotalKeywords:   0,
+		TotalRowsBefore: 0,
+		TotalRowsAfter:  0,
+	}
+
+	// Run the function
+	result := idx.mergeKeywordsIndex(input, 10)
+
+	// Validate results
+	if result.NextIter != "" {
+		t.Errorf("Expected NextIter to be empty, got %q", result.NextIter)
+	}
+	if result.TotalKeywords != 0 {
+		t.Errorf("Expected TotalKeywords to be 0, got %d", result.TotalKeywords)
+	}
+	if result.TotalRowsBefore != 0 {
+		t.Errorf("Expected TotalRowsBefore to be 0, got %d", result.TotalRowsBefore)
+	}
+	if result.TotalRowsAfter != 0 {
+		t.Errorf("Expected TotalRowsAfter to be 0, got %d", result.TotalRowsAfter)
+	}
+}
+
+// TestMergeKeywordsIndexSingleTable tests merging keywords from a single table
+func TestMergeKeywordsIndexSingleTable(t *testing.T) {
+	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := newBatch
+	defer func() {
+		writeInvertedIndex = originalWriteKeywordIndex
+		newBatch = originalNewBatch
+	}()
+
+	writtenTables := []int{}
+	writtenKeywords := []string{}
+	writtenDocIDs := [][]int64{}
+
+	batch := newMockBatch(nil)
+	// Mock only the writeKeywordIndex function
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
+		writtenTables = append(writtenTables, tableId)
+		writtenKeywords = append(writtenKeywords, keyword)
+		writtenDocIDs = append(writtenDocIDs, docIDs)
+	}
+
+	// Mock database with test data - using real key/value formats
+	mdb := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			// Create real formatted keys and values
+			keys := [][]byte{
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3, 0),
+			}
+			values := []string{
+				MakeDocsForKeyword("doc1", "doc2"),
+				MakeDocsForKeyword("doc3", "doc4", "doc5"),
+			}
+
+			for i, key := range keys {
+				if !fn(key, []byte(values[i])) {
+					return
+				}
+			}
+		},
+		batch: func() kv.Batch {
+			return batch
+		},
+	}
+
+	idx := newTestIndexWithDB(mdb)
+
+	// Set up test data
+	input := merging{
+		NextIter:        string(DefaultKeyTypeRow),
+		TotalKeywords:   0,
+		TotalRowsBefore: 0,
+		TotalRowsAfter:  0,
+	}
+
+	// Run function
+	result := idx.mergeKeywordsIndex(input, 6)
+
+	// Validate results
+	if result.NextIter != "" {
+		t.Errorf("Expected NextIter to be empty, got %q", result.NextIter)
+	}
+	if result.TotalKeywords != 1 {
+		t.Errorf("Expected TotalKeywords to be 1, got %d", result.TotalKeywords)
+	}
+	if result.TotalRowsBefore != 2 {
+		t.Errorf("Expected TotalRowsBefore to be 2, got %d", result.TotalRowsBefore)
+	}
+	if result.TotalRowsAfter != 1 {
+		t.Errorf("Expected TotalRowsAfter to be 1, got %d", result.TotalRowsAfter)
+	}
+
+	// Validate writes
+	if len(writtenTables) != 1 {
+		t.Errorf("Expected 1 table write, got %d", len(writtenTables))
+	} else if writtenTables[0] != testTable1 {
+		t.Errorf("Expected table 'table1', got %q", writtenTables[0])
+	}
+
+	if len(writtenKeywords) != 1 {
+		t.Errorf("Expected 1 keyword write, got %d", len(writtenKeywords))
+	} else if writtenKeywords[0] != "keyword1" {
+		t.Errorf("Expected keyword 'keyword1', got %q", writtenKeywords[0])
+	}
+
+	if len(batch.deleted) != 2 {
+		t.Errorf("Expected 2 deleted keys, got %d", len(batch.deleted))
+	}
+
+	// Check if we have all expected doc IDs
+	if len(writtenDocIDs) != 1 {
+		t.Errorf("Expected 1 docID group, got %d", len(writtenDocIDs))
+	} else {
+		uniqueDocs := make(map[int64]struct{})
+		for _, docID := range writtenDocIDs[0] {
+			uniqueDocs[docID] = struct{}{}
+		}
+
+		if len(uniqueDocs) != 5 {
+			t.Errorf("Expected 5 unique doc IDs, got %d", len(uniqueDocs))
+		}
+
+		expectedDocs := []int64{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
+		for _, doc := range expectedDocs {
+			if _, ok := uniqueDocs[doc]; !ok {
+				t.Errorf("Expected to find doc ID %q but it was missing", doc)
+			}
+		}
+	}
+}
+
+// TestMergeKeywordsIndexMultipleTables tests merging keywords from multiple tables
+func TestMergeKeywordsIndexMultipleTables(t *testing.T) {
+	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := newBatch
+	defer func() {
+		writeInvertedIndex = originalWriteKeywordIndex
+		newBatch = originalNewBatch
+	}()
+
+	// Track writes by table
+	writtenData := make(map[int]map[string][]int64) // tableId -> keyword -> docIDs
+	deletedKeys := []string{}
+
+	// Create mock batch
+	mockBatch := &struct {
+		kv.Batch
+	}{
+		Batch: &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error {
+				deletedKeys = append(deletedKeys, string(key))
+				return nil
+			},
+			putFunc: func(key, value []byte) error {
+				return nil
+			},
+			commitFunc: func() error {
+				return nil
+			},
+		},
+	}
+
+	// Mock only the writeKeywordIndex function
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
+		if _, ok := writtenData[tableId]; !ok {
+			writtenData[tableId] = make(map[string][]int64)
+		}
+		writtenData[tableId][keyword] = docIDs
+	}
+
+	newBatch = func(db kv.Store) kv.Batch {
+		return mockBatch
+	}
+
+	// Mock database with test data for multiple tables - using real key/value formats
+	mdb := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			// Create real formatted keys and values
+			keys := [][]byte{
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3, 0),
+				testCodecIdx.encodeInvertedKey(testTable2, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable2, "keyword1", 3, 0),
+			}
+			values := []string{
+				MakeDocsForKeyword("doc1", "doc2"),
+				MakeDocsForKeyword("doc3", "doc4", "doc5"),
+				MakeDocsForKeyword("doc6", "doc7"),
+				MakeDocsForKeyword("doc8", "doc9", "doc10"),
+			}
+
+			for i, key := range keys {
+				if !fn([]byte(key), []byte(values[i])) {
+					return
+				}
+			}
+		},
+	}
+
+	idx := newTestIndexWithDB(mdb)
+
+	// Set up test data
+	input := merging{
+		NextIter:        string(DefaultKeyTypeRow),
+		TotalKeywords:   0,
+		TotalRowsBefore: 0,
+		TotalRowsAfter:  0,
+	}
+
+	// Run function
+	result := idx.mergeKeywordsIndex(input, 6)
+
+	// Validate results
+	if result.NextIter != "" {
+		t.Errorf("Expected NextIter to be empty, got %q", result.NextIter)
+	}
+	if result.TotalKeywords != 2 {
+		t.Errorf("Expected TotalKeywords to be 2, got %d", result.TotalKeywords)
+	}
+	if result.TotalRowsBefore != 4 {
+		t.Errorf("Expected TotalRowsBefore to be 4, got %d", result.TotalRowsBefore)
+	}
+	if result.TotalRowsAfter != 2 {
+		t.Errorf("Expected TotalRowsAfter to be 2, got %d", result.TotalRowsAfter)
+	}
+
+	// Validate writes
+	if len(writtenData) != 2 {
+		t.Errorf("Expected writes for 2 tables, got %d", len(writtenData))
+	}
+
+	// Check table1 data
+	if ws1Data, ok := writtenData[testTable1]; !ok {
+		t.Errorf("Expected data for table1 but found none")
+	} else {
+		if len(ws1Data) != 1 {
+			t.Errorf("Expected 1 keyword for table1, got %d", len(ws1Data))
+		}
+
+		if docs, ok := ws1Data["keyword1"]; !ok {
+			t.Errorf("Expected keyword1 data for table1 but found none")
+		} else {
+			uniqueDocs := make(map[int64]struct{})
+			for _, doc := range docs {
+				uniqueDocs[doc] = struct{}{}
+			}
+
+			if len(uniqueDocs) != 5 {
+				t.Errorf("Expected 5 unique docs for table1, got %d", len(uniqueDocs))
+			}
+
+			expectedDocs := []int64{Doc2ID("doc1"), Doc2ID("doc2"), Doc2ID("doc3"), Doc2ID("doc4"), Doc2ID("doc5")}
+			for _, doc := range expectedDocs {
+				if _, ok := uniqueDocs[doc]; !ok {
+					t.Errorf("Expected doc %d in table1 but it was missing", doc)
+				}
+			}
+		}
+	}
+
+	// Check table2 data
+	if ws2Data, ok := writtenData[testTable2]; !ok {
+		t.Errorf("Expected data for table2 but found none")
+	} else {
+		if len(ws2Data) != 1 {
+			t.Errorf("Expected 1 keyword for table2, got %d", len(ws2Data))
+		}
+
+		if docs, ok := ws2Data["keyword1"]; !ok {
+			t.Errorf("Expected keyword1 data for table2 but found none")
+		} else {
+			uniqueDocs := make(map[int64]struct{})
+			for _, doc := range docs {
+				uniqueDocs[doc] = struct{}{}
+			}
+
+			if len(uniqueDocs) != 5 {
+				t.Errorf("Expected 5 unique docs for table2, got %d", len(uniqueDocs))
+			}
+
+			expectedDocs := []int64{Doc2ID("doc6"), Doc2ID("doc7"), Doc2ID("doc8"), Doc2ID("doc9"), Doc2ID("doc10")}
+			for _, doc := range expectedDocs {
+				if _, ok := uniqueDocs[doc]; !ok {
+					t.Errorf("Expected doc %d in table2 but it was missing", doc)
+				}
+			}
+		}
+	}
+
+	// Check deleted keys
+	if len(deletedKeys) != 4 {
+		t.Errorf("Expected 4 deleted keys, got %d", len(deletedKeys))
+	}
+}
+
+// For compatibility with mockBatchWrite in existing tests
+type mockBatchWriteWithFuncs struct {
+	deleteFunc func(key []byte) error
+	putFunc    func(key, value []byte) error
+	commitFunc func() error
+}
+
+func (m *mockBatchWriteWithFuncs) Delete(key []byte) error {
+	if m.deleteFunc != nil {
+		return m.deleteFunc(key)
+	}
+	return nil
+}
+
+func (m *mockBatchWriteWithFuncs) Put(key, value []byte) error {
+	if m.putFunc != nil {
+		return m.putFunc(key, value)
+	}
+	return nil
+}
+
+func (m *mockBatchWriteWithFuncs) Commit() error {
+	if m.commitFunc != nil {
+		return m.commitFunc()
+	}
+	return nil
+}
+
+func (m *mockBatchWriteWithFuncs) Reset() {}
+
+func (m *mockBatchWriteWithFuncs) Close() error {
+	return nil
+}
+func (m *mockBatchWriteWithFuncs) Count() int32 { return 0 }
+
+func (m *mockBatchWriteWithFuncs) DeleteRange(start, end []byte) error {
+	return nil
+}
+
+func (m *mockBatchWriteWithFuncs) DeletePrefix(prefix []byte) error {
+	return nil
+}
+
+// TestMergeKeywordsIndexTimeout tests the timeout behavior of mergeKeywordsIndex
+func TestMergeKeywordsIndexTimeout(t *testing.T) {
+	originalWriteKeywordIndex := writeInvertedIndex
+	originalNewBatch := newBatch
+	defer func() {
+		writeInvertedIndex = originalWriteKeywordIndex
+		newBatch = originalNewBatch
+	}()
+
+	// Create a lot of entries with properly formatted keys to trigger timeout
+	keyCount := 1000
+	keys := make([][]byte, keyCount)
+	values := make([]string, keyCount)
+
+	// Generate properly formatted keys and values
+	for i := 0; i < keyCount; i++ {
+		keyword := "keyword" + string(rune('a'+i%26))
+		keys[i] = testCodecIdx.encodeInvertedKey(testTable1, keyword, 2, 0)
+		values[i] = fmt.Sprintf("doc%d|doc%d", i*2, i*2+1)
+	}
+
+	// Set up scanner to process a lot of entries
+	var iterationCount int
+	mdb := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			// Process items slowly to trigger timeout
+			for i := 0; i < 100; i++ {
+				if iterationCount >= len(keys) {
+					break
+				}
+
+				key := keys[iterationCount]
+				value := values[iterationCount]
+				iterationCount++
+
+				// Sleep a tiny bit to ensure timeout triggers
+				time.Sleep(5 * time.Millisecond)
+
+				if !fn(key, []byte(value)) {
+					break
+				}
+			}
+		},
+	}
+
+	// Mock only the writeKeywordIndex function
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
+		// No-op for this test
+	}
+
+	newBatch = func(db kv.Store) kv.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	idx := newTestIndexWithDB(mdb)
+
+	// Run the function
+	input := merging{
+		NextIter:        string(DefaultKeyTypeRow),
+		TotalKeywords:   0,
+		TotalRowsBefore: 0,
+		TotalRowsAfter:  0,
+	}
+
+	result := idx.mergeKeywordsIndex(input, 5)
+
+	// Verify we hit the timeout (NextIter should be non-empty)
+	if result.NextIter == "" {
+		t.Errorf("Expected timeout with non-empty NextIter, but got empty NextIter")
+	}
+
+	// We should have some processed keywords
+	if result.TotalKeywords == 0 {
+		t.Errorf("Expected non-zero TotalKeywords after timeout")
+	}
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// ---------------------------------------------------------------------------
+// mergeKeywordTask.Run – cover both branches (pendingWrites empty / non-empty)
+// ---------------------------------------------------------------------------
+
+func TestMergeKeywordTask_Run_NoPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// pendingWrites is reset to empty in setupTestEnv
+	task := &mergeKeywordTask{
+		idx: env.idx,
+		merging: merging{
+			NextIter: string(DefaultKeyTypeRow),
+		},
+	}
+
+	err := task.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be false")
+	}
+}
+
+func TestMergeKeywordTask_Run_WithPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Add a pending write to trigger the waiting path
+	env.idx.pendingWrites[1] = &pendingTableWrites{}
+
+	task := &mergeKeywordTask{
+		idx: env.idx,
+		merging: merging{
+			NextIter: string(DefaultKeyTypeRow),
+		},
+	}
+
+	err := task.Run()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be true")
+	}
+
+	// Clean up
+	env.idx.pendingWrites = map[int]*pendingTableWrites{}
+}
+
+// ---------------------------------------------------------------------------
+// KeywordsMerger.GetWait – verify it returns the mergerDone channel
+// ---------------------------------------------------------------------------
+
+func TestKeywordsMerger_GetWait(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &keywordsMerger{idx: env.idx}
+	km.Start()
+
+	ch := km.GetWait()
+	if ch == nil {
+		t.Fatal("expected non-nil channel from GetWait")
+	}
+
+	km.Shutdown()
+
+	select {
+	case <-ch:
+		// success — channel closed after shutdown
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetWait channel not closed after shutdown")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// KeywordsMerger.run – exercise the merge loop via mpsc queue
+// This test creates a KeywordsMerger, immediately shuts it down,
+// and verifies the shutdown path. The 300s initial timer makes it
+// impractical to test the merge-loop path without modifying prod code.
+// ---------------------------------------------------------------------------
+
+func TestKeywordsMerger_StartShutdownWait(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	km := &keywordsMerger{idx: env.idx}
+	km.Start()
+
+	// Verify mergerDone is not closed yet
+	select {
+	case <-km.mergerDone:
+		t.Fatal("mergerDone should not be closed before shutdown")
+	default:
+		// expected
+	}
+
+	km.Shutdown()
+	km.Wait()
+}
+
+// TestKeywordsMerger_RunMergeWithData exercises the merge log path
+// (lines 105-111) by providing mock DB data that triggers actual row merging.
+func TestKeywordsMerger_RunMergeWithData(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Save and mock writeInvertedIndex + newBatch so mergeKeywordsIndex works.
+	origWrite := writeInvertedIndex
+	origBatch := newBatch
+	defer func() {
+		writeInvertedIndex = origWrite
+		newBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {
+		// no-op: we don't need to persist data
+	}
+	newBatch = func(db kv.Store) kv.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	// Provide mergeable data: two rows for "keyword1" that will be merged.
+	scanCalled := false
+	mockStore := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			if scanCalled {
+				return // second call returns nothing (end of DB)
+			}
+			scanCalled = true
+			keys := [][]byte{
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 2, 0),
+				testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 3, 0),
+			}
+			values := []string{
+				MakeDocsForKeyword("doc1", "doc2"),
+				MakeDocsForKeyword("doc3", "doc4", "doc5"),
+			}
+			for i, key := range keys {
+				if !fn(key, []byte(values[i])) {
+					return
+				}
+			}
+		},
+	}
+
+	// Create a new index using the mock store; use env.idx.q so RunTask works.
+	testIdx := &Index{
+		db:             mockStore,
+		q:              env.idx.q,
+		pendingWrites:  map[int]*pendingTableWrites{},
+		pendingDeletes: map[int]*pendingTableWrites{},
+		opts:           Options{},
+		keyTypeRow:     DefaultKeyTypeRow,
+		keyTypeTable:   DefaultKeyTypeTable,
+		keyTypeNextId:  DefaultKeyTypeNextId,
+	}
+
+	km := &keywordsMerger{idx: testIdx, InitialDelay: 10 * time.Millisecond}
+	km.Start()
+
+	// Wait for the merge loop to run at least once.
+	time.Sleep(200 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// After merging, TotalRowsBefore should be 2 and TotalRowsAfter 1
+	// (two rows merged into one), so MergedRowCount() > 0.
+	if km.merging.MergedRowCount() <= 0 {
+		t.Errorf("expected MergedRowCount > 0, got %d", km.merging.MergedRowCount())
+	}
+}
+
+// TestKeywordsMerger_NewScanAfterComplete exercises lines 88-94:
+// after a full scan completes (NextIter=""), the next timer tick
+// resets NextIter and starts a new scan.
+func TestKeywordsMerger_NewScanAfterComplete(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	origWrite := writeInvertedIndex
+	origBatch := newBatch
+	defer func() {
+		writeInvertedIndex = origWrite
+		newBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {}
+	newBatch = func(db kv.Store) kv.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	// Empty DB: first scan completes immediately (NextIter becomes "").
+	// With CompletedDelay=10ms, the second timer tick fires quickly and
+	// enters the NextIter=="" branch (lines 88-94), resetting for a new scan.
+	scanCount := 0
+	mockStore := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			scanCount++
+		},
+	}
+
+	testIdx := &Index{
+		db:             mockStore,
+		q:              env.idx.q,
+		pendingWrites:  map[int]*pendingTableWrites{},
+		pendingDeletes: map[int]*pendingTableWrites{},
+		opts:           Options{},
+		keyTypeRow:     DefaultKeyTypeRow,
+		keyTypeTable:   DefaultKeyTypeTable,
+		keyTypeNextId:  DefaultKeyTypeNextId,
+	}
+
+	km := &keywordsMerger{
+		idx:            testIdx,
+		InitialDelay:   10 * time.Millisecond,
+		CompletedDelay: 10 * time.Millisecond,
+	}
+	km.Start()
+
+	// Wait enough for at least two full scan cycles.
+	time.Sleep(300 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// scanCount >= 2 means the merger re-entered the loop and started
+	// a new scan (lines 88-94 executed).
+	assert.True(t, scanCount >= 2,
+		"expected at least 2 scan cycles (new scan after complete), got %d", scanCount)
+}
+
+// TestMergeKeywordsIndex_WellBatchedSkip exercises lines 210-215:
+// when a keyword row has doccount > maxKeywordIndexSize/2, it is
+// considered "well batched" and skipped without merging.
+func TestMergeKeywordsIndex_WellBatchedSkip(t *testing.T) {
+	origWrite := writeInvertedIndex
+	origBatch := newBatch
+	defer func() {
+		writeInvertedIndex = origWrite
+		newBatch = origBatch
+	}()
+
+	writeInvertedIndex = func(idx *Index, batch kv.Batch, tableId int, keyword string, docIDs []int64, tick int64) {}
+	newBatch = func(db kv.Store) kv.Batch {
+		return &mockBatchWriteWithFuncs{
+			deleteFunc: func(key []byte) error { return nil },
+			putFunc:    func(key, value []byte) error { return nil },
+			commitFunc: func() error { return nil },
+		}
+	}
+
+	maxSize := 10 // maxKeywordIndexSize = 10, so threshold = 10/2 = 5
+
+	// Create a row with doccount=6 (> maxSize/2=5) → well batched, should be skipped.
+	mdb := &mockDB{
+		scanRangeFunc: func(start, end []byte, fn func(k, v []byte) bool) {
+			key := testCodecIdx.encodeInvertedKey(testTable1, "keyword1", 6, 0) // doccount=6 > 5
+			value := MakeDocsForKeyword("d1", "d2", "d3", "d4", "d5", "d6")
+			fn(key, []byte(value))
+		},
+	}
+
+	idx := newTestIndexWithDB(mdb)
+
+	input := merging{
+		NextIter: string(DefaultKeyTypeRow),
+	}
+
+	result := idx.mergeKeywordsIndex(input, maxSize)
+
+	// The row should be counted but NOT merged (skipped as well-batched).
+	// TotalRowsBefore and TotalRowsAfter should be equal (no reduction).
+	assert.Equal(t, result.TotalRowsBefore, result.TotalRowsAfter,
+		"well-batched rows should not be merged, row counts should be equal")
+	assert.Equal(t, 0, result.MergedRowCount(), "no rows should be merged")
+}
+
+// TestKeywordsMerger_RunWithPendingWrites exercises the WaitingForFlushCache
+// branch inside run() by having pending writes when the merge task runs.
+func TestKeywordsMerger_RunWithPendingWrites(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	// Insert pending writes so the merge task sees them and sets WaitingForFlushCache.
+	pw := env.idx.getPendingWrite(1)
+	pw.InvertedIndex["testword"] = relatedDocs{
+		DocIds:    []int64{Doc2ID("doc1")},
+		UpdatedAt: time.Now().UnixNano(),
+	}
+
+	km := &keywordsMerger{idx: env.idx, InitialDelay: 10 * time.Millisecond}
+	km.Start()
+
+	// Let the timer fire. The merge task should see pending writes and
+	// set WaitingForFlushCache, causing nextDelay = 5s.
+	time.Sleep(100 * time.Millisecond)
+
+	km.Shutdown()
+	km.Wait()
+
+	// Clean up
+	delete(env.idx.pendingWrites, 1)
+}
+
+// ---------------------------------------------------------------------------
+// mergeKeywordTask.Run via mpscQueue – exercises Run through the queue
+// ---------------------------------------------------------------------------
+
+func TestMergeKeywordTask_RunViaQueue(t *testing.T) {
+	env := setupTestEnv(t)
+	defer env.teardown()
+
+	task := &mergeKeywordTask{
+		idx: env.idx,
+		merging: merging{
+			NextIter: string(DefaultKeyTypeRow),
+		},
+	}
+
+	err := env.idx.q.RunTask(task)
+	if err != nil {
+		t.Fatalf("unexpected error from RunTask: %v", err)
+	}
+	if task.merging.WaitingForFlushCache {
+		t.Error("expected WaitingForFlushCache to be false with empty pendingWrites")
+	}
+}

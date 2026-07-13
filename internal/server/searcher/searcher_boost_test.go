@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/codetrek/haystack/core/engine"
-	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/packages/core/engine"
+	"github.com/codetrek/haystack/packages/core/invertedindex"
 	"github.com/codetrek/haystack/internal/shared/types"
 	"github.com/stretchr/testify/assert"
 )
