@@ -89,6 +89,33 @@ func TestOpenWithOptions_WALModes(t *testing.T) {
 	}
 }
 
+// TestOpenWithOptions_MemTable covers the memtable sizing knobs: an explicit
+// larger memtable + threshold opens and round-trips, the zero value falls back
+// to the built-in default, and a sub-2 threshold is clamped to 2 (Pebble
+// requires >= 2). All go through the kv.Store surface.
+func TestOpenWithOptions_MemTable(t *testing.T) {
+	cases := []struct {
+		name string
+		opts OpenOptions
+	}{
+		{"explicit_16MiB_stop4", OpenOptions{CacheSize: 1 << 20, MemTableSize: 16 << 20, MemTableStopWritesThreshold: 4}},
+		{"zero_defaults", OpenOptions{CacheSize: 1 << 20}},
+		{"stop_below_2_clamped", OpenOptions{CacheSize: 1 << 20, MemTableSize: 8 << 20, MemTableStopWritesThreshold: 1}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			db, err := OpenWithOptions(t.TempDir()+"/db", c.opts)
+			assert.NoError(t, err)
+			defer db.Close()
+
+			assert.NoError(t, db.Put([]byte("k"), []byte("v")))
+			got, err := db.Get([]byte("k"))
+			assert.NoError(t, err)
+			assert.Equal(t, []byte("v"), got)
+		})
+	}
+}
+
 func TestOpen_And_BasicOps(t *testing.T) {
 	tmpDir := t.TempDir()
 	db, err := Open(tmpDir+"/testdb", 4*1024*1024)
