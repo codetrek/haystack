@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 func openTestStore(t *testing.T, dir string) *Store {

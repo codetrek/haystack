@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // merge_test.go — P8 (design §6 merger + §8 remap; task T6) acceptance tests.

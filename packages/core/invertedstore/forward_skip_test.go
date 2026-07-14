@@ -3,7 +3,7 @@ package invertedstore
 import (
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // newForwardSkipStore mirrors newMergeStore: a started queue + Open + one table (AutoMerge off).

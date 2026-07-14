@@ -3,9 +3,9 @@ package server
 import (
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // TestInvertedIndexInit_PassesRecommendedBound guards the PRODUCTION wiring: the

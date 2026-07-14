@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	"github.com/codetrek/haystack/packages/core/documents"
+	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/server/internal/core/symbols"
 	"github.com/codetrek/haystack/server/internal/core/workspace"
 	"github.com/codetrek/haystack/server/internal/shared/running"

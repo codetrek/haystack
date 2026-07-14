@@ -6,7 +6,7 @@ import (
 	"sync"
 	"unicode"
 
-	"github.com/codetrek/haystack/packages/core/tokenizer/fstcjk"
+	"github.com/codetrek/haystack/core/tokenizer/fstcjk"
 )
 
 // CJKTokenizer handles tokenization of CJK (Chinese, Japanese, Korean) text.

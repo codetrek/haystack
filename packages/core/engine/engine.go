@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/codetrek/haystack/packages/core/documents"
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/tokenizer"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/tokenizer"
 )
 
 // Options controls the matching behaviour of an Engine.

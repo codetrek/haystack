@@ -3,7 +3,7 @@ package invertedstore
 import (
 	"strings"
 
-	"github.com/codetrek/haystack/packages/core/invertedindex"
+	"github.com/codetrek/haystack/core/invertedindex"
 )
 
 // SearchResult is the membership result of a Search/GetDocs: the live docids whose keyword(s)

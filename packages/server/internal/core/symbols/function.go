@@ -6,9 +6,9 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/codetrek/haystack/packages/core/idtable"
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/tokenizer"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/tokenizer"
 	"github.com/codetrek/haystack/server/internal/conf"
 )
 

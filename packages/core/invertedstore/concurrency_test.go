@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // concurrency_test.go — P9 (design §6 Concurrency model; task T8) acceptance tests.

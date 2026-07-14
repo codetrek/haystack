@@ -3,7 +3,7 @@ package invertedstore
 import (
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // openAt opens a store at a GIVEN dir (newUpdateStore uses a fresh TempDir, so it can't reopen).

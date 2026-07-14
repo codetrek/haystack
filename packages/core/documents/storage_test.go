@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/queue"
 	"github.com/stretchr/testify/assert"
 )
 

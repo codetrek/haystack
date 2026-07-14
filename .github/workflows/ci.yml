@@ -43,7 +43,7 @@ jobs:
         run: go version
 
       - name: Build
-        working-directory: core
+        working-directory: packages/core
         run: go build ./...
 
       - name: Coverage gate (Linux)
@@ -56,7 +56,7 @@ jobs:
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
         shell: bash
-        working-directory: core
+        working-directory: packages/core
         run: |
           # -v prints each case's execution time. Show only result lines, and
           # drop the 0.00s cases (noise) — keep all FAILs and the full log on

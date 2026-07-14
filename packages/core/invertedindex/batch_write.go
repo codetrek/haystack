@@ -1,7 +1,7 @@
 package invertedindex
 
 import (
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 const MaxBatchSize = 512

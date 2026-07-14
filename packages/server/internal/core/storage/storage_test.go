@@ -5,10 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/collection"
-	"github.com/codetrek/haystack/packages/core/documents"
-	"github.com/codetrek/haystack/packages/core/idtable"
-	"github.com/codetrek/haystack/packages/core/invertedindex"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
 	"github.com/stretchr/testify/assert"
 )
 

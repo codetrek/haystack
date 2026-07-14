@@ -11,7 +11,7 @@ import (
 	"time"
 
 	pebbledb "github.com/cockroachdb/pebble"
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

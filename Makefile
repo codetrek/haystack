@@ -25,7 +25,7 @@ build:
 
 test:
 	@echo "Running tests..."
-	@go test ./... -count=1
+	@go test ./packages/core/... ./packages/server/... -count=1
 
 coverage:
 	@echo "Running tests with coverage..."
@@ -40,14 +40,10 @@ clean:
 	@echo "Cleaning..."
 	@$(RM_RF)
 
-gen-testdata:
-	@echo "Generating test fixtures (this takes ~15 min)..."
-	@cd packages/core && go run -tags tools ./cmd/gen-testdata/
-
 DOCKER_TEST_IMAGE=haystack-test
 
 test-docker-build:
-	@docker build -f Dockerfile.test -t $(DOCKER_TEST_IMAGE) .
+	@docker build -f ./packages/server/Dockerfile.test -t $(DOCKER_TEST_IMAGE) .
 
 test-docker-ensure:
 	@if [ -z "$$(docker images -q $(DOCKER_TEST_IMAGE) 2>/dev/null)" ]; then \

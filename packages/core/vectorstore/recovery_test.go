@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // reopenStore closes s and reopens a fresh Store over the SAME dir + KV (recovery).

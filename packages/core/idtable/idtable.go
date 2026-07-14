@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // Default key-type prefix bytes (match the historical on-disk layout for on-disk compatibility).

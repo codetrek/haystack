@@ -5,11 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/documents"
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/queue"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

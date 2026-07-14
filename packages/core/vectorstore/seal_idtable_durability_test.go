@@ -5,7 +5,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // reopenUnclean simulates a crash: it opens a NEW Store over the SAME dir + KV

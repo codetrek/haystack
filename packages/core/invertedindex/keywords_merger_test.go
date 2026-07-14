@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 	"github.com/stretchr/testify/assert"
 )
 

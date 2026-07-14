@@ -1,0 +1,9 @@
+FROM golang:1.23
+
+WORKDIR /app
+
+# Copy dependency files only (source mounted at runtime)
+COPY go.mod go.sum ./
+RUN go mod download
+
+CMD ["bash", "-c", "ulimit -u 256 && go test ./... -count=1 -timeout 5m"]

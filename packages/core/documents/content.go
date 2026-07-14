@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/codetrek/haystack/packages/core/tokenizer"
+	"github.com/codetrek/haystack/core/tokenizer"
 
 	"github.com/gabriel-vasile/mimetype"
 )

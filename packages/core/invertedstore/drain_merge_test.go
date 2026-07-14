@@ -3,7 +3,7 @@ package invertedstore
 import (
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // TestDrainMerge_PendingSignalMergesAtStop deterministically covers drainMerge's signal-pending

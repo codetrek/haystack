@@ -10,13 +10,13 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/collection"
-	"github.com/codetrek/haystack/packages/core/documents"
-	"github.com/codetrek/haystack/packages/core/engine"
-	"github.com/codetrek/haystack/packages/core/idtable"
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/collection"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/engine"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 func TestReadmeExample(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/documents"
+	"github.com/codetrek/haystack/core/documents"
 	"github.com/codetrek/haystack/server/internal/core/workspace"
 )
 

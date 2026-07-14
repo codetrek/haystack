@@ -4,7 +4,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // updateIndex updates the keyword index in write cache.

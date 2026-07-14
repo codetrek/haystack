@@ -1,4 +1,4 @@
-module github.com/codetrek/haystack/packages/core
+module github.com/codetrek/haystack/core
 
 // no toolchain pin: keep this library buildable by consumers on go1.23+
 go 1.23.0

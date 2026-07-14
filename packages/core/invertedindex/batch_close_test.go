@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // recStore wraps a real kv.Store, delegating every method EXCEPT NewBatch, which

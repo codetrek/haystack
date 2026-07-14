@@ -10,9 +10,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/codetrek/haystack/packages/core/idtable"
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 	bolt "go.etcd.io/bbolt"
 )
 

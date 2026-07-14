@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/tokenizer"
+	"github.com/codetrek/haystack/core/tokenizer"
 	"github.com/stretchr/testify/assert"
 )
 

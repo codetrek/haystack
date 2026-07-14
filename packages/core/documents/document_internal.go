@@ -3,7 +3,7 @@ package documents
 import (
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // saveDocument persists a document's metadata and path to the batch.

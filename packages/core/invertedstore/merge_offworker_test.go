@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // merge_offworker_test.go — item A (merge COMPUTE off the worker; spec Task 4 Steps 5–6) acceptance

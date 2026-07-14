@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/idtable"
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/idtable"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // CollectionInfo holds per-collection metadata persisted in the key-value store.

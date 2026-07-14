@@ -4,7 +4,7 @@ import (
 	"log"
 	"sync"
 
-	"github.com/codetrek/haystack/packages/core/collection"
+	"github.com/codetrek/haystack/core/collection"
 	"github.com/codetrek/haystack/server/internal/utils"
 )
 

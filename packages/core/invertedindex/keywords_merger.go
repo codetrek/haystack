@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/kv"
 	"github.com/dustin/go-humanize"
 )
 

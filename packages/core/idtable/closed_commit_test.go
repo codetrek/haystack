@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 	"github.com/stretchr/testify/require"
 )
 

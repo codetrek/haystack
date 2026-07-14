@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	gitutils "github.com/codetrek/haystack/packages/core/utils/git"
+	gitutils "github.com/codetrek/haystack/core/utils/git"
 	"github.com/codetrek/haystack/server/internal/core/workspace"
 	"github.com/codetrek/haystack/server/internal/shared/running"
 	"github.com/codetrek/haystack/server/internal/shared/types"

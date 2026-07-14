@@ -23,7 +23,7 @@ Each layer is instance-based, composes the layer below, and can be used on its o
 ## Install
 
 ```
-go get github.com/codetrek/haystack/packages/core
+go get github.com/codetrek/haystack/core
 ```
 
 Requires Go 1.23+.
@@ -32,13 +32,13 @@ Requires Go 1.23+.
 
 ```go
 import (
-    "github.com/codetrek/haystack/packages/core/kv/pebblekv"
-    "github.com/codetrek/haystack/packages/core/queue"
-    "github.com/codetrek/haystack/packages/core/idtable"
-    "github.com/codetrek/haystack/packages/core/invertedindex"
-    "github.com/codetrek/haystack/packages/core/documents"
-    "github.com/codetrek/haystack/packages/core/collection"
-    "github.com/codetrek/haystack/packages/core/engine"
+    "github.com/codetrek/haystack/core/kv/pebblekv"
+    "github.com/codetrek/haystack/core/queue"
+    "github.com/codetrek/haystack/core/idtable"
+    "github.com/codetrek/haystack/core/invertedindex"
+    "github.com/codetrek/haystack/core/documents"
+    "github.com/codetrek/haystack/core/collection"
+    "github.com/codetrek/haystack/core/engine"
 )
 
 // 1. Open a store (or supply your own kv.Store implementation).

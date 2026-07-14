@@ -5,8 +5,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // Options holds tunables for the Index.

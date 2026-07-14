@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/server/internal/conf"
 	"github.com/codetrek/haystack/server/internal/core/storage"
 	"github.com/stretchr/testify/assert"

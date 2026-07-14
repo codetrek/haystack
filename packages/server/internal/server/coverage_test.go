@@ -9,9 +9,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 
-	"github.com/codetrek/haystack/packages/core/invertedindex"
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/invertedindex"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/queue"
 	"github.com/codetrek/haystack/server/internal/conf"
 	"github.com/codetrek/haystack/server/internal/shared/running"
 )

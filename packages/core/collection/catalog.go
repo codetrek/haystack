@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/documents"
-	"github.com/codetrek/haystack/packages/core/kv"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/kv"
 )
 
 // Record is the persisted metadata for one collection.

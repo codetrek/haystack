@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // newSpillOffworkerStore opens a store with the given Options and one table (mirrors

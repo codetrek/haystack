@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // newBoundedIndex builds an index with caller-supplied Options and the flush

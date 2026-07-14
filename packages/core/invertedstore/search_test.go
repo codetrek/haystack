@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // newSearchStore opens a fresh store with a created table, returning the store and tableId.

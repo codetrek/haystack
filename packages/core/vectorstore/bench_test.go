@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 )
 
 // Benchmarks for the vectorstore at a small scale (128-dim, 10k vectors, Cosine).

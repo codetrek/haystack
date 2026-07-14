@@ -3,7 +3,7 @@ package invertedstore
 import (
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // newUpdateStore opens a fresh store with a created table for the Update/Batch tests. It uses a

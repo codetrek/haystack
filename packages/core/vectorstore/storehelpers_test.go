@@ -4,8 +4,8 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/codetrek/haystack/packages/core/kv"
-	"github.com/codetrek/haystack/packages/core/kv/pebblekv"
+	"github.com/codetrek/haystack/core/kv"
+	"github.com/codetrek/haystack/core/kv/pebblekv"
 )
 
 // newTestKV opens a temp pebble store (cacheSize is int64 bytes; 16 MiB) closed

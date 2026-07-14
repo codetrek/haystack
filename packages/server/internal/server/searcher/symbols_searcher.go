@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codetrek/haystack/packages/core/documents"
-	"github.com/codetrek/haystack/packages/core/idtable"
+	"github.com/codetrek/haystack/core/documents"
+	"github.com/codetrek/haystack/core/idtable"
 	"github.com/codetrek/haystack/server/internal/core/symbols"
 	"github.com/codetrek/haystack/server/internal/core/workspace"
 	"github.com/codetrek/haystack/server/internal/server/indexer"

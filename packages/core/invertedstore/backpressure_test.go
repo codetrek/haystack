@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/codetrek/haystack/packages/core/queue"
+	"github.com/codetrek/haystack/core/queue"
 )
 
 // searchDocidsForTest returns the live docids of the EXACT keyword kw in tableId, sorted — a thin
