@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt clean gen-testdata test-docker-build test-docker-ensure test-safe test-safe-race
+.PHONY: build test coverage fmt clean test-docker-build test-docker-ensure test-safe test-safe-race
 
 APP_NAME=haystack
 BUILD_DIR=build
@@ -63,4 +63,4 @@ test-safe-race: test-docker-ensure
 	@echo "Running tests with race detector in Docker (isolated)..."
 	@docker run --rm --cpus=2 --memory=4g --pids-limit=256 --network=none \
 		-v $$(pwd):/app:ro \
-		$(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && go test -race ./... -count=1 -timeout 5m"
+		$(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && go test -race ./packages/server/... ./packages/core/... -count=1 -timeout 5m"

@@ -1,10 +1,9 @@
-project = "haystack"
+project = "server"
 module_prefix = "github.com/codetrek/haystack/"
 
 [exclude]
 packages = [
-  "haystack/scripts/",
-  "haystack/cmd",
+  "server/cmd/haystack",
 ]
 files = [
   "internal/testutil/",

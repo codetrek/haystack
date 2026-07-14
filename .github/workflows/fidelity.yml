@@ -34,7 +34,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.2' # keep in sync with core/go.mod toolchain
+          go-version: '1.24.2' # keep in sync with packages/core/go.mod toolchain
           cache: true
 
       - name: Exhaustive FST-vs-gse byte-fidelity

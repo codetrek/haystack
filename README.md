@@ -31,7 +31,7 @@ The Search Indexer is structured with the following components:
 
 ### Prerequisites
 
-- Go 1.23+
+- Go 1.24+
 - Git
 
 ### Installation
@@ -40,21 +40,20 @@ Clone the repository:
 
 ```bash
 git clone https://github.com/codetrek/haystack.git
-cd haystack/src
+cd haystack
 ```
 
-Install dependencies:
-
-```bash
-go mod download
-```
+The repository is a Go **workspace** (`go.work`) spanning two modules —
+`packages/core` (the search/index library) and `packages/server` (the server + CLI
+app). Dependencies are vendored under `vendor/`, so there is no separate
+dependency-install step.
 
 ### Configuration
 
 Copy the example configuration and modify as needed:
 
 ```bash
-cp config.example.yaml config.local.yaml
+cp packages/server/config.example.yaml config.local.yaml
 ```
 
 Edit `config.local.yaml` to configure your indexing preferences.
@@ -62,14 +61,14 @@ Edit `config.local.yaml` to configure your indexing preferences.
 ### Running the Server
 
 ```bash
-go run ./ server run
+go run ./packages/server/cmd/haystack server run
 ```
 
 ### Using the Client
 
 ```bash
 # Example query command
-go run ./ search "your search query"
+go run ./packages/server/cmd/haystack search "your search query"
 ```
 
 ## Development
@@ -79,13 +78,13 @@ go run ./ search "your search query"
 Run the test suite with:
 
 ```bash
-go test ./...
+make test            # or: go test ./packages/core/... ./packages/server/...
 ```
 
 ### Building
 
 ```bash
-go build ./
+make build           # or: go build -o build/haystack ./packages/server/cmd/haystack/
 ```
 
 ## Contributing

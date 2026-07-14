@@ -50,7 +50,7 @@ jobs:
         # go-cov runs core's full suite and enforces the same bar as the
         # core module.
         if: matrix.os == 'ubuntu-latest'
-        working-directory: core
+        working-directory: packages/core
         run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2
 
       - name: Test (macOS/Windows)

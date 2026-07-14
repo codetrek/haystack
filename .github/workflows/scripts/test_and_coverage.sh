@@ -4,5 +4,6 @@
 
 set -e
 
-cd "$(dirname "$0")/../packages/core"
+# The App CI job gates the SERVER module (core has its own job).
+cd "$(dirname "$0")/../../../packages/server"
 go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2
