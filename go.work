@@ -2,6 +2,6 @@ go 1.23.0
 
 toolchain go1.24.2
 
-use .
+use ./packages/server
 
-use ./core
+use ./packages/core

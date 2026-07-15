@@ -1,0 +1,10 @@
+FROM golang:1.24
+
+WORKDIR /app
+
+# The whole repo — including go.work and the workspace vendor/ directory — is
+# mounted read-only at /app at runtime (see `make test-safe`). Tests therefore run
+# fully offline (--network=none) against the vendored dependencies; no COPY /
+# `go mod download` is needed. golang:1.24 satisfies the go1.24.2 toolchain
+# directive, so nothing is downloaded at test time either.
+CMD ["bash", "-c", "ulimit -u 256 && go test ./packages/server/... ./packages/core/... -count=1 -timeout 5m"]

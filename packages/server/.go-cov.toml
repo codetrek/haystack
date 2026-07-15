@@ -1,0 +1,15 @@
+project = "server"
+module_prefix = "github.com/codetrek/haystack/"
+
+[exclude]
+packages = [
+  "server/cmd/haystack",
+]
+files = [
+  "internal/testutil/",
+  "indexer/testing.go",
+  "main.go",
+]
+
+[html]
+path = ".haystack/test_coverage.html"

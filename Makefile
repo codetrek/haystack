@@ -1,4 +1,4 @@
-.PHONY: build test coverage fmt clean gen-testdata test-docker-build test-docker-ensure test-safe test-safe-race
+.PHONY: build test coverage fmt clean test-docker-build test-docker-ensure test-safe test-safe-race
 
 APP_NAME=haystack
 BUILD_DIR=build
@@ -20,12 +20,12 @@ APP_BIN=$(BUILD_DIR)/$(APP_NAME)$(EXE_EXT)
 build:
 	@$(MKDIR_P)
 	@echo "Building $(APP_NAME)..."
-	@go build -o $(APP_BIN) ./cmd/haystack/
+	@go build -o $(APP_BIN) ./packages/server/cmd/haystack/
 	@echo "Build complete: $(APP_BIN)"
 
 test:
 	@echo "Running tests..."
-	@go test ./... -count=1
+	@go test ./packages/core/... ./packages/server/... -count=1
 
 coverage:
 	@echo "Running tests with coverage..."
@@ -40,14 +40,10 @@ clean:
 	@echo "Cleaning..."
 	@$(RM_RF)
 
-gen-testdata:
-	@echo "Generating test fixtures (this takes ~15 min)..."
-	@cd core && go run -tags tools ./cmd/gen-testdata/
-
 DOCKER_TEST_IMAGE=haystack-test
 
 test-docker-build:
-	@docker build -f Dockerfile.test -t $(DOCKER_TEST_IMAGE) .
+	@docker build -f ./packages/server/Dockerfile.test -t $(DOCKER_TEST_IMAGE) .
 
 test-docker-ensure:
 	@if [ -z "$$(docker images -q $(DOCKER_TEST_IMAGE) 2>/dev/null)" ]; then \
@@ -67,4 +63,4 @@ test-safe-race: test-docker-ensure
 	@echo "Running tests with race detector in Docker (isolated)..."
 	@docker run --rm --cpus=2 --memory=4g --pids-limit=256 --network=none \
 		-v $$(pwd):/app:ro \
-		$(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && go test -race ./... -count=1 -timeout 5m"
+		$(DOCKER_TEST_IMAGE) bash -c "ulimit -u 256 && go test -race ./packages/server/... ./packages/core/... -count=1 -timeout 5m"

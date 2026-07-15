@@ -43,20 +43,20 @@ jobs:
         run: go version
 
       - name: Build
-        working-directory: core
+        working-directory: packages/core
         run: go build ./...
 
       - name: Coverage gate (Linux)
         # go-cov runs core's full suite and enforces the same bar as the
         # core module.
         if: matrix.os == 'ubuntu-latest'
-        working-directory: core
+        working-directory: packages/core
         run: go run github.com/codetreker/go-cov/cmd/go-cov@v0.1.2
 
       - name: Test (macOS/Windows)
         if: matrix.os != 'ubuntu-latest'
         shell: bash
-        working-directory: core
+        working-directory: packages/core
         run: |
           # -v prints each case's execution time. Show only result lines, and
           # drop the 0.00s cases (noise) — keep all FAILs and the full log on
@@ -110,7 +110,7 @@ jobs:
         run: ./.github/workflows/scripts/check-fmt.sh
 
       - name: Build
-        run: go build ./...
+        run: go build ./packages/server/... ./packages/core/...
 
       - name: Test and Coverage
         run: ./.github/workflows/scripts/test_and_coverage.sh

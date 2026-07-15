@@ -9,16 +9,16 @@ name: FST Fidelity
 on:
   pull_request:
     paths:
-      - 'core/tokenizer/fstcjk/**'
-      - 'core/tokenizer/cjk_fidelity_test.go'
-      - 'core/go.mod'
+      - 'packages/core/tokenizer/fstcjk/**'
+      - 'packages/core/tokenizer/cjk_fidelity_test.go'
+      - 'packages/core/go.mod'
       - '.github/workflows/fidelity.yml'
   push:
     branches: [main]
     paths:
-      - 'core/tokenizer/fstcjk/**'
-      - 'core/tokenizer/cjk_fidelity_test.go'
-      - 'core/go.mod'
+      - 'packages/core/tokenizer/fstcjk/**'
+      - 'packages/core/tokenizer/cjk_fidelity_test.go'
+      - 'packages/core/go.mod'
 
 jobs:
   fidelity:
@@ -34,11 +34,11 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24.2' # keep in sync with core/go.mod toolchain
+          go-version: '1.24.2' # keep in sync with packages/core/go.mod toolchain
           cache: true
 
       - name: Exhaustive FST-vs-gse byte-fidelity
-        working-directory: core
+        working-directory: packages/core
         env:
           HAYSTACK_FIDELITY: '1' # enables the live-gse golden suite
           HAYSTACK_FIDELITY_FULL: '1' # full fuzz counts (~60k inputs)
