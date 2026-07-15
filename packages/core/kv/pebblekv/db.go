@@ -73,6 +73,17 @@ type OpenOptions struct {
 	// an OS-level crash / power loss can lose the un-synced tail. Set Sync for a
 	// store of record. Ignored when DisableWAL is set (there is no WAL to sync).
 	Sync bool
+	// MemTableSize is the steady-state MemTable size in bytes. Zero selects the
+	// conservative built-in default (4 MiB). A larger memtable defers flushes, so
+	// more redundant writes coalesce/elide before hitting disk — cutting L0
+	// churn and compaction during a bulk build, at the cost of higher transient
+	// build-time memory (peak ≈ MemTableStopWritesThreshold × MemTableSize).
+	MemTableSize uint64
+	// MemTableStopWritesThreshold is the hard limit on queued memtables: writes
+	// stop once the queued memtable sizes exceed this × MemTableSize. Zero selects
+	// the built-in default (2). Values below 2 are raised to 2 (Pebble stalls
+	// writes whenever a memtable flushes at threshold 1).
+	MemTableStopWritesThreshold int
 }
 
 // Open opens a Pebble database at the default WAL mode — WAL on, commits not
@@ -86,6 +97,17 @@ func OpenWithOptions(path string, o OpenOptions) (kv.Store, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get absolute path: %v", err)
+	}
+
+	// Memtable sizing: zero selects the conservative built-in defaults; a caller
+	// that knows its workload (e.g. a bulk index build) can enlarge it.
+	memTableSize := o.MemTableSize
+	if memTableSize == 0 {
+		memTableSize = 4 * 1024 * 1024
+	}
+	memTableStop := o.MemTableStopWritesThreshold
+	if memTableStop < 2 {
+		memTableStop = 2
 	}
 
 	// Configure Pebble options
@@ -102,10 +124,8 @@ func OpenWithOptions(path string, o OpenOptions) (kv.Store, error) {
 		// Allow more files to be open
 		MaxOpenFiles: 8192,
 
-		// Set write buffer size to 8MB
-		MemTableSize: 4 * 1024 * 1024,
-		// Set max memtable count to 2
-		MemTableStopWritesThreshold: 2,
+		MemTableSize:                memTableSize,
+		MemTableStopWritesThreshold: memTableStop,
 
 		// The count of L0 files necessary to trigger an L0 compaction.
 		L0CompactionFileThreshold: 1024,
